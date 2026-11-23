@@ -1,6 +1,6 @@
 {
   "name": "@moesekai/story-core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Pure MoeSekai Story Maker (moesekai-story/2) graph engine, .msk script compiler, runtime VM, i18n packs, voice/audio utilities, PJSK CDN helpers, and cross-host workspace/export contracts.",
   "type": "module",
   "license": "MPL-2.0",

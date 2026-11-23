@@ -4,6 +4,17 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-11-24
+
+### Fixed
+- **Zero-404 Live2D Asset Resolution & Canonical Form Listings (`@moesekai/story-core`, `@moesekai/story-editor`, `@moesekai/story-agent`, Skill)**:
+  - Consumes `sekai-serve` canonical form listings (`/listings/<region>/canonical[@<version>]/live2d-{model,motions}`) with automatic 404 fallback to directory listings, resolving models and motion sets directly to their exact `buildmodeldata` / `buildmotiondata` asset paths in one request instead of 6-level directory walks.
+  - Added explicit trailing-`/` directory handling in `resolveLive2DAssetDocument` and standalone `official-story.mjs` (skipping guaranteed-404 `<container>.asset.json` probes), exported `live2dDirectoryPath`, `live2dAssetRequestPath`, `live2dFormListingUrl`, and `fetchLive2DFormListing` from `@moesekai/story-core` (keeping `Live2DModel.{asset,motion,motions}` bare for backwards compatibility), and rebuilt `skills/moesekai-story-script/scripts/lib/msk-core.mjs`.
+  - Updated `StoryStageController` to pass version-matched exact asset paths (or trailing-`/` directory fallbacks on stale `not-found` / legacy servers) to `SekaiLive2DStage`, and synced `StoryPreloader` `sekai-live2d-v2` resolution pointers (`?sekai-asset-resolve=<form>`) with `SekaiLive2DViewer 0.3.1`.
+
+### Changed
+- **Desktop Host `SekaiLive2DViewer 0.3.1` & Listings Caching (`apps/desktop`)**: Upgraded vendored `apps/desktop/vendor/live2d-viewer/` verbatim to `SekaiLive2DViewer 0.3.1` (`61055e0c5f94`, `dirty: false`) and updated `AssetCacheManager` (`moesekai-cache://`) to classify version-pinned `/listings/<region>/<view>@<version>[/<form>]` as immutable metadata and unpinned `/listings/` routes as dynamic metadata.
+
 ## [0.2.0] - 2026-11-24
 
 ### Breaking Changes
