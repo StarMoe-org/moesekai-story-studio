@@ -159,10 +159,10 @@ export function fetchStoryBackgrounds(
     signal?: AbortSignal,
 ): Promise<string[]> {
     if (signal?.aborted) return Promise.reject(createAbortError());
-    const key = `${region}|${line}`;
+    const url = `${getAssetBaseUrl(`${line}-${region}`)}/${BACKGROUND_DIRECTORY}`;
+    const key = `${region}|${line}|${url}`;
     let cached = backgroundCache.get(key);
     if (!cached) {
-        const url = `${getAssetBaseUrl(`${line}-${region}`)}/${BACKGROUND_DIRECTORY}`;
         const fetchFn = getCoreFetch();
         const loading = (async () => {
             const response = await fetchFn(url, { credentials: "omit", headers: { Accept: "application/json" } });

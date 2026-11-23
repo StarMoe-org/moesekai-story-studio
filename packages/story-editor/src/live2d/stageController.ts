@@ -64,13 +64,22 @@ export interface StageCanvasSize {
     height: number;
 }
 
+export type StoryStageRenderQuality = "standard" | "high" | "ultra";
+
+export interface StageCanvasSizeBounds {
+    minDim?: number;
+    maxDim?: number;
+}
+
 export interface StageHostAdapter {
     /** Mounts a fresh `<canvas>` inside the host element, replacing any prior transferred canvas. */
-    mountCanvas(): HTMLCanvasElement | null;
+    mountCanvas(initialSize?: StageCanvasSize): HTMLCanvasElement | null;
     /** Removes any mounted `<canvas>` from the host element. */
     clearCanvas(): void;
     /** Measures valid non-zero drawing buffer pixel dimensions, or `null` when hidden/0x0/disconnected. */
-    measure(): StageCanvasSize | null;
+    measure(quality?: StoryStageRenderQuality): StageCanvasSize | null;
+    /** Optionally updates non-destructive `data-*` resolution metadata on the host/canvas. */
+    syncCanvasSizeHint?(size: StageCanvasSize, quality: StoryStageRenderQuality): void;
     /** Returns true when the page/tab is hidden or host is disconnected from DOM. */
     isHidden(): boolean;
     /** Subscribes to resize & visibility events; returns an unsubscribe cleanup function. */
@@ -157,6 +166,16 @@ export const DEFAULT_RECOVERY_DELAYS_MS: readonly number[] = [300, 900, 2200];
 export const DEFAULT_HEALTHY_RESET_MS = 10_000;
 export const DEFAULT_MIN_CANVAS_DIMENSION = 2;
 export const DEFAULT_MAX_CANVAS_DIMENSION = 4096;
+export const DEFAULT_STAGE_RENDER_QUALITY: StoryStageRenderQuality = "high";
+
+export const STAGE_RENDER_QUALITY_PRESETS: Record<
+    StoryStageRenderQuality,
+    { minScale: number; dprMultiplier: number; minInternalWidth: number; maxDim: number }
+> = {
+    standard: { minScale: 1, dprMultiplier: 1, minInternalWidth: 0, maxDim: 2048 },
+    high: { minScale: 2, dprMultiplier: 1.5, minInternalWidth: 1280, maxDim: 2560 },
+    ultra: { minScale: 2.5, dprMultiplier: 2, minInternalWidth: 1920, maxDim: 3840 },
+};
 
 function classifyFailure(error: unknown): StoryStagePhase {
     if (error instanceof Error && error.message === LIVE2D_STAGE_UNAVAILABLE) {
@@ -250,37 +269,113 @@ function clampCanvasSize(
     };
 }
 
-/** Creates a browser DOM adapter for a host `<div>` with `0x0`/hidden-tab guards and `ResizeObserver`. */
+/**
+ * Computes GPU-safe Supersampling Anti-Aliasing (SSAA) drawing buffer dimensions for the Live2D
+ * stage canvas while preserving exact aspect ratio and guarding against degenerate `0x0` sizes:
+ * - `"standard"`: native `Math.min(dpr, 2)`, capped at `2048` (lowest GPU load).
+ * - `"high"` (default): adaptive SSAA (`Math.max(dpr * 1.5, 2)`) with a minimum internal width
+ *   floor of `1280` (scaled proportionally), capped at `2560` so small editor panes render crisp.
+ * - `"ultra"`: high SSAA (`Math.max(dpr * 2, 2.5)`) with a minimum internal width floor of `1920`,
+ *   capped at `3840`.
+ */
+export function computeStageCanvasSize(
+    cssSize: StageCanvasSize | null,
+    dpr = 1,
+    quality: StoryStageRenderQuality = DEFAULT_STAGE_RENDER_QUALITY,
+    bounds?: StageCanvasSizeBounds,
+): StageCanvasSize | null {
+    if (!cssSize) return null;
+    if (!Number.isFinite(cssSize.width) || !Number.isFinite(cssSize.height)) return null;
+    if (cssSize.width < 1 || cssSize.height < 1) return null;
+
+    const safeDpr = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+    const preset = STAGE_RENDER_QUALITY_PRESETS[quality] ?? STAGE_RENDER_QUALITY_PRESETS.high;
+    const minDim = bounds?.minDim ?? DEFAULT_MIN_CANVAS_DIMENSION;
+    const maxDim = Math.min(bounds?.maxDim ?? DEFAULT_MAX_CANVAS_DIMENSION, preset.maxDim);
+
+    let scale: number;
+    if (quality === "standard") {
+        scale = Math.min(safeDpr, 2);
+    } else {
+        scale = Math.max(safeDpr * preset.dprMultiplier, preset.minScale);
+        if (preset.minInternalWidth > 0) {
+            scale = Math.max(scale, preset.minInternalWidth / cssSize.width);
+        }
+    }
+
+    let width = cssSize.width * scale;
+    let height = cssSize.height * scale;
+
+    const largest = Math.max(width, height);
+    if (largest > maxDim) {
+        const downscale = maxDim / largest;
+        width *= downscale;
+        height *= downscale;
+    }
+
+    return {
+        width: Math.min(maxDim, Math.max(minDim, Math.round(width))),
+        height: Math.min(maxDim, Math.max(minDim, Math.round(height))),
+    };
+}
+
+/** Creates a browser DOM adapter for a host `<div>` with `0x0`/hidden-tab guards, SSAA sizing, and `ResizeObserver`. */
 export function createBrowserStageHostAdapter(
     host: HTMLDivElement,
-    options?: { minCanvasDimension?: number; maxCanvasDimension?: number },
+    options?: {
+        minCanvasDimension?: number;
+        maxCanvasDimension?: number;
+        renderQuality?: StoryStageRenderQuality;
+    },
 ): StageHostAdapter {
     const minDim = options?.minCanvasDimension ?? DEFAULT_MIN_CANVAS_DIMENSION;
     const maxDim = options?.maxCanvasDimension ?? DEFAULT_MAX_CANVAS_DIMENSION;
+    const defaultQuality = options?.renderQuality ?? DEFAULT_STAGE_RENDER_QUALITY;
+    let mountedCanvas: HTMLCanvasElement | null = null;
 
     return {
-        mountCanvas(): HTMLCanvasElement | null {
+        mountCanvas(initialSize?: StageCanvasSize): HTMLCanvasElement | null {
             if (!host.isConnected || typeof document === "undefined") return null;
             const canvas = document.createElement("canvas");
             canvas.className = "absolute inset-0 size-full";
+            canvas.style.imageRendering = "auto";
+            if (initialSize && initialSize.width >= 1 && initialSize.height >= 1) {
+                canvas.width = Math.round(initialSize.width);
+                canvas.height = Math.round(initialSize.height);
+            }
             host.replaceChildren(canvas);
+            mountedCanvas = canvas;
             return canvas;
         },
         clearCanvas(): void {
+            mountedCanvas = null;
             host.replaceChildren();
         },
-        measure(): StageCanvasSize | null {
+        measure(quality = defaultQuality): StageCanvasSize | null {
             if (!host.isConnected) return null;
             if (typeof document !== "undefined" && document.hidden) return null;
             const rect = host.getBoundingClientRect();
             if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return null;
             if (rect.width < 1 || rect.height < 1) return null;
-            const dpr = Math.min(typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1, 2);
-            return clampCanvasSize(
-                { width: rect.width * dpr, height: rect.height * dpr },
-                minDim,
-                maxDim,
+            const dpr = typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1;
+            return computeStageCanvasSize(
+                { width: rect.width, height: rect.height },
+                dpr,
+                quality,
+                { minDim, maxDim },
             );
+        },
+        syncCanvasSizeHint(size: StageCanvasSize, quality: StoryStageRenderQuality): void {
+            const w = String(Math.round(size.width));
+            const h = String(Math.round(size.height));
+            host.dataset.renderWidth = w;
+            host.dataset.renderHeight = h;
+            host.dataset.renderQuality = quality;
+            if (mountedCanvas) {
+                mountedCanvas.dataset.renderWidth = w;
+                mountedCanvas.dataset.renderHeight = h;
+                mountedCanvas.dataset.renderQuality = quality;
+            }
         },
         isHidden(): boolean {
             if (!host.isConnected) return true;
@@ -348,6 +443,7 @@ export class StoryStageController {
     private models: readonly Live2DModel[] | null = null;
     private host: StageHostAdapter | null = null;
     private hostUnsubscribe: (() => void) | null = null;
+    private renderQuality: StoryStageRenderQuality = DEFAULT_STAGE_RENDER_QUALITY;
 
     // Lifecycle & worker state
     private sessionId = 0;
@@ -480,6 +576,19 @@ export class StoryStageController {
             return;
         }
         this.startBoot({ isRecovery: false });
+    }
+
+    /** Updates SSAA render quality dynamically via serialized `resize()` without recreating the worker. */
+    setRenderQuality(next: StoryStageRenderQuality): void {
+        if (this.disposed || this.renderQuality === next) return;
+        this.renderQuality = next;
+        if (this.stage && !this.host?.isHidden()) {
+            const nextSize = this.measureSafeSize();
+            if (nextSize) {
+                this.pendingResize = nextSize;
+                this.schedulePump();
+            }
+        }
     }
 
     /** Updates dynamic story cast & model catalog without tearing down the WebGPU stage. */
@@ -837,7 +946,7 @@ export class StoryStageController {
 
     private measureSafeSize(): StageCanvasSize | null {
         if (!this.host || this.host.isHidden()) return null;
-        return clampCanvasSize(this.host.measure(), this.minCanvasDimension, this.maxCanvasDimension);
+        return clampCanvasSize(this.host.measure(this.renderQuality), this.minCanvasDimension, this.maxCanvasDimension);
     }
 
     private startBoot({ isRecovery }: { isRecovery: boolean }): void {
@@ -894,11 +1003,12 @@ export class StoryStageController {
                 return;
             }
 
-            const canvas = this.host?.mountCanvas() ?? null;
+            const canvas = this.host?.mountCanvas(liveSize) ?? null;
             if (!canvas || signal.aborted || this.disposed || this.sessionId !== mySession) {
                 this.booting = false;
                 return;
             }
+            this.host?.syncCanvasSizeHint?.(liveSize, this.renderQuality);
 
             const core = this.resolveCoreUrl(coreUrl);
             const created = await Stage.create({
@@ -1196,6 +1306,7 @@ export class StoryStageController {
                         try {
                             activeStage.resize(nextSize.width, nextSize.height);
                             this.lastCanvasSize = nextSize;
+                            this.host?.syncCanvasSizeHint?.(nextSize, this.renderQuality);
                         } catch (err) {
                             this.handleRuntimeFailure(activeStage, err);
                             continue;

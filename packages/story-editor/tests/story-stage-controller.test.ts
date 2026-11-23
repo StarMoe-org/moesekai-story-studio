@@ -18,10 +18,12 @@ import {
     type Live2DStageTween,
 } from "../src/live2d/stage";
 import {
+    computeStageCanvasSize,
     SOLO_PREVIEW_ACTOR_ID,
     StoryStageController,
     type StageCanvasSize,
     type StageHostAdapter,
+    type StoryStageRenderQuality,
 } from "../src/live2d/stageController";
 
 const CAST_ICHIKA: StoryCastMember = { key: "ichika", name: "星乃一歌", modelId: "01_ichika", characterId: 1 };
@@ -64,19 +66,29 @@ function waitMs(ms: number): Promise<void> {
 interface FakeCanvas {
     id: number;
     transferred: boolean;
+    width: number;
+    height: number;
 }
 
 class FakeHostAdapter implements StageHostAdapter {
     size: StageCanvasSize | null = { width: 1280, height: 720 };
+    cssSize: StageCanvasSize | null = null;
+    dpr = 1;
     hidden = false;
     canvases: FakeCanvas[] = [];
+    sizeHints: Array<{ size: StageCanvasSize; quality: StoryStageRenderQuality }> = [];
     clearCount = 0;
     private nextCanvasId = 1;
     private resizeHandler: (() => void) | null = null;
     private visibilityHandler: ((hidden: boolean) => void) | null = null;
 
-    mountCanvas(): HTMLCanvasElement | null {
-        const canvas: FakeCanvas = { id: this.nextCanvasId++, transferred: false };
+    mountCanvas(initialSize?: StageCanvasSize): HTMLCanvasElement | null {
+        const canvas: FakeCanvas = {
+            id: this.nextCanvasId++,
+            transferred: false,
+            width: initialSize?.width ?? 300,
+            height: initialSize?.height ?? 150,
+        };
         this.canvases.push(canvas);
         return canvas as unknown as HTMLCanvasElement;
     }
@@ -85,9 +97,16 @@ class FakeHostAdapter implements StageHostAdapter {
         this.clearCount += 1;
     }
 
-    measure(): StageCanvasSize | null {
+    measure(quality?: StoryStageRenderQuality): StageCanvasSize | null {
         if (this.hidden) return null;
+        if (this.cssSize) {
+            return computeStageCanvasSize(this.cssSize, this.dpr, quality ?? "high");
+        }
         return this.size ? { ...this.size } : null;
+    }
+
+    syncCanvasSizeHint(size: StageCanvasSize, quality: StoryStageRenderQuality): void {
+        this.sizeHints.push({ size: { ...size }, quality });
     }
 
     isHidden(): boolean {
@@ -1115,5 +1134,79 @@ describe("StoryStageController — Live2D Z-layer & move/speaker anti-occlusion"
         expect(s4.stage.speaking).toBe("ichika");
         expect(s4.stage.actors.find(a => a.cast === "ichika")?.autoOrder).toBe(1);
         expect(computeActorRenderOrders(s4.stage.actors, s4.stage.speaking)).toEqual({ saki: 0, ichika: 1, kanade: 2 });
+    });
+});
+
+describe("Live2D Stage SSAA Antialiasing (computeStageCanvasSize & dynamic quality)", () => {
+    test("computes adaptive SSAA dimensions for compact editor pane (480x270) and theater (1280x720) across dpr 1 & 2", () => {
+        // Compact 480x270 editor pane at dpr=1
+        expect(computeStageCanvasSize({ width: 480, height: 270 }, 1, "standard")).toEqual({ width: 480, height: 270 });
+        expect(computeStageCanvasSize({ width: 480, height: 270 }, 1, "high")).toEqual({ width: 1280, height: 720 });
+        expect(computeStageCanvasSize({ width: 480, height: 270 }, 1, "ultra")).toEqual({ width: 1920, height: 1080 });
+
+        // Compact 480x270 editor pane at dpr=2
+        expect(computeStageCanvasSize({ width: 480, height: 270 }, 2, "standard")).toEqual({ width: 960, height: 540 });
+        expect(computeStageCanvasSize({ width: 480, height: 270 }, 2, "high")).toEqual({ width: 1440, height: 810 });
+        expect(computeStageCanvasSize({ width: 480, height: 270 }, 2, "ultra")).toEqual({ width: 1920, height: 1080 });
+
+        // Full 1280x720 theater stage at dpr=1
+        expect(computeStageCanvasSize({ width: 1280, height: 720 }, 1, "standard")).toEqual({ width: 1280, height: 720 });
+        expect(computeStageCanvasSize({ width: 1280, height: 720 }, 1, "high")).toEqual({ width: 2560, height: 1440 });
+        expect(computeStageCanvasSize({ width: 1280, height: 720 }, 1, "ultra")).toEqual({ width: 3200, height: 1800 });
+
+        // Full 1280x720 theater stage at dpr=2: safe upper caps (2048 / 2560 / 3840) preserving 16:9 aspect ratio
+        expect(computeStageCanvasSize({ width: 1280, height: 720 }, 2, "standard")).toEqual({ width: 2048, height: 1152 });
+        expect(computeStageCanvasSize({ width: 1280, height: 720 }, 2, "high")).toEqual({ width: 2560, height: 1440 });
+        expect(computeStageCanvasSize({ width: 1280, height: 720 }, 2, "ultra")).toEqual({ width: 3840, height: 2160 });
+
+        // Degenerate / zero sizes rejected cleanly
+        expect(computeStageCanvasSize(null, 1, "high")).toBeNull();
+        expect(computeStageCanvasSize({ width: 0, height: 270 }, 1, "high")).toBeNull();
+        expect(computeStageCanvasSize({ width: 480, height: Number.NaN }, 1, "high")).toBeNull();
+    });
+
+    test("boots at default high SSAA resolution and switches quality dynamically via serialized resize without restarting worker", async () => {
+        const { controller, host, stages, getCreateCalls } = createHarness();
+        host.cssSize = { width: 480, height: 270 };
+        host.dpr = 1;
+
+        controller.setContext({ cast: [CAST_ICHIKA], models: TEST_MODELS });
+        controller.setConfig({ library: "https://assets.test/jp/" });
+        controller.setHost(host);
+        await waitMs(25);
+        await flushMicrotasks();
+
+        // Default quality ("high") boots compact 480x270 pane at crisp 1280x720 SSAA!
+        expect(getCreateCalls()).toBe(1);
+        const stage = stages[0]!;
+        expect(stage.initOptions.width).toBe(1280);
+        expect(stage.initOptions.height).toBe(720);
+        expect(host.canvases[0]?.width).toBe(1280);
+        expect(host.canvases[0]?.height).toBe(720);
+        expect(host.sizeHints[0]).toEqual({ size: { width: 1280, height: 720 }, quality: "high" });
+
+        // Switch dynamically to "ultra" -> serialized resize(1920, 1080), zero worker recreation!
+        controller.setRenderQuality("ultra");
+        await waitMs(15);
+        await flushMicrotasks();
+        expect(getCreateCalls()).toBe(1);
+        expect(stage.destroyed).toBe(false);
+        expect(stage.resizeHistory).toEqual([{ width: 1920, height: 1080 }]);
+
+        // Switch dynamically to "standard" -> serialized resize(480, 270), zero worker recreation!
+        controller.setRenderQuality("standard");
+        await waitMs(15);
+        await flushMicrotasks();
+        expect(getCreateCalls()).toBe(1);
+        expect(stage.resizeHistory).toEqual([
+            { width: 1920, height: 1080 },
+            { width: 480, height: 270 },
+        ]);
+        expect(host.sizeHints[host.sizeHints.length - 1]).toEqual({
+            size: { width: 480, height: 270 },
+            quality: "standard",
+        });
+
+        controller.dispose();
     });
 });

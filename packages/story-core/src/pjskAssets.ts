@@ -193,15 +193,15 @@ export function fetchMasterDataForServer<T>(
 
     const cleanPath = path.replace(/^\/+/, "");
     const line = options.line ?? cfg.defaultAssetLine;
-    const cacheKey = `${server}|${line}|${cleanPath}`;
+    const primaryDomain = line === "backup" ? cfg.masterDataDomainBackup : cfg.masterDataDomainMain;
+    const fallbackDomain = line === "backup" ? cfg.masterDataDomainMain : cfg.masterDataDomainBackup;
+    const cacheKey = `${server}|${line}|${primaryDomain}|${cleanPath}`;
 
     if (!options.bypassCache) {
         const cached = masterDataMemoryCache.get(cacheKey);
         if (cached) return cached as Promise<T>;
     }
 
-    const primaryDomain = line === "backup" ? cfg.masterDataDomainBackup : cfg.masterDataDomainMain;
-    const fallbackDomain = line === "backup" ? cfg.masterDataDomainMain : cfg.masterDataDomainBackup;
     const urls = primaryDomain === fallbackDomain
         ? [`${primaryDomain}/${server}/master/${cleanPath}`]
         : [

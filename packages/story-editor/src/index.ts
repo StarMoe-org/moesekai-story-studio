@@ -92,7 +92,8 @@ export {
     type PlayerLayoutMode,
     type StoryPlayerViewProps,
 } from "./components/StoryPlayerView";
-export { StoryStageView } from "./components/StoryStageView";
+export { StoryNoticesDialog, type StoryNoticesDialogProps } from "./components/StoryNoticesDialog";
+export { StoryStageView, shouldShowStageAttribution } from "./components/StoryStageView";
 export {
     StoryVoiceManifestDialog,
     type StoryVoiceManifestDialogProps,
@@ -134,6 +135,7 @@ export {
     type StoryStageApplyOptions,
     type StoryStageHandle,
     type StoryStagePhase,
+    type StoryStageRenderQuality,
     type UseStoryStageOptions,
 } from "./components/useStoryStage";
 export {

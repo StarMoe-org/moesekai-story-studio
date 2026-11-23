@@ -9,6 +9,16 @@ import { getStoryCoreConfig, readPublicEnv } from "../config";
 /** Same-origin path the releases are served under, each in a directory of its own. */
 export const SSE_WEB_PATH = "/sse-web/";
 
+const ALLOWED_CUSTOM_PROTOCOLS = new Set(["moesekai-cache:", "moesekai-app:"]);
+
+function isAllowedProtocol(parsed: URL): boolean {
+    if (parsed.protocol === "https:") return true;
+    if (parsed.protocol === "http:") {
+        return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+    }
+    return ALLOWED_CUSTOM_PROTOCOLS.has(parsed.protocol);
+}
+
 function parse(raw: string, name: string): URL {
     const invalid = new Error(`sse_web_config_invalid:${name}`);
     let parsed: URL;
@@ -17,8 +27,7 @@ function parse(raw: string, name: string): URL {
     } catch {
         throw invalid;
     }
-    const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-    if (/[?#\\\s]/.test(raw) || !(parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback))
+    if (/[?#\\\s]/.test(raw) || !isAllowedProtocol(parsed)
         || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash
         || parsed.pathname.split("/").some(part => part === "." || part === "..")
         || raw !== parsed.href) throw invalid;

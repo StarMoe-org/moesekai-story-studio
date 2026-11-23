@@ -11,6 +11,7 @@ import {
     type StoryClipPreviewRequest,
     type StoryStageApplyOptions,
     type StoryStagePhase,
+    type StoryStageRenderQuality,
 } from "../live2d/stageController";
 
 export type {
@@ -18,6 +19,7 @@ export type {
     StoryClipPreviewRequest,
     StoryStageApplyOptions,
     StoryStagePhase,
+    StoryStageRenderQuality,
 };
 
 export interface StoryStageHandle {
@@ -48,12 +50,15 @@ export interface UseStoryStageOptions {
     scriptBase?: string | null;
     /** Optional override for Cubism Core JS URL (defaults to `<StoryStudioProvider live2dCoreUrl>`). */
     coreUrl?: string | null;
+    /** Optional override for SSAA render quality preset (defaults to `<StoryStudioProvider stageRenderQuality>`). */
+    renderQuality?: StoryStageRenderQuality;
 }
 
-export function useStoryStage({ library, cast, models, scriptBase, coreUrl }: UseStoryStageOptions): StoryStageHandle {
+export function useStoryStage({ library, cast, models, scriptBase, coreUrl, renderQuality }: UseStoryStageOptions): StoryStageHandle {
     const studio = useStoryStudio();
     const effectiveScriptBase = scriptBase !== undefined ? scriptBase : studio.live2dScriptBase;
     const effectiveCoreUrl = coreUrl !== undefined ? coreUrl : studio.live2dCoreUrl;
+    const effectiveRenderQuality = renderQuality ?? studio.stageRenderQuality;
 
     const controllerRef = useRef<StoryStageController | null>(null);
     if (controllerRef.current === null) {
@@ -115,9 +120,15 @@ export function useStoryStage({ library, cast, models, scriptBase, coreUrl }: Us
         controller.setContext({ cast, models });
     }, [cast, controller, models]);
 
+    // Keep SSAA render quality synced dynamically via serialized resize (zero worker restart).
+    useEffect(() => {
+        controller.setRenderQuality(effectiveRenderQuality);
+    }, [controller, effectiveRenderQuality]);
+
     // Mount / StrictMode remount / unmount lifecycle.
     useEffect(() => {
         mountedRef.current = true;
+        controller.setRenderQuality(effectiveRenderQuality);
         controller.setConfig({
             library,
             scriptBase: effectiveScriptBase,

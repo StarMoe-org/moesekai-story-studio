@@ -118,7 +118,7 @@ import {
     mdAccountTree, mdAltRoute, mdArrowBack, mdAutoplay, mdBottomPanelClose, mdBottomPanelOpen,
     mdCalculate, mdCheckCircle, mdChevronLeft, mdChevronRight, mdClose, mdCloseFullscreen, mdCloudDone, mdCode,
     mdContentCopy, mdDownload, mdEdit, mdErrorFill, mdFitScreen, mdFlag, mdFullscreen,
-    mdFullscreenExit, mdHistory, mdHome, mdKeyboardArrowDown, mdLeftPanelClose, mdLeftPanelOpen, mdMovie,
+    mdFullscreenExit, mdHistory, mdHome, mdInfo, mdKeyboardArrowDown, mdLeftPanelClose, mdLeftPanelOpen, mdMovie,
     mdNumbers, mdPlayArrow, mdPlayArrowFill, mdPlayCircle, mdRecordVoiceOver, mdRedo, mdReplay,
     mdRestartAlt, mdRightPanelClose, mdRightPanelOpen, mdSettings, mdSkipNext, mdSkipPrevious,
     mdStar, mdTag, mdTranslate, mdUndo, mdUploadFile, mdViewQuilt, mdVisibility, mdVisibilityOff, mdVolumeOff,
@@ -309,6 +309,8 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             storage,
             exporter,
             navigate,
+            showAttribution,
+            openNotices,
         } = useStoryStudio();
         const reduced = useReducedMotion();
         const buildStarter = useStarterStory();
@@ -2762,7 +2764,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                             <span className="max-w-[14rem] truncate type-label-l text-on-surface">
                                 {doc.meta.title || t("page.storyMaker.untitled")}
                             </span>
-                            <span className="hidden shrink-0 rounded-md3-xs bg-surface-container-high px-1.5 py-0.5 type-label-s text-on-surface-variant xl:inline">
+                            <span className="hidden shrink-0 rounded-md3-xs bg-surface-container-high px-1.5 py-0.5 type-label-s text-on-surface-variant 2xl:inline">
                                 {t(SERVER_LABEL_KEYS[doc.region])}
                             </span>
                         </button>
@@ -2781,9 +2783,9 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                         ]}
                     />
 
-                    <div className="flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-1">
+                    <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1 2xl:flex-1">
                         {isEditMode && (
-                            <div className={cn("shrink-0 items-center gap-0.5", showBottomPane ? "hidden xl:inline-flex" : "inline-flex")}>
+                            <div className={cn("shrink-0 items-center gap-0.5", showBottomPane ? "hidden 2xl:inline-flex" : "inline-flex")}>
                                 <IconButton
                                     size="xs"
                                     icon={mdUndo}
@@ -2816,7 +2818,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                             )}
                         >
                             <Icon path={mdTranslate} size={14} className="shrink-0" />
-                            <span className="hidden xl:inline">{t("page.storyMaker.i18n.toolbarButton")}</span>
+                            <span className="hidden 2xl:inline">{t("page.storyMaker.i18n.toolbarButton")}</span>
                             {attachedLocaleCount > 0 && (
                                 <span className="rounded-md3-full bg-surface/70 px-1.5 font-mono tabular-nums text-on-surface">
                                     {attachedLocaleCount}
@@ -2870,7 +2872,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                             ) : warningCount > 0 ? (
                                 <span className="font-mono tabular-nums">{warningCount}</span>
                             ) : (
-                                <span className="hidden xl:inline">{t("page.storyMaker.v2.compiler.statusOk")}</span>
+                                <span className="hidden 2xl:inline">{t("page.storyMaker.v2.compiler.statusOk")}</span>
                             )}
                         </button>
 
@@ -3150,6 +3152,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                             flash={flash}
                                             fadeSeconds={isPlaytest ? playFadeSeconds : undefined}
                                             compactStatus
+                                            showAttribution={isPlaytest}
                                             soloPreview={
                                                 !isPlaytest && isSoloPreview && previewingCastMember
                                                     ? {
@@ -3221,6 +3224,17 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                                                 {t("page.storyMaker.v2.mode.returnToEdit")}
                                                             </Button>
                                                         </div>
+                                                        {showAttribution && (
+                                                            <button
+                                                                type="button"
+                                                                data-testid="moesekai-ending-attribution"
+                                                                onClick={openNotices}
+                                                                className="state-layer focus-ring mt-1 inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md3-full px-2.5 py-1 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
+                                                            >
+                                                                <Icon path={mdInfo} size={13} className="shrink-0 opacity-75" />
+                                                                <span className="truncate">{t("page.storyMaker.attribution.endingFooter")}</span>
+                                                            </button>
+                                                        )}
                                                     </Surface>
                                                 </div>
                                             )}
@@ -3264,6 +3278,17 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                                                 {t("page.storyMaker.v2.mode.returnToEdit")}
                                                             </Button>
                                                         </div>
+                                                        {showAttribution && !playEmptyStory && (
+                                                            <button
+                                                                type="button"
+                                                                data-testid="moesekai-ending-attribution"
+                                                                onClick={openNotices}
+                                                                className="state-layer focus-ring mt-1 inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md3-full px-2.5 py-1 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
+                                                            >
+                                                                <Icon path={mdInfo} size={13} className="shrink-0 opacity-75" />
+                                                                <span className="truncate">{t("page.storyMaker.attribution.endingFooter")}</span>
+                                                            </button>
+                                                        )}
                                                     </Surface>
                                                 </div>
                                             )}

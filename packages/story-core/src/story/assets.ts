@@ -261,10 +261,11 @@ export function fetchStorySeCatalog(
     signal?: AbortSignal,
 ): Promise<StorySeItem[]> {
     if (signal?.aborted) return Promise.reject(createAbortError());
-    const key = `${region}|${line}`;
+    const base = getAssetBaseUrl(source(region, line));
+    const packKey = `${region}|${line}`;
+    const key = `${packKey}|${base}`;
     let cached = seCatalogs.get(key);
     if (!cached) {
-        const base = getAssetBaseUrl(source(region, line));
         const loading = (async () => {
             const results = await Promise.all(
                 STORY_SE_PACKS.map(async (pack) => {
@@ -287,7 +288,7 @@ export function fetchStorySeCatalog(
                 }
             }
             items.sort((a, b) => compareStrings(a.label, b.label) || compareStrings(a.pack, b.pack));
-            sePackIndex.set(key, packMap);
+            sePackIndex.set(packKey, packMap);
             return items;
         })();
         seCatalogs.set(key, loading);
@@ -388,10 +389,10 @@ export function fetchStoryBgmCatalog(
     signal?: AbortSignal,
 ): Promise<StoryBgmCatalog> {
     if (signal?.aborted) return Promise.reject(createAbortError());
-    const key = `${region}|${line}`;
+    const base = getAssetBaseUrl(source(region, line));
+    const key = `${region}|${line}|${base}`;
     let cached = bgmCatalogs.get(key);
     if (!cached) {
-        const base = getAssetBaseUrl(source(region, line));
         const loading = (async (): Promise<StoryBgmCatalog> => {
             const [tracksData, categoriesData, rootListing] = await Promise.all([
                 fetchMasterDataForServer<SoundTrackMasterEntry[]>(region, "musicSoundTracks.json").catch(() => null),
@@ -634,10 +635,10 @@ export function fetchStoryVoiceScenarios(
     signal?: AbortSignal,
 ): Promise<string[]> {
     if (signal?.aborted) return Promise.reject(createAbortError());
-    const key = `${kind}|${region}|${line}`;
+    const url = `${getAssetBaseUrl(source(region, line))}/${STORY_VOICE_DIRECTORIES[kind]}`;
+    const key = `${kind}|${region}|${line}|${url}`;
     let cached = voiceScenariosCache.get(key);
     if (!cached) {
-        const url = `${getAssetBaseUrl(source(region, line))}/${STORY_VOICE_DIRECTORIES[kind]}`;
         const loading = (async () => {
             const { directories } = await fetchDirectoryListing(url);
             const names = new Set<string>();
@@ -666,10 +667,10 @@ export function fetchStoryVoiceFiles(
     if (!STORY_ASSET_PATTERN.test(cleanScenario)) {
         return Promise.reject(new Error(`Invalid voice scenarioId: ${scenarioId}`));
     }
-    const key = `${kind}|${cleanScenario}|${region}|${line}`;
+    const url = `${getAssetBaseUrl(source(region, line))}/${STORY_VOICE_DIRECTORIES[kind]}${encodeURIComponent(cleanScenario)}/`;
+    const key = `${kind}|${cleanScenario}|${region}|${line}|${url}`;
     let cached = voiceFilesCache.get(key);
     if (!cached) {
-        const url = `${getAssetBaseUrl(source(region, line))}/${STORY_VOICE_DIRECTORIES[kind]}${encodeURIComponent(cleanScenario)}/`;
         const loading = (async () => {
             const { files } = await fetchDirectoryListing(url);
             const names = new Set<string>();

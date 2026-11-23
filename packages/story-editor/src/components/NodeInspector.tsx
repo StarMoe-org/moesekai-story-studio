@@ -964,7 +964,6 @@ export function NodeInspector({
                                     value={beat.text}
                                     maxLength={STORY_LIMITS.telop}
                                     placeholder={t("page.storyMaker.inspector.telopPlaceholder")}
-                                    supportingText={`${beat.text.length}/${STORY_LIMITS.telop}`}
                                     onChange={event => updateSelectedBeat({ ...beat, text: event.target.value })}
                                 />
                                 <VariableInsertRow

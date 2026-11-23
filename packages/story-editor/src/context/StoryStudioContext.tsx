@@ -1,5 +1,5 @@
 "use client";
-import React, { createContext, useContext, useEffect, useMemo } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
     configureStoryCore,
     createBrowserStoryExportAdapter,
@@ -19,6 +19,8 @@ import {
     type StoryWorkspaceCapabilities,
     type UiLocale,
 } from "@moesekai/story-core";
+import { StoryNoticesDialog } from "../components/StoryNoticesDialog";
+import { DEFAULT_STAGE_RENDER_QUALITY, type StoryStageRenderQuality } from "../live2d/stageController";
 import { Md3Provider, DefaultStudioLink, type StudioLinkComponent } from "../md3/context";
 import {
     createStudioTranslator,
@@ -47,6 +49,14 @@ export interface StoryStudioContextValue {
     storage: StoryDraftStorageAdapter;
     exporter: StoryExportAdapter;
     capabilities: StoryWorkspaceCapabilities;
+    /** Whether non-intrusive MoeSekai resource attribution is shown during playback/playtest. */
+    showAttribution: boolean;
+    /** Opens host-supplied legal/attribution notices dialog, or the built-in MD3 fallback dialog. */
+    openNotices: () => void;
+    /** True when the host provided a custom `onOpenNotices` handler. */
+    hasCustomNoticesHandler: boolean;
+    /** Live2D stage supersampling antialiasing preset (`"standard"` | `"high"` | `"ultra"`). */
+    stageRenderQuality: StoryStageRenderQuality;
 }
 
 export interface StoryStudioProviderProps {
@@ -90,6 +100,12 @@ export interface StoryStudioProviderProps {
     exporter?: StoryExportAdapter;
     /** Host capabilities metadata. */
     capabilities?: StoryWorkspaceCapabilities;
+    /** Optional host callback when user clicks resource attribution / legal notices (falls back to built-in MD3 dialog). */
+    onOpenNotices?: () => void;
+    /** Whether to display non-intrusive MoeSekai resource attribution on stage & ending cards. Default: `true`. */
+    showAttribution?: boolean;
+    /** Live2D stage SSAA render quality preset (`"standard"` | `"high"` | `"ultra"`). Default: `"high"`. */
+    stageRenderQuality?: StoryStageRenderQuality;
     children: React.ReactNode;
 }
 
@@ -101,6 +117,10 @@ function defaultNavigate(href: string): void {
     if (typeof window !== "undefined") {
         window.location.assign(href);
     }
+}
+
+function noopOpenNotices(): void {
+    // No-op default outside <StoryStudioProvider>
 }
 
 const StoryStudioContext = createContext<StoryStudioContextValue>({
@@ -121,6 +141,10 @@ const StoryStudioContext = createContext<StoryStudioContextValue>({
     storage: defaultStorage,
     exporter: defaultExporter,
     capabilities: WEB_STORY_WORKSPACE_CAPABILITIES,
+    showAttribution: true,
+    openNotices: noopOpenNotices,
+    hasCustomNoticesHandler: false,
+    stageRenderQuality: DEFAULT_STAGE_RENDER_QUALITY,
 });
 
 export function StoryStudioProvider({
@@ -144,11 +168,26 @@ export function StoryStudioProvider({
     storage = defaultStorage,
     exporter = defaultExporter,
     capabilities = WEB_STORY_WORKSPACE_CAPABILITIES,
+    onOpenNotices,
+    showAttribution = true,
+    stageRenderQuality = DEFAULT_STAGE_RENDER_QUALITY,
     children,
 }: StoryStudioProviderProps) {
     const normalizedLocale = normalizeStudioLocale(locale) as UiLocale;
     const resolvedAssetSource: AssetSourceType = assetSource ?? assetLine ?? "main";
     const resolvedAssetLine: AssetLine = assetLine ?? getAssetLine(resolvedAssetSource);
+    const [builtinNoticesOpen, setBuiltinNoticesOpen] = useState(false);
+    const onOpenNoticesRef = useRef(onOpenNotices);
+    onOpenNoticesRef.current = onOpenNotices;
+    const hasCustomNoticesHandler = typeof onOpenNotices === "function";
+
+    const openNotices = useCallback(() => {
+        if (onOpenNoticesRef.current) {
+            onOpenNoticesRef.current();
+        } else {
+            setBuiltinNoticesOpen(true);
+        }
+    }, []);
 
     const builtinT = useMemo(() => createStudioTranslator(normalizedLocale), [normalizedLocale]);
     const t = useMemo<StudioTranslateFn>(() => {
@@ -196,6 +235,10 @@ export function StoryStudioProvider({
             storage,
             exporter,
             capabilities,
+            showAttribution,
+            openNotices,
+            hasCustomNoticesHandler,
+            stageRenderQuality,
         }),
         [
             brandLogoUrl,
@@ -203,15 +246,19 @@ export function StoryStudioProvider({
             customLive2dSources,
             defaultRegion,
             exporter,
+            hasCustomNoticesHandler,
             LinkComponent,
             live2dCoreUrl,
             live2dScriptBase,
             navigate,
             normalizedLocale,
+            openNotices,
             pathname,
             resolvedAssetLine,
             resolvedAssetSource,
+            showAttribution,
             sseWebScriptBase,
+            stageRenderQuality,
             storage,
             t,
             themeMode,
@@ -224,6 +271,12 @@ export function StoryStudioProvider({
         <StoryStudioContext.Provider value={value}>
             <Md3Provider t={t} LinkComponent={LinkComponent} pathname={pathname}>
                 {children}
+                {!hasCustomNoticesHandler && (
+                    <StoryNoticesDialog
+                        isOpen={builtinNoticesOpen}
+                        onClose={() => setBuiltinNoticesOpen(false)}
+                    />
+                )}
             </Md3Provider>
         </StoryStudioContext.Provider>
     );

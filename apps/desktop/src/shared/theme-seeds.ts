@@ -41,7 +41,7 @@ export const CHARACTER_THEME_SEEDS: readonly CharacterThemeSeed[] = [
 
 export const DESKTOP_LOCALE_OPTIONS: ReadonlyArray<{ code: "zh-CN" | "zh-TW" | "en-US" | "ja-JP" | "ko-KR"; label: string }> = [
     { code: "zh-CN", label: "简体中文" },
-    { code: "zh-TW", label: "繁中 (TW)" },
+    { code: "zh-TW", label: "繁體中文" },
     { code: "en-US", label: "English" },
     { code: "ja-JP", label: "日本語" },
     { code: "ko-KR", label: "한국어" },

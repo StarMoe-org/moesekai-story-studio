@@ -1031,6 +1031,21 @@ export const storyMakerMessages = {
             "lowCreditScore": "目前帳號信用分數不足，暫無法上傳配音。",
             "uploadFailed": "上傳失敗，請檢查網路後重試。"
         }
+    },
+    "attribution": {
+        "stageBadge": "資源公益提供 · MoeSekai (pjsk.moe)",
+        "badgeTooltip": "檢視資源署名與法律聲明",
+        "endingFooter": "資源服務由 MoeSekai (pjsk.moe) 公益提供 · 非官方粉絲創作工具",
+        "dialogTitle": "資源署名與法律聲明",
+        "dialogSubtitle": "關於公益資源服務、原作版權歸屬與第三方授權說明",
+        "serviceTitle": "MoeSekai 公益資源服務與合理使用",
+        "serviceBody": "劇情舞台載入的 Live2D 模型、背景、BGM、音效與語音資源由 MoeSekai（pjsk.moe / assets.pjsk.moe / storage.pjsk.moe / metadata.pjsk.moe）公益託管提供。請合理使用相關介面，禁止惡意高頻併發或批次抓取，共同維護社群公益基礎設施。",
+        "ipTitle": "Project SEKAI 原作版權與非官方聲明",
+        "ipBody": "本工具為非官方粉絲同人創作工具，與 SEGA、Colorful Palette、Crypton Future Media 等官方權利方無任何從屬、合作或官方授權關係。遊戲中所有角色、Live2D 立繪、場景美術、音樂、語音與商標的版權均歸其各自權利人所有，僅限非商業同人交流使用，嚴禁用於任何商業用途。",
+        "licenseTitle": "開源協議與第三方授權",
+        "licenseBody": "本軟體與 @moesekai/story-* 套件基於 Mozilla Public License 2.0 (MPL-2.0) 協議開源。執行時載入的 Live2D Cubism Core for Web 遵循 Live2D Inc. 的專有授權條款，不包含在 MPL-2.0 授權範圍內。",
+        "contentTitle": "使用者創作內容與自訂音訊責任",
+        "contentBody": "所有劇情劇本、翻譯文字及使用者自行掛載的自訂音訊均由創作者自行編寫、提供並承擔相應責任；請遵守相關法律法規、尊重原作與社群規範，並妥善備份重要劇情工程。"
     }
 };
 

@@ -12,8 +12,18 @@ export interface MoesekaiCaptureHook {
     injectAgentPreviewFixture(): boolean;
     /** Opens or closes the 2-tab Agent History Drawer during capture runs. */
     setAgentHistoryDrawerOpen(open: boolean, tab?: "conversations" | "snapshots"): boolean;
+    /** Opens unified SettingsDialog on the requested tab during capture/smoke runs. */
+    openSettingsDialog(tab?: "general" | "stage" | "agent"): void;
     /** Opens UpdateDialog with a deterministic CNB update-available fixture (capture-only). */
     openUpdateDialogPreview(): void;
+    /** Opens dedicated AssetCacheDialog during capture/smoke runs. */
+    openCacheDialog(): void;
+    /** Opens dedicated AboutNoticesDialog during capture/smoke runs. */
+    openNoticesDialog(): void;
+    /** Closes all dialogs cleanly during capture/smoke runs. */
+    closeAllDialogs(): void;
+    /** Switches the editor workspace into Playtest mode (for verifying Player attribution badge). */
+    switchToPlaytestMode(): void;
     /** Updates the Agent side panel width deterministically during capture/smoke runs. */
     setAgentPanelWidth(width: number): number;
 }

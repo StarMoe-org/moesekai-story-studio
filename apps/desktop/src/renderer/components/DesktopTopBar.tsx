@@ -21,6 +21,7 @@ import {
     mdArrowBack,
     mdCode,
     mdDashboard,
+    mdDescription,
     mdDownload,
     mdEdit,
     mdErrorFill,
@@ -44,20 +45,23 @@ import {
 import type {
     AgentStatus,
     DesktopAppSettings,
-    DesktopThemeMode,
     DesktopUiLocale,
 } from "../../shared/ipc";
 import { resolvePlatformChromeLayout } from "../../shared/window-chrome";
 import { formatDesktopMessage } from "../i18n/desktopMessages";
-import { AppearancePopover } from "./AppearancePopover";
+import type { SettingsDialogTab } from "./SettingsDialog";
 import { StudioLogo } from "./StudioLogo";
 
 function TopBarMenuTrigger({
     label,
     items,
+    testId,
+    showDot = false,
 }: {
     label: string;
     items: ReadonlyArray<MenuItemDef>;
+    testId?: string;
+    showDot?: boolean;
 }) {
     return (
         <Menu
@@ -67,15 +71,98 @@ function TopBarMenuTrigger({
                 <button
                     ref={ref}
                     type="button"
+                    data-testid={testId}
                     onClick={onClick}
                     {...aria}
                     className="desktop-no-drag state-layer focus-ring inline-flex h-7 shrink-0 cursor-pointer items-center gap-0.5 rounded-md3-sm px-2 type-label-m text-on-surface hover:bg-surface-container-high"
                 >
                     <span>{label}</span>
+                    {showDot ? (
+                        <span
+                            data-testid="topbar-about-update-dot"
+                            aria-hidden
+                            className="ml-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-md3-full bg-primary"
+                        />
+                    ) : null}
                     <Icon path={mdKeyboardArrowDown} size={15} className="text-on-surface-variant" />
                 </button>
             )}
         />
+    );
+}
+
+function buildAboutMenuItems(params: {
+    locale: DesktopUiLocale;
+    appVersion?: string;
+    availableUpdateVersion?: string | null;
+    onOpenSettings: (tab?: SettingsDialogTab) => void;
+    onOpenCacheDialog: () => void;
+    onCheckForUpdates: () => void;
+    onOpenNoticesDialog: () => void;
+}): MenuItemDef[] {
+    const t = (key: Parameters<typeof formatDesktopMessage>[1], vars?: Record<string, string | number>) =>
+        formatDesktopMessage(params.locale, key, vars);
+    const updateTrailing = params.availableUpdateVersion ? (
+        <span className="rounded-md3-full bg-primary-container px-1.5 py-0.5 font-mono type-label-s font-medium text-on-primary-container">
+            v{params.availableUpdateVersion.replace(/^v/i, "")}
+        </span>
+    ) : params.appVersion ? (
+        <span className="font-mono type-label-s text-on-surface-variant">
+            v{params.appVersion.replace(/^v/i, "")}
+        </span>
+    ) : undefined;
+
+    return [
+        {
+            key: "about-settings",
+            label: t("aboutMenuSettings"),
+            icon: mdSettings,
+            trailing: <span className="font-mono type-label-s text-on-surface-variant">Ctrl+,</span>,
+            onSelect: () => params.onOpenSettings("general"),
+        },
+        {
+            key: "about-cache",
+            label: t("aboutMenuCache"),
+            icon: mdInventory2,
+            onSelect: params.onOpenCacheDialog,
+        },
+        {
+            key: "about-updates",
+            label: t("aboutMenuUpdates"),
+            icon: mdSync,
+            trailing: updateTrailing,
+            onSelect: params.onCheckForUpdates,
+        },
+        {
+            key: "about-notices",
+            label: t("aboutMenuNotices"),
+            icon: mdDescription,
+            dividerBefore: true,
+            onSelect: params.onOpenNoticesDialog,
+        },
+    ];
+}
+
+function TopBarSettingsGear({
+    label,
+    onClick,
+}: {
+    label: string;
+    onClick: () => void;
+}) {
+    return (
+        <div className="desktop-no-drag shrink-0">
+            <Tooltip side="bottom" label={`${label} (Ctrl+,)`}>
+                <IconButton
+                    variant="standard"
+                    size="xs"
+                    icon={mdSettings}
+                    label={label}
+                    data-testid="topbar-settings-btn"
+                    onClick={onClick}
+                />
+            </Tooltip>
+        </div>
     );
 }
 
@@ -92,11 +179,10 @@ export interface DesktopWelcomeTopBarProps {
     onNewProject: () => void;
     onOpenFolder: () => void;
     onOpenMskFile: () => void;
-    onOpenAgentSettings: () => void;
+    onOpenSettings: (tab?: SettingsDialogTab) => void;
+    onOpenCacheDialog: () => void;
     onCheckForUpdates: () => void;
-    onChangeThemeMode: (mode: DesktopThemeMode) => void;
-    onChangeThemeSeed: (seed: string) => void;
-    onChangeLocale: (locale: DesktopUiLocale) => void;
+    onOpenNoticesDialog: () => void;
 }
 
 export const DesktopWelcomeTopBar: React.FC<DesktopWelcomeTopBarProps> = ({
@@ -108,11 +194,10 @@ export const DesktopWelcomeTopBar: React.FC<DesktopWelcomeTopBarProps> = ({
     onNewProject,
     onOpenFolder,
     onOpenMskFile,
-    onOpenAgentSettings,
+    onOpenSettings,
+    onOpenCacheDialog,
     onCheckForUpdates,
-    onChangeThemeMode,
-    onChangeThemeSeed,
-    onChangeLocale,
+    onOpenNoticesDialog,
 }) => {
     const t = (key: Parameters<typeof formatDesktopMessage>[1], vars?: Record<string, string | number>) =>
         formatDesktopMessage(settings.locale, key, vars);
@@ -139,26 +224,22 @@ export const DesktopWelcomeTopBar: React.FC<DesktopWelcomeTopBarProps> = ({
                 icon: mdUploadFile,
                 onSelect: onOpenMskFile,
             },
-            {
-                key: "welcome-agent-settings",
-                label: t("agentSettingsTooltip"),
-                icon: mdSettings,
-                dividerBefore: true,
-                onSelect: onOpenAgentSettings,
-            },
-            {
-                key: "welcome-check-updates",
-                label: t("checkForUpdates"),
-                icon: mdSync,
-                trailing: appVersion ? (
-                    <span className="font-mono type-label-s text-on-surface-variant">
-                        v{appVersion.replace(/^v/i, "")}
-                    </span>
-                ) : undefined,
-                onSelect: onCheckForUpdates,
-            },
         ],
-        [appVersion, onCheckForUpdates, onNewProject, onOpenAgentSettings, onOpenFolder, onOpenMskFile, settings.locale],
+        [onNewProject, onOpenFolder, onOpenMskFile, settings.locale],
+    );
+
+    const aboutMenuItems = useMemo(
+        () =>
+            buildAboutMenuItems({
+                locale: settings.locale,
+                appVersion,
+                availableUpdateVersion,
+                onOpenSettings,
+                onOpenCacheDialog,
+                onCheckForUpdates,
+                onOpenNoticesDialog,
+            }),
+        [appVersion, availableUpdateVersion, onCheckForUpdates, onOpenCacheDialog, onOpenNoticesDialog, onOpenSettings, settings.locale],
     );
 
     const chrome = resolvePlatformChromeLayout(platform, isFullscreen);
@@ -177,40 +258,24 @@ export const DesktopWelcomeTopBar: React.FC<DesktopWelcomeTopBarProps> = ({
                 <span className="type-title-s truncate pr-1 font-semibold tracking-tight text-on-surface">
                     {t("appName")}
                 </span>
-                <TopBarMenuTrigger label={t("studioFileMenu")} items={fileMenuItems} />
+                <nav aria-label={t("appName")} className="flex shrink-0 items-center gap-0.5">
+                    <TopBarMenuTrigger label={t("studioFileMenu")} items={fileMenuItems} />
+                    <TopBarMenuTrigger
+                        label={t("studioAboutMenu")}
+                        items={aboutMenuItems}
+                        testId="topbar-about-btn"
+                        showDot={Boolean(availableUpdateVersion)}
+                    />
+                </nav>
             </div>
 
-            {/* Dedicated draggable blank spacer filling all middle space */}
             <div
                 data-drag-spacer="center"
                 className={cn("h-full min-w-[24px] flex-1", chrome.draggableHeader && "desktop-drag-region")}
             />
 
-            <div className="flex shrink-0 items-center gap-1.5">
-                {availableUpdateVersion ? (
-                    <button
-                        type="button"
-                        data-testid="topbar-update-pill"
-                        onClick={onCheckForUpdates}
-                        className="desktop-no-drag state-layer focus-ring inline-flex h-7 shrink-0 items-center gap-1 rounded-md3-full border border-primary/50 bg-primary-container px-2.5 type-label-s font-medium text-on-primary-container transition-colors"
-                    >
-                        <span className="inline-block h-1.5 w-1.5 rounded-md3-full bg-primary" />
-                        <span className="whitespace-nowrap">
-                            {t("updateAvailableBadge", { version: availableUpdateVersion })}
-                        </span>
-                    </button>
-                ) : null}
-                <AppearancePopover
-                    themeSeed={settings.themeSeed}
-                    themeMode={settings.themeMode}
-                    locale={settings.locale}
-                    appVersion={appVersion}
-                    availableUpdateVersion={availableUpdateVersion}
-                    onCheckForUpdates={onCheckForUpdates}
-                    onChangeThemeSeed={onChangeThemeSeed}
-                    onChangeThemeMode={onChangeThemeMode}
-                    onChangeLocale={onChangeLocale}
-                />
+            <div className="flex shrink-0 items-center gap-1">
+                <TopBarSettingsGear label={t("settingsTooltip")} onClick={() => onOpenSettings("general")} />
             </div>
         </header>
     );
@@ -238,12 +303,11 @@ export interface DesktopEditorTopBarProps {
     onOpenExportBundle: () => void;
     onEnterTheater: () => void;
     onRevealProject: () => void;
-    onOpenAgentSettings: () => void;
+    onOpenSettings: (tab?: SettingsDialogTab) => void;
+    onOpenCacheDialog: () => void;
     onCheckForUpdates: () => void;
+    onOpenNoticesDialog: () => void;
     onToggleAgentPanel: () => void;
-    onChangeThemeMode: (mode: DesktopThemeMode) => void;
-    onChangeThemeSeed: (seed: string) => void;
-    onChangeLocale: (locale: DesktopUiLocale) => void;
 }
 
 export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
@@ -264,19 +328,18 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
     onOpenExportBundle,
     onEnterTheater,
     onRevealProject,
-    onOpenAgentSettings,
+    onOpenSettings,
+    onOpenCacheDialog,
     onCheckForUpdates,
+    onOpenNoticesDialog,
     onToggleAgentPanel,
-    onChangeThemeMode,
-    onChangeThemeSeed,
-    onChangeLocale,
 }) => {
     const t = (key: Parameters<typeof formatDesktopMessage>[1], vars?: Record<string, string | number>) =>
         formatDesktopMessage(settings.locale, key, vars);
 
     const isPlaytest = ctx.workspaceMode === "playtest";
 
-    // Merge Desktop workspace actions + non-duplicate StoryStudioEditor File items into ONE clean File menu.
+    // Strictly file & project operations (Settings / Cache / Updates / Notices live under `关于 ∨`)
     const unifiedFileMenuItems = useMemo<MenuItemDef[]>(() => {
         const byKey = new Map(ctx.fileMenuItems.map(item => [item.key, item]));
         const metaItem = byKey.get("meta");
@@ -353,23 +416,6 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                 onSelect: onRevealProject,
             },
             {
-                key: "desk-agent-settings",
-                label: t("agentSettingsTooltip"),
-                icon: mdSettings,
-                onSelect: onOpenAgentSettings,
-            },
-            {
-                key: "desk-check-updates",
-                label: t("checkForUpdates"),
-                icon: mdSync,
-                trailing: appVersion ? (
-                    <span className="font-mono type-label-s text-on-surface-variant">
-                        v{appVersion.replace(/^v/i, "")}
-                    </span>
-                ) : undefined,
-                onSelect: onCheckForUpdates,
-            },
-            {
                 key: "desk-close",
                 label: t("closeWorkspace"),
                 icon: mdHome,
@@ -380,13 +426,10 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
 
         return items;
     }, [
-        appVersion,
         ctx.fileMenuItems,
         onBackToWelcome,
-        onCheckForUpdates,
         onEnterTheater,
         onNewProject,
-        onOpenAgentSettings,
         onOpenExport,
         onOpenExportBundle,
         onOpenFolder,
@@ -396,7 +439,6 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
         settings.locale,
     ]);
 
-    // Filter out web-only "immersive" toggle (Desktop is always full-window) and add MoeSekai Agent toggle.
     const unifiedViewMenuItems = useMemo<MenuItemDef[]>(() => {
         const filtered = ctx.viewMenuItems.filter(item => item.key !== "immersive");
         return [
@@ -412,6 +454,20 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
             },
         ];
     }, [ctx.viewMenuItems, onToggleAgentPanel, settings.agentPanelOpen, settings.locale]);
+
+    const aboutMenuItems = useMemo(
+        () =>
+            buildAboutMenuItems({
+                locale: settings.locale,
+                appVersion,
+                availableUpdateVersion,
+                onOpenSettings,
+                onOpenCacheDialog,
+                onCheckForUpdates,
+                onOpenNoticesDialog,
+            }),
+        [appVersion, availableUpdateVersion, onCheckForUpdates, onOpenCacheDialog, onOpenNoticesDialog, onOpenSettings, settings.locale],
+    );
 
     const effectiveSaveState =
         saveState === "error" || ctx.saveStatus === "error"
@@ -454,7 +510,6 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                 chrome.draggableHeader && "desktop-drag-region",
             )}
         >
-            {/* Left cluster: ONLY leaf interactive controls get .desktop-no-drag */}
             <div className="flex min-w-0 items-center gap-1">
                 <div className="desktop-no-drag shrink-0">
                     <Tooltip side="bottom" label={t("backToWelcome")}>
@@ -474,6 +529,12 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                     <TopBarMenuTrigger label={t("studioFileMenu")} items={unifiedFileMenuItems} />
                     <TopBarMenuTrigger label={t("studioEditMenu")} items={ctx.editMenuItems} />
                     <TopBarMenuTrigger label={t("studioViewMenu")} items={unifiedViewMenuItems} />
+                    <TopBarMenuTrigger
+                        label={t("studioAboutMenu")}
+                        items={aboutMenuItems}
+                        testId="topbar-about-btn"
+                        showDot={Boolean(availableUpdateVersion)}
+                    />
                 </nav>
 
                 <span aria-hidden className="mx-0.5 h-4 w-px shrink-0 bg-outline-variant/60" />
@@ -496,7 +557,6 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                     </span>
                 </button>
 
-                {/* Single Clean Status Indicator (compact dot below xl to protect 1280px budget) */}
                 {ctx.errorCount > 0 ? (
                     <button
                         type="button"
@@ -534,13 +594,11 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                 )}
             </div>
 
-            {/* Draggable Left Spacer */}
             <div
                 data-drag-spacer="left"
                 className={cn("h-full min-w-[16px] flex-1", chrome.draggableHeader && "desktop-drag-region")}
             />
 
-            {/* Center: Mode Switch (Edit | Playtest | Code) */}
             <div className="desktop-no-drag shrink-0">
                 <SegmentedButton<StoryEditorWorkspaceMode>
                     density={-2}
@@ -556,13 +614,11 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                 />
             </div>
 
-            {/* Draggable Right Spacer */}
             <div
                 data-drag-spacer="right"
                 className={cn("h-full min-w-[16px] flex-1", chrome.draggableHeader && "desktop-drag-region")}
             />
 
-            {/* Right cluster: compact, strictly shrink-0, guaranteed unclipped at 1024px-1280px */}
             <div className="flex shrink-0 items-center gap-1">
                 <div className="desktop-no-drag shrink-0">
                     <Tooltip side="bottom" label={t("i18nTooltip")}>
@@ -589,33 +645,7 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                     </Tooltip>
                 </div>
 
-                {availableUpdateVersion ? (
-                    <div className="desktop-no-drag shrink-0">
-                        <Tooltip side="bottom" label={t("updateAvailableBadge", { version: availableUpdateVersion })}>
-                            <button
-                                type="button"
-                                data-testid="topbar-update-pill"
-                                onClick={onCheckForUpdates}
-                                className="state-layer focus-ring inline-flex h-7 items-center gap-1 rounded-md3-full border border-primary/50 bg-primary-container px-2 type-label-s font-medium text-on-primary-container transition-colors"
-                            >
-                                <span className="inline-block h-1.5 w-1.5 rounded-md3-full bg-primary" />
-                                <span className="font-mono whitespace-nowrap">v{availableUpdateVersion}</span>
-                            </button>
-                        </Tooltip>
-                    </div>
-                ) : null}
-
-                <AppearancePopover
-                    themeSeed={settings.themeSeed}
-                    themeMode={settings.themeMode}
-                    locale={settings.locale}
-                    appVersion={appVersion}
-                    availableUpdateVersion={availableUpdateVersion}
-                    onCheckForUpdates={onCheckForUpdates}
-                    onChangeThemeSeed={onChangeThemeSeed}
-                    onChangeThemeMode={onChangeThemeMode}
-                    onChangeLocale={onChangeLocale}
-                />
+                <TopBarSettingsGear label={t("settingsTooltip")} onClick={() => onOpenSettings("general")} />
 
                 <div className="desktop-no-drag shrink-0">
                     <Button
@@ -666,10 +696,10 @@ export interface DesktopPlayerTopBarProps {
     availableUpdateVersion?: string | null;
     onBackToEditor: () => void;
     onOpenExport: () => void;
+    onOpenSettings: (tab?: SettingsDialogTab) => void;
+    onOpenCacheDialog: () => void;
     onCheckForUpdates: () => void;
-    onChangeThemeMode: (mode: DesktopThemeMode) => void;
-    onChangeThemeSeed: (seed: string) => void;
-    onChangeLocale: (locale: DesktopUiLocale) => void;
+    onOpenNoticesDialog: () => void;
 }
 
 export const DesktopPlayerTopBar: React.FC<DesktopPlayerTopBarProps> = ({
@@ -681,15 +711,29 @@ export const DesktopPlayerTopBar: React.FC<DesktopPlayerTopBarProps> = ({
     availableUpdateVersion,
     onBackToEditor,
     onOpenExport,
+    onOpenSettings,
+    onOpenCacheDialog,
     onCheckForUpdates,
-    onChangeThemeMode,
-    onChangeThemeSeed,
-    onChangeLocale,
+    onOpenNoticesDialog,
 }) => {
     const t = (key: Parameters<typeof formatDesktopMessage>[1], vars?: Record<string, string | number>) =>
         formatDesktopMessage(settings.locale, key, vars);
     const { t: tStudio } = useStoryI18n();
     const chrome = resolvePlatformChromeLayout(platform, isFullscreen);
+
+    const aboutMenuItems = useMemo(
+        () =>
+            buildAboutMenuItems({
+                locale: settings.locale,
+                appVersion,
+                availableUpdateVersion,
+                onOpenSettings,
+                onOpenCacheDialog,
+                onCheckForUpdates,
+                onOpenNoticesDialog,
+            }),
+        [appVersion, availableUpdateVersion, onCheckForUpdates, onOpenCacheDialog, onOpenNoticesDialog, onOpenSettings, settings.locale],
+    );
 
     return (
         <header
@@ -711,6 +755,13 @@ export const DesktopPlayerTopBar: React.FC<DesktopPlayerTopBarProps> = ({
                         {t("editMode")}
                     </Button>
                 </div>
+                <StudioLogo size={24} className="shrink-0" />
+                <TopBarMenuTrigger
+                    label={t("studioAboutMenu")}
+                    items={aboutMenuItems}
+                    testId="topbar-about-btn"
+                    showDot={Boolean(availableUpdateVersion)}
+                />
                 <span aria-hidden className="h-4 w-px shrink-0 bg-outline-variant/60" />
                 <span className="max-w-[140px] truncate type-label-l font-medium text-on-surface xl:max-w-[220px]">
                     {ctx.title}
@@ -768,33 +819,9 @@ export const DesktopPlayerTopBar: React.FC<DesktopPlayerTopBarProps> = ({
                         />
                     </Tooltip>
                 </div>
-                {availableUpdateVersion ? (
-                    <div className="desktop-no-drag shrink-0">
-                        <Tooltip side="bottom" label={t("updateAvailableBadge", { version: availableUpdateVersion })}>
-                            <button
-                                type="button"
-                                data-testid="topbar-update-pill"
-                                onClick={onCheckForUpdates}
-                                className="state-layer focus-ring inline-flex h-7 items-center gap-1 rounded-md3-full border border-primary/50 bg-primary-container px-2 type-label-s font-medium text-on-primary-container transition-colors"
-                            >
-                                <span className="inline-block h-1.5 w-1.5 rounded-md3-full bg-primary" />
-                                <span className="font-mono whitespace-nowrap">v{availableUpdateVersion}</span>
-                            </button>
-                        </Tooltip>
-                    </div>
-                ) : null}
 
-                <AppearancePopover
-                    themeSeed={settings.themeSeed}
-                    themeMode={settings.themeMode}
-                    locale={settings.locale}
-                    appVersion={appVersion}
-                    availableUpdateVersion={availableUpdateVersion}
-                    onCheckForUpdates={onCheckForUpdates}
-                    onChangeThemeSeed={onChangeThemeSeed}
-                    onChangeThemeMode={onChangeThemeMode}
-                    onChangeLocale={onChangeLocale}
-                />
+                <TopBarSettingsGear label={t("settingsTooltip")} onClick={() => onOpenSettings("general")} />
+
                 <div className="desktop-no-drag shrink-0">
                     <Button
                         variant="filled"

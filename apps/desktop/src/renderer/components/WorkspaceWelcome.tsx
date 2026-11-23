@@ -49,6 +49,7 @@ export interface WorkspaceWelcomeProps {
     onOpenRecent: (entry: RecentProjectEntry) => Promise<void>;
     onRevealPath: (targetPath: string) => Promise<void>;
     onRemoveRecent: (targetPath: string) => Promise<void>;
+    onOpenNotices?: () => void;
 }
 
 /**
@@ -67,6 +68,7 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
     onOpenRecent,
     onRevealPath,
     onRemoveRecent,
+    onOpenNotices,
 }) => {
     const t = (key: Parameters<typeof formatDesktopMessage>[1], vars?: Record<string, string | number>) =>
         formatDesktopMessage(locale, key, vars);
@@ -274,28 +276,40 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
                     )}
                 </section>
 
-                {/* Minimal Keyboard Shortcuts Footer */}
-                <footer className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-outline-variant/60 pt-4 type-label-s text-on-surface-variant">
-                    <span className="inline-flex items-center gap-1.5">
-                        <kbd className="rounded-md3-xs border border-outline-variant bg-surface-container-high px-1.5 py-0.5 font-mono text-on-surface">Ctrl+N</kbd>
-                        <span>{t("newProject")}</span>
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                        <kbd className="rounded-md3-xs border border-outline-variant bg-surface-container-high px-1.5 py-0.5 font-mono text-on-surface">Ctrl+O</kbd>
-                        <span>{t("openFolder")}</span>
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                        <kbd className="rounded-md3-xs border border-outline-variant bg-surface-container-high px-1.5 py-0.5 font-mono text-on-surface">Ctrl+S</kbd>
-                        <span>{t("save")}</span>
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                        <kbd className="rounded-md3-xs border border-outline-variant bg-surface-container-high px-1.5 py-0.5 font-mono text-on-surface">Ctrl+Shift+E</kbd>
-                        <span>{t("exportMsk")}</span>
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                        <kbd className="rounded-md3-xs border border-outline-variant bg-surface-container-high px-1.5 py-0.5 font-mono text-on-surface">Ctrl+Shift+A</kbd>
-                        <span>{t("agentTitle")}</span>
-                    </span>
+                {/* Minimal Keyboard Shortcuts & Legal Notices Footer */}
+                <footer className="mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-outline-variant/60 pt-4 type-label-s text-on-surface-variant">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                        <span className="inline-flex items-center gap-1.5">
+                            <kbd className="rounded-md3-xs border border-outline-variant bg-surface-container-high px-1.5 py-0.5 font-mono text-on-surface">Ctrl+N</kbd>
+                            <span>{t("newProject")}</span>
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                            <kbd className="rounded-md3-xs border border-outline-variant bg-surface-container-high px-1.5 py-0.5 font-mono text-on-surface">Ctrl+O</kbd>
+                            <span>{t("openFolder")}</span>
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                            <kbd className="rounded-md3-xs border border-outline-variant bg-surface-container-high px-1.5 py-0.5 font-mono text-on-surface">Ctrl+S</kbd>
+                            <span>{t("save")}</span>
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                            <kbd className="rounded-md3-xs border border-outline-variant bg-surface-container-high px-1.5 py-0.5 font-mono text-on-surface">Ctrl+Shift+E</kbd>
+                            <span>{t("exportMsk")}</span>
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                            <kbd className="rounded-md3-xs border border-outline-variant bg-surface-container-high px-1.5 py-0.5 font-mono text-on-surface">Ctrl+Shift+A</kbd>
+                            <span>{t("agentTitle")}</span>
+                        </span>
+                    </div>
+                    {onOpenNotices ? (
+                        <button
+                            type="button"
+                            data-testid="welcome-notices-link"
+                            onClick={onOpenNotices}
+                            className="focus-ring cursor-pointer rounded-md3-xs px-1.5 py-0.5 type-label-s text-on-surface-variant underline-offset-2 transition-colors hover:text-primary hover:underline"
+                        >
+                            {t("aboutAndNoticesLink")}
+                        </button>
+                    ) : null}
                 </footer>
             </div>
 

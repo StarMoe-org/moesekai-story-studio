@@ -91,6 +91,13 @@ const api: MoesekaiDesktopApi = {
         onUpdateAvailable: listener =>
             subscribeChannel<DesktopUpdateCheckResult>(IPC_CHANNELS.EVENT_UPDATE_AVAILABLE, listener),
     },
+    cache: {
+        getStats: () => ipcRenderer.invoke(IPC_CHANNELS.CACHE_GET_STATS),
+        clear: () => ipcRenderer.invoke(IPC_CHANNELS.CACHE_CLEAR),
+        openDir: () => ipcRenderer.invoke(IPC_CHANNELS.CACHE_OPEN_DIR),
+        setMaxMb: mb => ipcRenderer.invoke(IPC_CHANNELS.CACHE_SET_MAX_MB, mb),
+        setEnabled: enabled => ipcRenderer.invoke(IPC_CHANNELS.CACHE_SET_ENABLED, enabled),
+    },
 };
 
 contextBridge.exposeInMainWorld("moesekaiDesktop", api);

@@ -306,3 +306,48 @@ test("loadStoryUiKit degrades gracefully to null in non-browser Node runtime", a
     const kit = await loadStoryUiKit("jp");
     assert.equal(kit, null);
 });
+
+test("loadStoryUiKit skips spawning kit-worker.js when sse-web manifest omits it", async () => {
+    const origWindow = globalThis.window;
+    const origWorker = globalThis.Worker;
+    const origFetch = globalThis.fetch;
+    let workerSpawned = 0;
+    let fetchedUrls = [];
+    try {
+        globalThis.window = { location: { origin: "http://127.0.0.1:3000" } };
+        globalThis.Worker = class FakeWorker {
+            constructor() {
+                workerSpawned += 1;
+            }
+            postMessage() {}
+            terminate() {}
+        };
+        globalThis.fetch = async (url) => {
+            fetchedUrls.push(String(url));
+            return {
+                ok: true,
+                json: async () => ({
+                    format: "sse-web-release/1",
+                    version: "2.0.0",
+                    sha256: {
+                        "player.js": "abc",
+                        "render-worker.js": "def",
+                        "sim-worker.js": "ghi",
+                    },
+                }),
+            };
+        };
+
+        const base = "http://127.0.0.1:3000/sse-web/2.0.0-test-no-kit/";
+        const kit1 = await loadStoryUiKit("jp", { scriptBaseUrl: base });
+        const kit2 = await loadStoryUiKit("jp", { scriptBaseUrl: base });
+        assert.equal(kit1, null);
+        assert.equal(kit2, null);
+        assert.equal(workerSpawned, 0, "must not spawn kit-worker.js when absent from manifest.json");
+        assert.deepEqual(fetchedUrls, [`${base}manifest.json`], "manifest probe must be cached per scriptBaseUrl");
+    } finally {
+        globalThis.window = origWindow;
+        globalThis.Worker = origWorker;
+        globalThis.fetch = origFetch;
+    }
+});

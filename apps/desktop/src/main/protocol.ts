@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { getMimeType, PathJailError, resolveJailedPath } from "../shared/path-jail.ts";
+import { CACHE_PROTOCOL_SCHEME } from "./asset-cache.ts";
 
 export const APP_PROTOCOL_SCHEME = "moesekai-app";
+export { CACHE_PROTOCOL_SCHEME };
 
 export interface ProtocolContext {
     /** Directory containing compiled Vite renderer files (`dist/renderer`). */
@@ -197,6 +199,16 @@ export function registerPrivilegedAppScheme(
                 corsEnabled: true,
                 stream: true,
                 allowServiceWorkers: true,
+            },
+        },
+        {
+            scheme: CACHE_PROTOCOL_SCHEME,
+            privileges: {
+                standard: true,
+                secure: true,
+                supportFetchAPI: true,
+                corsEnabled: true,
+                stream: true,
             },
         },
     ]);

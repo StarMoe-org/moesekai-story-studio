@@ -30,6 +30,9 @@ const DEFAULT_APP_SETTINGS: DesktopAppSettings = {
     updateChannel: "auto",
     autoCheckUpdates: true,
     ignoredUpdateVersion: null,
+    assetCacheEnabled: true,
+    assetCacheMaxMb: 2048,
+    stageRenderQuality: "high",
 };
 
 interface StoredAgentConfig {
@@ -119,6 +122,12 @@ export class DesktopSettingsStore {
                     typeof parsed.ignoredUpdateVersion === "string" && parsed.ignoredUpdateVersion.trim()
                         ? parsed.ignoredUpdateVersion.trim()
                         : null,
+                assetCacheEnabled:
+                    typeof parsed.assetCacheEnabled === "boolean"
+                        ? parsed.assetCacheEnabled
+                        : DEFAULT_APP_SETTINGS.assetCacheEnabled,
+                assetCacheMaxMb: this.normalizeCacheMaxMb(parsed.assetCacheMaxMb),
+                stageRenderQuality: this.normalizeStageRenderQuality(parsed.stageRenderQuality),
             };
         } catch {
             return { ...DEFAULT_APP_SETTINGS };
@@ -140,6 +149,9 @@ export class DesktopSettingsStore {
             typeof next.ignoredUpdateVersion === "string" && next.ignoredUpdateVersion.trim()
                 ? next.ignoredUpdateVersion.trim()
                 : null;
+        next.assetCacheEnabled = typeof next.assetCacheEnabled === "boolean" ? next.assetCacheEnabled : true;
+        next.assetCacheMaxMb = this.normalizeCacheMaxMb(next.assetCacheMaxMb);
+        next.stageRenderQuality = this.normalizeStageRenderQuality(next.stageRenderQuality);
         fs.writeFileSync(this.settingsFile, JSON.stringify(next, null, 2) + "\n", "utf8");
         return next;
     }
@@ -327,5 +339,19 @@ export class DesktopSettingsStore {
             return value;
         }
         return DEFAULT_APP_SETTINGS.updateChannel;
+    }
+
+    private normalizeCacheMaxMb(value: unknown): number {
+        if (typeof value === "number" && Number.isFinite(value)) {
+            return Math.max(128, Math.min(16384, Math.round(value)));
+        }
+        return DEFAULT_APP_SETTINGS.assetCacheMaxMb;
+    }
+
+    private normalizeStageRenderQuality(value: unknown): DesktopAppSettings["stageRenderQuality"] {
+        if (value === "standard" || value === "high" || value === "ultra") {
+            return value;
+        }
+        return DEFAULT_APP_SETTINGS.stageRenderQuality;
     }
 }

@@ -1,4 +1,4 @@
-import { Menu, app, dialog, shell, type MenuItemConstructorOptions } from "electron";
+import { Menu, app, shell, type MenuItemConstructorOptions } from "electron";
 import type {
     DesktopAppSettings,
     MenuCommand,
@@ -46,6 +46,12 @@ export function buildAndApplyAppMenu(ctx: BuildMenuContext): void {
                     label: app.name,
                     submenu: [
                         { role: "about" },
+                        { type: "separator" },
+                        {
+                            label: "Preferences…",
+                            accelerator: "CmdOrCtrl+,",
+                            click: () => ctx.sendCommand({ type: "open-settings", tab: "general" }),
+                        },
                         { type: "separator" },
                         { role: "services" },
                         { type: "separator" },
@@ -103,6 +109,12 @@ export function buildAndApplyAppMenu(ctx: BuildMenuContext): void {
                     label: "Reveal Project Folder",
                     enabled: ctx.hasActiveProject,
                     click: () => ctx.sendCommand({ type: "reveal-project" }),
+                },
+                { type: "separator" },
+                {
+                    label: "Preferences…",
+                    accelerator: "CmdOrCtrl+,",
+                    click: () => ctx.sendCommand({ type: "open-settings", tab: "general" }),
                 },
                 { type: "separator" },
                 isMac ? { role: "close" } : { role: "quit" },
@@ -205,16 +217,14 @@ export function buildAndApplyAppMenu(ctx: BuildMenuContext): void {
                         void shell.openExternal("https://pjsk.moe/story-maker/play");
                     },
                 },
+                { type: "separator" },
                 {
-                    label: "About MoeSekai Story Studio",
-                    click: () => {
-                        void dialog.showMessageBox({
-                            type: "info",
-                            title: "MoeSekai Story Studio",
-                            message: `MoeSekai Story Studio v${app.getVersion()}`,
-                            detail: "Native Electron desktop studio for MoeSekai Script (.msk) with MoeSekai Agent automation.\nLicensed under MPL-2.0.",
-                        });
-                    },
+                    label: "Local Asset Cache…",
+                    click: () => ctx.sendCommand({ type: "open-cache-dialog" }),
+                },
+                {
+                    label: "About & Legal Notices…",
+                    click: () => ctx.sendCommand({ type: "open-notices" }),
                 },
             ],
         },

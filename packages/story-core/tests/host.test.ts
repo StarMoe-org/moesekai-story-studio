@@ -12,10 +12,17 @@ import {
     createStoryDocument,
     getAssetBaseUrl,
     getStoryCoreConfig,
+    hasExplicitLive2DIndexBase,
+    live2dCoreUrl,
+    live2dListingUrl,
+    live2dSources,
     parseStoryScript,
     prepareMskExport,
     resetStoryCoreConfig,
+    resolveStoryUiKitSources,
     serializeStoryScript,
+    sseWebFonts,
+    sseWebSources,
     storyBackgroundUrl,
     storyBgmUrl,
     stripMskPositions,
@@ -124,6 +131,84 @@ describe("host contracts & .msk export preflight", () => {
                 storyBgmUrl("bgm00020", "jp"),
                 "https://storage.exmeaning.com/sekai-jp-assets/sound/scenario/bgm/bgm00020/bgm00020.mp3",
             );
+        } finally {
+            resetStoryCoreConfig();
+        }
+    });
+
+    test("configureStoryCore supports moesekai-cache:// and moesekai-app:// protocols while rejecting untrusted schemes", () => {
+        try {
+            configureStoryCore({
+                assetDomainMain: "moesekai-cache://storage.pjsk.moe",
+                assetDomainBackup: "moesekai-cache://storage.exmeaning.com",
+                masterDataDomainMain: "moesekai-cache://metadata.pjsk.moe",
+                masterDataDomainBackup: "moesekai-cache://metadata.exmeaning.com",
+                live2dLibraryBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/",
+                live2dIndexBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-live2d/",
+                live2dCoreUrl: "moesekai-app://app/live2d-viewer/live2dcubismcore.min.js",
+                live2dAssetProxy: "moesekai-cache://proxy.local/relay/",
+                sseWebSite: "moesekai-cache://storage.pjsk.moe/",
+                sseWebFontBase: "moesekai-app://app/story-fonts/",
+            });
+
+            assert.equal(
+                live2dSources("jp").library,
+                "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/",
+            );
+            assert.equal(
+                live2dSources("jp").index,
+                "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-live2d/jp/models.json",
+            );
+            // Rewriting the default index base through moesekai-cache:// should not trigger redundant models.json probes
+            assert.equal(hasExplicitLive2DIndexBase(), false);
+            assert.equal(
+                live2dListingUrl("jp", "live2d/model/"),
+                "moesekai-cache://storage.pjsk.moe/jp/live2d/model/",
+            );
+            assert.equal(
+                live2dCoreUrl(),
+                "moesekai-app://app/live2d-viewer/live2dcubismcore.min.js",
+            );
+            assert.equal(
+                storyBackgroundUrl("bg_a000401", "jp"),
+                "moesekai-cache://storage.pjsk.moe/sekai-jp-assets/scenario/background/bg_a000401/bg_a000401.webp",
+            );
+
+            const sseSources = sseWebSources("jp");
+            assert.ok(sseSources);
+            assert.equal(sseSources.site, "moesekai-cache://storage.pjsk.moe/");
+            assert.equal(sseSources.proxy, undefined);
+
+            const uiKitSources = resolveStoryUiKitSources("jp");
+            assert.ok(uiKitSources);
+            assert.equal(uiKitSources.site, "moesekai-cache://storage.pjsk.moe/");
+            assert.equal(uiKitSources.proxy, "moesekai-cache://proxy.local/relay/");
+
+            const fonts = sseWebFonts("jp");
+            assert.ok(fonts);
+            assert.ok(fonts.body[0].url.startsWith("moesekai-app://app/story-fonts/"));
+
+            // Untrusted schemes and path traversals must still be rejected
+            configureStoryCore({ live2dLibraryBase: "javascript://evil.test/foo/" });
+            assert.throws(() => live2dSources("jp"), /live2d_viewer_config_invalid/);
+
+            configureStoryCore({
+                live2dLibraryBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/",
+                sseWebSite: "http://evil.example.com/",
+            });
+            assert.throws(() => sseWebSources("jp"), /sse_web_config_invalid/);
+
+            configureStoryCore({
+                sseWebSite: "moesekai-cache://storage.pjsk.moe/",
+                live2dAssetProxy: "file:///etc/",
+            });
+            assert.equal(resolveStoryUiKitSources("jp")?.proxy, undefined);
+
+            configureStoryCore({
+                live2dAssetProxy: null,
+                live2dLibraryBase: "moesekai-cache://assets.pjsk.moe/sekai/../etc/",
+            });
+            assert.throws(() => live2dSources("jp"), /live2d_viewer_config_invalid/);
         } finally {
             resetStoryCoreConfig();
         }

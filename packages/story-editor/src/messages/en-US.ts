@@ -1031,6 +1031,21 @@ export const storyMakerMessages = {
             "lowCreditScore": "Your Credit Score is too low to upload voice clips.",
             "uploadFailed": "Upload failed. Please check your connection and try again."
         }
+    },
+    "attribution": {
+        "stageBadge": "Assets · MoeSekai (pjsk.moe)",
+        "badgeTooltip": "View resource attribution & legal notices",
+        "endingFooter": "Assets provided free by MoeSekai (pjsk.moe) · Unofficial fan creation tool",
+        "dialogTitle": "Attribution & Legal Notices",
+        "dialogSubtitle": "Community asset hosting, IP ownership, open-source licenses, and content responsibility",
+        "serviceTitle": "MoeSekai Community Asset Service & Fair Use",
+        "serviceBody": "Live2D models, backgrounds, BGM, sound effects, and voice assets are hosted free of charge by MoeSekai (pjsk.moe / assets.pjsk.moe / storage.pjsk.moe / metadata.pjsk.moe) for non-commercial fan storytelling. Please use these endpoints responsibly and refrain from abusive bulk scraping.",
+        "ipTitle": "Project SEKAI IP Ownership & Unofficial Disclaimer",
+        "ipBody": "This is an unofficial fan-made creation tool and is not affiliated with, endorsed by, or sponsored by SEGA, Colorful Palette, or Crypton Future Media. All game characters, Live2D models, artwork, music, voices, and trademarks remain the property of their respective copyright holders. Strictly for non-commercial fan use.",
+        "licenseTitle": "Open-Source & Third-Party Licenses",
+        "licenseBody": "This software and the @moesekai/story-* packages are open-sourced under the Mozilla Public License 2.0 (MPL-2.0). Live2D Cubism Core for Web loaded at runtime is governed by Live2D Inc.'s proprietary license and is not covered by MPL-2.0.",
+        "contentTitle": "User Content & Custom Audio Responsibility",
+        "contentBody": "All story scripts, translations, and custom voice audio attached to stories are created or provided by their respective authors, who remain solely responsible for reviewing and ensuring lawful, respectful content. Please keep backups of important projects."
     }
 };
 

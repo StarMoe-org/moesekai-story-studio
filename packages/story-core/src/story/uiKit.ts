@@ -605,15 +605,20 @@ export function buildNameBarPixels(src: RgbaBuffer): RgbaBuffer {
 
 // ---- Sources & proxy resolution ----
 
+const ALLOWED_PROXY_CUSTOM_PROTOCOLS = new Set(["moesekai-cache:", "moesekai-app:"]);
+
 function parseProxyDirectory(raw: string | undefined): string | null {
     const value = raw?.trim();
     if (!value) return null;
     try {
         const parsed = new URL(value);
         const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+        const allowedProtocol = parsed.protocol === "https:"
+            || (parsed.protocol === "http:" && loopback)
+            || ALLOWED_PROXY_CUSTOM_PROTOCOLS.has(parsed.protocol);
         if (
             /[?#\\\s]/.test(value)
-            || !(parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback))
+            || !allowedProtocol
             || !parsed.hostname
             || parsed.username
             || parsed.password
@@ -698,6 +703,36 @@ interface InflightEntry {
 
 const kitCache = new Map<string, CacheEntry>();
 const kitInflight = new Map<string, InflightEntry>();
+const kitWorkerSupportCache = new Map<string, Promise<boolean>>();
+
+/**
+ * Checks `${base}manifest.json` (shipped with every vendored `sse-web` release) before spawning
+ * `kit-worker.js`. `sse-web 2.0.0+` removed `kit-worker.js` because the renderer reads the
+ * published client view directly; probing the immutable manifest avoids noisy 404 worker requests
+ * while remaining compatible with older `sse-web` releases that include `kit-worker.js`.
+ */
+function hasKitWorkerScript(base: string): Promise<boolean> {
+    const cached = kitWorkerSupportCache.get(base);
+    if (cached) return cached;
+    if (typeof fetch !== "function") {
+        return Promise.resolve(true);
+    }
+    const probe = (async () => {
+        try {
+            const response = await fetch(`${base}manifest.json`);
+            if (!response.ok) return false;
+            const manifest = (await response.json()) as { sha256?: unknown } | null;
+            if (!manifest || typeof manifest !== "object" || !manifest.sha256 || typeof manifest.sha256 !== "object") {
+                return false;
+            }
+            return Object.prototype.hasOwnProperty.call(manifest.sha256, "kit-worker.js");
+        } catch {
+            return false;
+        }
+    })();
+    kitWorkerSupportCache.set(base, probe);
+    return probe;
+}
 
 function scriptBaseUrl(override?: string | null): string {
     const base = override ?? getStoryCoreConfig().sseWebScriptBase;
@@ -1135,6 +1170,24 @@ export async function loadStoryUiKit(
     const existing = kitCache.get(cacheKey);
     if (existing) {
         return acquireHandle(existing, region);
+    }
+
+    const kitWorkerSupported = signal
+        ? await new Promise<boolean>((resolve) => {
+            if (signal.aborted) {
+                resolve(false);
+                return;
+            }
+            const onAbort = () => resolve(false);
+            signal.addEventListener("abort", onAbort, { once: true });
+            void hasKitWorkerScript(resolvedBase).then((ok) => {
+                signal.removeEventListener("abort", onAbort);
+                resolve(signal.aborted ? false : ok);
+            });
+        })
+        : await hasKitWorkerScript(resolvedBase);
+    if (!kitWorkerSupported || signal?.aborted) {
+        return null;
     }
 
     let inflight = kitInflight.get(cacheKey);

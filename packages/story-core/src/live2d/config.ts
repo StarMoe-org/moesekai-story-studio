@@ -15,6 +15,16 @@ export const LIVE2D_REGIONS = ["jp", "cn", "tw", "kr", "en"] as const;
 
 export type Live2DRegion = (typeof LIVE2D_REGIONS)[number];
 
+const ALLOWED_CUSTOM_PROTOCOLS = new Set(["moesekai-cache:", "moesekai-app:"]);
+
+function isAllowedProtocol(parsed: URL): boolean {
+    if (parsed.protocol === "https:") return true;
+    if (parsed.protocol === "http:") {
+        return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+    }
+    return ALLOWED_CUSTOM_PROTOCOLS.has(parsed.protocol);
+}
+
 function parse(raw: string, name: string): URL {
     const invalid = new Error(`live2d_viewer_config_invalid:${name}`);
     let parsed: URL;
@@ -23,8 +33,7 @@ function parse(raw: string, name: string): URL {
     } catch {
         throw invalid;
     }
-    const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-    if (/[?#\\\s]/.test(raw) || !(parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback))
+    if (/[?#\\\s]/.test(raw) || !isAllowedProtocol(parsed)
         || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash
         || parsed.pathname.split("/").some(part => part === "." || part === "..")
         || raw !== parsed.href) throw invalid;
@@ -100,7 +109,8 @@ export function live2dListingUrl(
 export function hasExplicitLive2DIndexBase(): boolean {
     if (readPublicEnv("NEXT_PUBLIC_LIVE2D_INDEX_BASE")?.trim()) return true;
     const cfg = getStoryCoreConfig();
-    return cfg.live2dIndexBase !== DEFAULT_STORY_CORE_CONFIG.live2dIndexBase;
+    const normalized = cfg.live2dIndexBase.replace(/^moesekai-cache:\/\//, "https://");
+    return normalized !== DEFAULT_STORY_CORE_CONFIG.live2dIndexBase;
 }
 
 /**

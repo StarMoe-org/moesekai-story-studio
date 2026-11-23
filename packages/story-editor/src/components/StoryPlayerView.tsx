@@ -10,7 +10,7 @@ import {
 import {
     mdAccountTree, mdAutoplay, mdCalculate, mdClose, mdCloseFullscreen, mdCloudDone, mdDashboard,
     mdDownload, mdDragHandle, mdErrorFill, mdFitScreen, mdFlag, mdFullscreen, mdFullscreenExit,
-    mdHistory, mdImage, mdInventory2, mdLeftPanelClose, mdLeftPanelOpen, mdMonitoring, mdMusicNote,
+    mdHistory, mdImage, mdInfo, mdInventory2, mdLeftPanelClose, mdLeftPanelOpen, mdMonitoring, mdMusicNote,
     mdNumbers, mdPermMedia, mdPerson, mdPlayArrowFill, mdRecordVoiceOver, mdReplay, mdSkipNext, mdSkipPrevious,
     mdSmartDisplay, mdStopFill, mdTag, mdTheaters, mdTimeline, mdTranslate, mdVisibility, mdVisibilityOff,
     mdVolumeOff, mdVolumeUp, mdWarning,
@@ -553,7 +553,7 @@ export function StoryPlayerView({
     }, [models]);
 
     const { kit: uiKit } = useStoryUiKit(doc.region);
-    const { resolveLive2dSources } = useStoryStudio();
+    const { resolveLive2dSources, showAttribution, openNotices } = useStoryStudio();
     const library = useMemo(() => resolveLive2dSources(doc.region).library, [doc.region, resolveLive2dSources]);
     const {
         hostRef: stageHostRef,
@@ -2303,10 +2303,12 @@ export function StoryPlayerView({
                         >
                             <div
                                 className={cn(
-                                    "relative w-full",
-                                    stageWebFullscreen && "w-[min(100cqw,calc(100cqh*16/9))]",
-                                    !stageWebFullscreen && isNleWorkspace && "xl:w-[min(100cqw,calc(100cqh*16/9))]",
-                                    !stageWebFullscreen && isImmersiveTheaterFill && "w-[min(100cqw,calc(100cqh*16/9))]",
+                                    "relative",
+                                    stageWebFullscreen || isImmersiveTheaterFill
+                                        ? "h-[min(100cqh,calc(100cqw*9/16))] w-[min(100cqw,calc(100cqh*16/9))]"
+                                        : isNleWorkspace
+                                            ? "w-full xl:h-[min(100cqh,calc(100cqw*9/16))] xl:w-[min(100cqw,calc(100cqh*16/9))]"
+                                            : "w-full",
                                 )}
                             >
                                 <StoryStageView
@@ -2335,6 +2337,7 @@ export function StoryPlayerView({
                                     flash={flash}
                                     fadeSeconds={fadeSeconds}
                                     compactStatus
+                                    showAttribution
                                     onClick={stageClickBlocked ? undefined : handleAdvance}
                                     className={cn(!stageClickBlocked && "cursor-pointer")}
                                 >
@@ -2640,6 +2643,17 @@ export function StoryPlayerView({
                                                     </Button>
                                                     {endAction}
                                                 </div>
+                                                {showAttribution && (
+                                                    <button
+                                                        type="button"
+                                                        data-testid="moesekai-ending-attribution"
+                                                        onClick={openNotices}
+                                                        className="state-layer focus-ring mt-1 inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md3-full px-2.5 py-1 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
+                                                    >
+                                                        <Icon path={mdInfo} size={13} className="shrink-0 opacity-75" />
+                                                        <span className="truncate">{t("page.storyMaker.attribution.endingFooter")}</span>
+                                                    </button>
+                                                )}
                                             </Surface>
                                         </div>
                                     )}
@@ -2682,6 +2696,17 @@ export function StoryPlayerView({
                                                     )}
                                                     {endAction}
                                                 </div>
+                                                {showAttribution && !emptyStory && (
+                                                    <button
+                                                        type="button"
+                                                        data-testid="moesekai-ending-attribution"
+                                                        onClick={openNotices}
+                                                        className="state-layer focus-ring mt-1 inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md3-full px-2.5 py-1 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
+                                                    >
+                                                        <Icon path={mdInfo} size={13} className="shrink-0 opacity-75" />
+                                                        <span className="truncate">{t("page.storyMaker.attribution.endingFooter")}</span>
+                                                    </button>
+                                                )}
                                             </Surface>
                                         </div>
                                     )}

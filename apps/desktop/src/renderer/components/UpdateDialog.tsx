@@ -69,7 +69,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
     const t = (key: Parameters<typeof formatDesktopMessage>[1], vars?: Record<string, string | number>) =>
         formatDesktopMessage(locale, key, vars);
 
-    const normalizedCurrent = currentVersion.replace(/^v/i, "") || "0.1.0";
+    const normalizedCurrent = currentVersion.replace(/^v/i, "") || "0.1.2";
     const isUpdateAvailable = result?.status === "update-available" && Boolean(result.latestVersion);
     const isUpToDate = result?.status === "up-to-date";
     const isError = result?.status === "error";
@@ -97,7 +97,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
             onClose={onClose}
             title={t("updateDialogTitle")}
             size="md"
-            className="max-w-[560px]"
+            className="max-w-[540px]"
             showClose
             syncHistory={false}
             actions={
@@ -158,7 +158,6 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
             }
         >
             <div data-testid="update-dialog-content" className="flex flex-col gap-3 py-0.5">
-                {/* Status Hero Card (flat MD3 semantic surfaces, zero gradients) */}
                 {checking ? (
                     <div className="flex flex-col gap-2.5 rounded-md3-lg border border-outline-variant bg-surface-container-low p-4">
                         <span className="type-label-l text-on-surface">{t("updateDialogChecking")}</span>
@@ -167,7 +166,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
                 ) : isUpdateAvailable && result ? (
                     <div className="flex flex-col gap-2.5 rounded-md3-lg border border-primary/45 bg-surface-container-low p-3.5">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2.5">
                                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md3-md bg-primary-container text-on-primary-container">
                                     <Icon path={mdVerified} size={18} />
                                 </span>
@@ -209,7 +208,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
                             {result.assetName ? (
                                 <span className="inline-flex items-center gap-1 rounded-md3-sm bg-surface-container px-2 py-0.5 font-mono text-on-surface">
                                     <span>{t("updateMatchedAssetLabel")}:</span>
-                                    <span className="truncate max-w-[260px]">{result.assetName}</span>
+                                    <span className="max-w-[260px] truncate">{result.assetName}</span>
                                     {sizeLabel ? <span className="opacity-75">({sizeLabel})</span> : null}
                                 </span>
                             ) : null}
@@ -248,7 +247,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
                     <div className="flex items-center justify-between gap-2 rounded-md3-lg border border-outline-variant bg-surface-container-low p-3.5">
                         <div className="flex items-center gap-2">
                             <Icon path={mdErrorFill} size={18} className="text-on-surface-variant" />
-                            <span className="type-body-m text-on-surface">
+                            <span className="font-mono type-body-m text-on-surface">
                                 v{normalizedCurrent}
                             </span>
                         </div>
@@ -258,7 +257,6 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
                     </div>
                 )}
 
-                {/* Release Notes (rendered safely via AgentMarkdown: react-markdown + remark-gfm, plain React tree) */}
                 {result?.releaseNotes ? (
                     <div className="flex flex-col gap-1.5">
                         <div className="flex items-center justify-between gap-2">
@@ -287,7 +285,6 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
                     </div>
                 ) : null}
 
-                {/* Update Channel Segmented Selector + Check Now + Startup Auto-Check Toggle */}
                 <div className="flex flex-col gap-3 rounded-md3-lg border border-outline-variant/70 bg-surface-container-low p-3">
                     <div className="flex flex-col gap-1.5">
                         <div className="flex items-center justify-between gap-2">
@@ -326,7 +323,6 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
                         checked={autoCheckUpdates}
                         onCheckedChange={onChangeAutoCheck}
                         label={t("updateAutoCheckLabel")}
-                        description={t("updateAutoCheckHint")}
                     />
                 </div>
             </div>

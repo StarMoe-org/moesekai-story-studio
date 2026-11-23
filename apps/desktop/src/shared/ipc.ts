@@ -14,6 +14,18 @@ export type { DesktopUpdateCheckResult, UpdateChannel, UpdateSource };
 export type DesktopUiLocale = "zh-CN" | "zh-TW" | "en-US" | "ja-JP" | "ko-KR";
 export type DesktopThemeMode = "light" | "dark";
 export type DesktopStoryRegion = "jp" | "cn" | "tw" | "kr" | "en";
+export type DesktopStageRenderQuality = "standard" | "high" | "ultra";
+
+export interface AssetCacheStats {
+    enabled: boolean;
+    maxMb: number;
+    entries: number;
+    totalBytes: number;
+    hits: number;
+    misses: number;
+    staleHits: number;
+    cacheDir: string;
+}
 
 export const IPC_CHANNELS = {
     // Workspace
@@ -72,6 +84,13 @@ export const IPC_CHANNELS = {
     UPDATES_CHECK: "updates:check",
     UPDATES_IGNORE_VERSION: "updates:ignore-version",
     UPDATES_OPEN_DOWNLOAD: "updates:open-download",
+
+    // Persistent Local Disk Asset Cache (`moesekai-cache://`)
+    CACHE_GET_STATS: "cache:get-stats",
+    CACHE_CLEAR: "cache:clear",
+    CACHE_OPEN_DIR: "cache:open-dir",
+    CACHE_SET_MAX_MB: "cache:set-max-mb",
+    CACHE_SET_ENABLED: "cache:set-enabled",
 
     // Push events (Main -> Renderer)
     EVENT_WORKSPACE_EXTERNAL_CHANGE: "event:workspace-external-change",
@@ -507,6 +526,9 @@ export interface DesktopAppSettings {
     updateChannel: UpdateChannel;
     autoCheckUpdates: boolean;
     ignoredUpdateVersion: string | null;
+    assetCacheEnabled: boolean;
+    assetCacheMaxMb: number;
+    stageRenderQuality: DesktopStageRenderQuality;
 }
 
 export interface UpdateCheckRequest {
@@ -540,7 +562,10 @@ export type MenuCommand =
     | { type: "toggle-agent-panel" }
     | { type: "run-agent-preset"; preset: AgentPresetId }
     | { type: "open-agent-settings" }
-    | { type: "check-for-updates" };
+    | { type: "open-settings"; tab?: "general" | "stage" | "agent" }
+    | { type: "open-cache-dialog" }
+    | { type: "check-for-updates" }
+    | { type: "open-notices" };
 
 export type UnsubscribeFn = () => void;
 
@@ -612,5 +637,12 @@ export interface MoesekaiDesktopApi {
         ignoreVersion(version: string | null): Promise<DesktopAppSettings>;
         openDownload(url: string): Promise<void>;
         onUpdateAvailable(listener: (result: DesktopUpdateCheckResult) => void): UnsubscribeFn;
+    };
+    cache: {
+        getStats(): Promise<AssetCacheStats>;
+        clear(): Promise<AssetCacheStats>;
+        openDir(): Promise<void>;
+        setMaxMb(mb: number): Promise<AssetCacheStats>;
+        setEnabled(enabled: boolean): Promise<AssetCacheStats>;
     };
 }

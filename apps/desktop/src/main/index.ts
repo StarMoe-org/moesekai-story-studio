@@ -12,10 +12,12 @@ import {
     TITLE_BAR_HEIGHT_PX,
 } from "../shared/window-chrome.ts";
 import { PiAgentHost } from "./agent-host.ts";
+import { AssetCacheManager } from "./asset-cache.ts";
 import { registerIpcHandlers } from "./ipc-handlers.ts";
 import { buildAndApplyAppMenu } from "./menu.ts";
 import {
     APP_PROTOCOL_SCHEME,
+    CACHE_PROTOCOL_SCHEME,
     createProtocolHandler,
     registerPrivilegedAppScheme,
 } from "./protocol.ts";
@@ -148,6 +150,12 @@ async function bootstrap(): Promise<void> {
 
     const workspace = new WorkspaceManager({ userDataDir });
     const settingsStore = new DesktopSettingsStore(userDataDir, safeStorageProtector);
+    const initialAppSettings = settingsStore.getAppSettings();
+    const assetCache = new AssetCacheManager({
+        cacheDir: path.join(userDataDir, "asset-cache"),
+        maxMb: initialAppSettings.assetCacheMaxMb,
+        enabled: initialAppSettings.assetCacheEnabled,
+    });
 
     // Register custom `moesekai-app://` protocol serving Live2D WASM/workers, workspace audio, and prod renderer.
     protocol.handle(
@@ -159,6 +167,9 @@ async function bootstrap(): Promise<void> {
             getWorkspaceRoot: () => workspace.getActiveRootDir(),
         }),
     );
+
+    // Register custom `moesekai-cache://` protocol providing persistent disk cache for Live2D & PJSK assets.
+    protocol.handle(CACHE_PROTOCOL_SCHEME, request => assetCache.handleRequest(request));
 
     const appInfo: DesktopAppInfo = {
         version: app.getVersion(),
@@ -236,6 +247,7 @@ async function bootstrap(): Promise<void> {
         settings: settingsStore,
         agentHost,
         updater,
+        assetCache,
         appInfo,
         refreshMenu,
         syncWindowChrome,
@@ -490,26 +502,119 @@ async function bootstrap(): Promise<void> {
             await sleep(700);
             await snap("08-export-msk-dialog.png");
 
-            // 9. Desktop Update Dialog open (capture-only deterministic CNB update-available fixture)
+            // 9. Unified Settings Dialog: Appearance & Language tab (5 locales w/ crisp inline SVG flags incl. HK flag for zh-TW + 26 character seeds)
+            await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.openSettingsDialog("general");`);
+            await sleep(450);
+            const settingsGeneralCheck = await win.webContents.executeJavaScript(`(() => {
+                const dialogEl = document.querySelector('[data-testid="settings-dialog"]');
+                const generalTab = document.querySelector('[data-testid="settings-tab-general"]');
+                const localeBtns = Array.from(document.querySelectorAll('button[data-testid^="settings-locale-"]'))
+                    .map(el => el.getAttribute("data-testid"));
+                const settingsBtn = document.querySelector('[data-testid="topbar-settings-btn"]');
+                const aboutBtn = document.querySelector('[data-testid="topbar-about-btn"]');
+                const updatePill = document.querySelector('[data-testid="topbar-update-pill"]');
+                return {
+                    hasSettingsDialog: Boolean(dialogEl),
+                    hasGeneralTab: Boolean(generalTab),
+                    localeBtns,
+                    hasSettingsBtn: Boolean(settingsBtn),
+                    hasAboutBtn: Boolean(aboutBtn),
+                    hasNoUpdatePill: !updatePill,
+                };
+            })()`);
+            console.log("[desktop:capture] settingsGeneralCheck(1366x840):", JSON.stringify(settingsGeneralCheck));
+            await snap("09-settings-general.png");
+
+            // 10. Unified Settings Dialog: MoeSekai Agent tab
+            await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.openSettingsDialog("agent");`);
+            await sleep(450);
+            const settingsAgentCheck = await win.webContents.executeJavaScript(`(() => {
+                const agentTab = document.querySelector('[data-testid="settings-tab-agent"]');
+                const saveBtn = document.querySelector('[data-testid="settings-save-agent-btn"]');
+                return {
+                    hasAgentTab: Boolean(agentTab),
+                    hasSaveAgentBtn: Boolean(saveBtn),
+                };
+            })()`);
+            console.log("[desktop:capture] settingsAgentCheck(1366x840):", JSON.stringify(settingsAgentCheck));
+            await snap("10-settings-agent.png");
+
+            // 11. Dedicated Software Update Dialog (capture-only deterministic CNB update-available fixture)
             await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.openUpdateDialogPreview();`);
             await sleep(500);
             const updateDialogCheck = await win.webContents.executeJavaScript(`(() => {
                 const dialogEl = document.querySelector('[data-testid="update-dialog-content"]');
                 const badgeEl = document.querySelector('[data-testid="update-source-badge"]');
                 const downloadBtn = document.querySelector('[data-testid="update-download-btn"]');
-                const topbarPill = document.querySelector('[data-testid="topbar-update-pill"]');
+                const aboutBtn = document.querySelector('[data-testid="topbar-about-btn"]');
+                const aboutDot = document.querySelector('[data-testid="topbar-about-update-dot"]');
+                const settingsBtn = document.querySelector('[data-testid="topbar-settings-btn"]');
+                const updatePill = document.querySelector('[data-testid="topbar-update-pill"]');
                 return {
                     hasUpdateDialog: Boolean(dialogEl),
                     sourceBadgeText: badgeEl?.textContent?.trim() ?? null,
                     hasDownloadBtn: Boolean(downloadBtn),
-                    hasTopbarUpdatePill: Boolean(topbarPill),
+                    hasAboutBtn: Boolean(aboutBtn),
+                    hasAboutUpdateDot: Boolean(aboutDot),
+                    hasSettingsBtn: Boolean(settingsBtn),
+                    hasNoUpdatePill: !updatePill,
                 };
             })()`);
             console.log("[desktop:capture] updateDialogCheck(1366x840):", JSON.stringify(updateDialogCheck));
-            await snap("09-update-dialog.png");
+            await snap("11-update-dialog.png");
+
+            // 12. Dedicated Local Asset Cache Dialog
+            await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.openCacheDialog();`);
+            await sleep(500);
+            const cacheDialogCheck = await win.webContents.executeJavaScript(`(() => {
+                const dialogEl = document.querySelector('[data-testid="asset-cache-dialog"]');
+                const card = document.querySelector('[data-testid="cache-stats-card"]');
+                const clearBtn = document.querySelector('[data-testid="cache-clear-btn"]');
+                return {
+                    hasCacheDialog: Boolean(dialogEl),
+                    hasCacheStatsCard: Boolean(card),
+                    clearBtnDisabled: clearBtn instanceof HTMLButtonElement ? clearBtn.disabled : null,
+                    text: card?.textContent?.trim()?.slice(0, 120) ?? null,
+                };
+            })()`);
+            console.log("[desktop:capture] cacheDialogCheck(1366x840):", JSON.stringify(cacheDialogCheck));
+            await snap("12-asset-cache-dialog.png");
+
+            // 13. Dedicated About & Legal Notices Dialog (with 4 official MoeSekai community links)
+            await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.openNoticesDialog();`);
+            await sleep(450);
+            const noticesDialogCheck = await win.webContents.executeJavaScript(`(() => {
+                const dialogEl = document.querySelector('[data-testid="about-notices-dialog"]');
+                const linkBtns = document.querySelectorAll('[data-testid="about-community-links"] button').length;
+                const noticeSections = document.querySelectorAll('[data-testid="notices-list"] section').length;
+                return {
+                    hasAboutNoticesDialog: Boolean(dialogEl),
+                    communityLinkCount: linkBtns,
+                    noticeSectionCount: noticeSections,
+                };
+            })()`);
+            console.log("[desktop:capture] noticesDialogCheck(1366x840):", JSON.stringify(noticesDialogCheck));
+            await snap("13-about-notices-dialog.png");
+
+            // 14. Playtest Stage with non-intrusive MoeSekai attribution badge & SSAA
+            await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.switchToPlaytestMode();`);
+            await sleep(1400);
+            const playtestCheck = await win.webContents.executeJavaScript(`(() => {
+                const badge = document.querySelector('[data-testid="moesekai-attribution-badge"], .sekai-attribution-badge');
+                const canvas = document.querySelector("canvas");
+                return {
+                    hasAttributionBadge: Boolean(badge),
+                    badgeText: badge?.textContent?.trim() ?? null,
+                    canvasW: canvas?.width ?? 0,
+                    canvasH: canvas?.height ?? 0,
+                };
+            })()`);
+            console.log("[desktop:capture] playtestCheck(1366x840):", JSON.stringify(playtestCheck));
+            await snap("14-playtest-attribution.png");
 
             console.log("MOESEKAI_CAPTURE_OK");
             updater.dispose();
+            assetCache.dispose();
             await agentHost.dispose();
             workspace.dispose();
             app.exit(0);
@@ -532,18 +637,21 @@ async function bootstrap(): Promise<void> {
                 const cfg = await api.agent.getConfig();
                 const anthropic = Array.isArray(providers) ? providers.find(p => p.id === "anthropic") : null;
 
-                // Open Nightcord starter in Edit mode and focus climax talk beat to verify Live2D + ClipPicker + drag-region
+                // Open Nightcord starter in Edit mode and focus climax talk beat to verify Live2D + ClipPicker + drag-region + disk cache + SSAA
                 await window.__moesekaiCaptureHook?.openStarterDemo();
                 for (let i = 0; i < 60; i++) {
                     if (document.querySelector('[data-desktop-view="editor"] textarea')) break;
                     await new Promise(r => setTimeout(r, 100));
                 }
                 const focusedBeat = window.__moesekaiCaptureHook?.focusClimaxTalkBeat();
-                await new Promise(r => setTimeout(r, 3000));
+                await new Promise(r => setTimeout(r, 3500));
 
                 const header = document.querySelector('[data-desktop-topbar="editor"]');
                 const spacer = document.querySelector('[data-drag-spacer="left"]');
                 const agentBtn = document.querySelector('[data-testid="agent-toggle-btn"]');
+                const aboutBtn = document.querySelector('[data-testid="topbar-about-btn"]');
+                const settingsBtn = document.querySelector('[data-testid="topbar-settings-btn"]');
+                const updatePill = document.querySelector('[data-testid="topbar-update-pill"]');
                 const resizeHandle = document.querySelector('[data-testid="agent-resize-handle"]');
                 const newChatBtn = document.querySelector('[data-testid="agent-new-chat-btn"]');
                 const historyBtn = document.querySelector('[data-testid="agent-history-btn"]');
@@ -553,9 +661,26 @@ async function bootstrap(): Promise<void> {
                 const actualResizedWidth = agentContainer ? Math.round(agentContainer.getBoundingClientRect().width) : 0;
                 window.__moesekaiCaptureHook?.setAgentPanelWidth(340);
                 const canvas = document.querySelector("canvas");
+                const canvasWidth = canvas?.width ?? 0;
+                const canvasHeight = canvas?.height ?? 0;
                 const browseBtns = Array.from(document.querySelectorAll("button"))
                     .filter(b => b.textContent?.includes("浏览"))
                     .map(b => ({ text: b.textContent?.trim(), disabled: b.disabled }));
+                const cacheStats = await api.cache.getStats();
+
+                // Verify SettingsDialog (5 locales), AssetCacheDialog, AboutNoticesDialog (4 official links)
+                window.__moesekaiCaptureHook?.openSettingsDialog("general");
+                await new Promise(r => setTimeout(r, 180));
+                const settingsLocaleCount = document.querySelectorAll('button[data-testid^="settings-locale-"]').length;
+                window.__moesekaiCaptureHook?.openNoticesDialog();
+                await new Promise(r => setTimeout(r, 180));
+                const communityLinkCount = document.querySelectorAll('[data-testid="about-community-links"] button').length;
+                window.__moesekaiCaptureHook?.closeAllDialogs();
+
+                // Switch to Playtest briefly to verify non-intrusive MoeSekai attribution badge
+                window.__moesekaiCaptureHook?.switchToPlaytestMode();
+                await new Promise(r => setTimeout(r, 900));
+                const attrBadge = document.querySelector('[data-testid="moesekai-attribution-badge"], .sekai-attribution-badge');
 
                 return {
                     hasBridge: Boolean(api),
@@ -581,6 +706,13 @@ async function bootstrap(): Promise<void> {
                         api?.updates?.openDownload &&
                         api?.updates?.onUpdateAvailable,
                     ),
+                    hasCacheApi: Boolean(
+                        api?.cache?.getStats &&
+                        api?.cache?.clear &&
+                        api?.cache?.openDir &&
+                        api?.cache?.setMaxMb &&
+                        api?.cache?.setEnabled,
+                    ),
                     hasRoot: Boolean(root),
                     rootMounted: Boolean(root && root.childElementCount > 0),
                     origin: window.location.origin,
@@ -590,7 +722,18 @@ async function bootstrap(): Promise<void> {
                     anthropicDefaultModel: anthropic?.defaultModel ?? null,
                     activeModel: cfg?.model ?? null,
                     focusedBeat,
-                    canvasReady: Boolean(canvas && canvas.width > 0 && canvas.height > 0),
+                    canvasReady: Boolean(canvasWidth > 0 && canvasHeight > 0),
+                    canvasWidth,
+                    canvasHeight,
+                    ssaaActive: canvasWidth >= 1000,
+                    cacheEntries: cacheStats?.entries ?? 0,
+                    cacheTotalBytes: cacheStats?.totalBytes ?? 0,
+                    hasAttributionBadge: Boolean(attrBadge),
+                    hasAboutBtn: Boolean(aboutBtn),
+                    hasSettingsBtn: Boolean(settingsBtn),
+                    hasNoUpdatePill: !updatePill,
+                    settingsLocaleCount,
+                    communityLinkCount,
                     browseButtonsCount: browseBtns.length,
                     allBrowseEnabled: browseBtns.length >= 2 && browseBtns.every(b => !b.disabled),
                     headerDrag: header ? getComputedStyle(header).webkitAppRegion : null,
@@ -626,12 +769,22 @@ async function bootstrap(): Promise<void> {
                 !bridgeCheck?.hasAgentApi ||
                 !bridgeCheck?.hasFullscreenApi ||
                 !bridgeCheck?.hasUpdatesApi ||
+                !bridgeCheck?.hasCacheApi ||
                 !bridgeCheck?.hasRoot ||
                 !bridgeCheck?.rootMounted ||
                 bridgeCheck?.live2dWasmStatus !== 200 ||
                 bridgeCheck?.live2dWasmContentType !== "application/wasm" ||
                 !(bridgeCheck?.providerCount > 0) ||
                 !bridgeCheck?.canvasReady ||
+                !bridgeCheck?.ssaaActive ||
+                !(bridgeCheck?.cacheEntries > 0) ||
+                !(bridgeCheck?.cacheTotalBytes > 0) ||
+                !bridgeCheck?.hasAttributionBadge ||
+                !bridgeCheck?.hasAboutBtn ||
+                !bridgeCheck?.hasSettingsBtn ||
+                !bridgeCheck?.hasNoUpdatePill ||
+                bridgeCheck?.settingsLocaleCount !== 5 ||
+                bridgeCheck?.communityLinkCount !== 4 ||
                 !bridgeCheck?.allBrowseEnabled ||
                 !dragOk ||
                 !bridgeCheck?.agentBtnFitsWindow ||
@@ -641,6 +794,7 @@ async function bootstrap(): Promise<void> {
                 bridgeCheck?.actualResizedWidth !== 460
             ) {
                 console.error("[desktop:smoke] Verification failed!");
+                assetCache.dispose();
                 await agentHost.dispose();
                 workspace.dispose();
                 app.exit(1);
@@ -648,6 +802,7 @@ async function bootstrap(): Promise<void> {
             }
 
             console.log("MOESEKAI_SMOKE_OK");
+            assetCache.dispose();
             await agentHost.dispose();
             workspace.dispose();
             app.exit(0);
@@ -670,6 +825,7 @@ async function bootstrap(): Promise<void> {
 
     app.on("before-quit", () => {
         updater.dispose();
+        assetCache.dispose();
         workspace.dispose();
         void agentHost.dispose();
     });

@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+    configureStoryCore,
     createStarterStoryFromScript,
+    DEFAULT_STORY_CORE_CONFIG,
     DESKTOP_STORY_WORKSPACE_CAPABILITIES,
     parseStoryScript,
     serializeStoryScript,
@@ -29,8 +31,10 @@ import type {
     AgentPresetId,
     AgentProviderConfigPublic,
     AgentStatus,
+    AssetCacheStats,
     DesktopAppInfo,
     DesktopAppSettings,
+    DesktopStageRenderQuality,
     DesktopStoryRegion,
     DesktopThemeMode,
     DesktopUiLocale,
@@ -46,7 +50,8 @@ import {
     createElectronStoryExportAdapter,
     createElectronStoryStorageAdapter,
 } from "./adapters/electronStoryAdapter";
-import { AgentSettingsDialog } from "./components/AgentSettingsDialog";
+import { AboutNoticesDialog } from "./components/AboutNoticesDialog";
+import { AssetCacheDialog } from "./components/AssetCacheDialog";
 import {
     DesktopEditorTopBar,
     DesktopPlayerTopBar,
@@ -54,9 +59,43 @@ import {
 } from "./components/DesktopTopBar";
 import { ExportMskDialog, type ExportDialogMode } from "./components/ExportMskDialog";
 import { PiAgentPanel, type PiAgentPanelHandle } from "./components/PiAgentPanel";
+import { SettingsDialog, type SettingsDialogTab } from "./components/SettingsDialog";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
 import { formatDesktopMessage } from "./i18n/desktopMessages";
+
+const CACHED_CUBISM_CORE_URL = "moesekai-cache://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js";
+
+function applyDesktopStoryCoreCacheRouting(enabled: boolean): void {
+    if (enabled) {
+        configureStoryCore({
+            assetDomainMain: "moesekai-cache://storage.pjsk.moe",
+            assetDomainBackup: "moesekai-cache://storage.exmeaning.com",
+            masterDataDomainMain: "moesekai-cache://metadata.pjsk.moe",
+            masterDataDomainBackup: "moesekai-cache://metadata.exmeaning.com",
+            moeStaticBaseUrl: "moesekai-cache://moe.exmeaning.com",
+            live2dLibraryBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/",
+            live2dIndexBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-live2d/",
+            live2dCoreUrl: CACHED_CUBISM_CORE_URL,
+            sseWebSite: "moesekai-cache://storage.pjsk.moe/",
+        });
+    } else {
+        configureStoryCore({
+            assetDomainMain: DEFAULT_STORY_CORE_CONFIG.assetDomainMain,
+            assetDomainBackup: DEFAULT_STORY_CORE_CONFIG.assetDomainBackup,
+            masterDataDomainMain: DEFAULT_STORY_CORE_CONFIG.masterDataDomainMain,
+            masterDataDomainBackup: DEFAULT_STORY_CORE_CONFIG.masterDataDomainBackup,
+            moeStaticBaseUrl: DEFAULT_STORY_CORE_CONFIG.moeStaticBaseUrl,
+            live2dLibraryBase: DEFAULT_STORY_CORE_CONFIG.live2dLibraryBase,
+            live2dIndexBase: DEFAULT_STORY_CORE_CONFIG.live2dIndexBase,
+            live2dCoreUrl: DEFAULT_STORY_CORE_CONFIG.live2dCoreUrl,
+            sseWebSite: DEFAULT_STORY_CORE_CONFIG.sseWebSite,
+        });
+    }
+}
+
+// Configure persistent `moesekai-cache://` routing BEFORE any editor/player mounts.
+applyDesktopStoryCoreCacheRouting(true);
 
 const DEFAULT_SETTINGS: DesktopAppSettings = {
     themeSeed: "21",
@@ -68,6 +107,9 @@ const DEFAULT_SETTINGS: DesktopAppSettings = {
     updateChannel: "auto",
     autoCheckUpdates: true,
     ignoredUpdateVersion: null,
+    assetCacheEnabled: true,
+    assetCacheMaxMb: 2048,
+    stageRenderQuality: "high",
 };
 
 function parseProjectDoc(project: WorkspaceProjectData): StoryDocument | null {
@@ -106,10 +148,15 @@ export const App: React.FC = () => {
     const [createDialogOpen, setCreateDialogOpen] = useState(false);
     const [exportDialogOpen, setExportDialogOpen] = useState(false);
     const [exportDialogMode, setExportDialogMode] = useState<ExportDialogMode>("msk");
-    const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
+    const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+    const [settingsDialogTab, setSettingsDialogTab] = useState<SettingsDialogTab>("general");
     const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+    const [cacheDialogOpen, setCacheDialogOpen] = useState(false);
+    const [noticesDialogOpen, setNoticesDialogOpen] = useState(false);
     const [updateChecking, setUpdateChecking] = useState(false);
     const [updateResult, setUpdateResult] = useState<DesktopUpdateCheckResult | null>(null);
+    const [cacheStats, setCacheStats] = useState<AssetCacheStats | null>(null);
+    const [loadingCacheStats, setLoadingCacheStats] = useState(false);
 
     // MoeSekai Agent state
     const [agentConfig, setAgentConfig] = useState<AgentProviderConfigPublic | null>(null);
@@ -176,6 +223,11 @@ export const App: React.FC = () => {
         root.dataset.theme = settings.themeMode;
         root.lang = settings.locale;
     }, [settings.themeSeed, settings.themeMode, settings.locale]);
+
+    // Sync persistent `moesekai-cache://` routing whenever user toggles local asset cache
+    useEffect(() => {
+        applyDesktopStoryCoreCacheRouting(settings.assetCacheEnabled);
+    }, [settings.assetCacheEnabled]);
 
     const applyOpenedProject = useCallback((proj: WorkspaceProjectData) => {
         projectRef.current = proj;
@@ -273,13 +325,56 @@ export const App: React.FC = () => {
         }
     }, [appInfo?.version]);
 
+    const handleRefreshCacheStats = useCallback(async () => {
+        setLoadingCacheStats(true);
+        try {
+            const stats = await window.moesekaiDesktop.cache.getStats();
+            setCacheStats(stats);
+        } catch {
+            // Non-fatal
+        } finally {
+            setLoadingCacheStats(false);
+        }
+    }, []);
+
+    const closeAllDialogs = useCallback(() => {
+        setExportDialogOpen(false);
+        setSettingsDialogOpen(false);
+        setUpdateDialogOpen(false);
+        setCacheDialogOpen(false);
+        setNoticesDialogOpen(false);
+    }, []);
+
+    const handleOpenSettings = useCallback((tab: SettingsDialogTab = "general") => {
+        closeAllDialogs();
+        setSettingsDialogTab(tab);
+        setSettingsDialogOpen(true);
+    }, [closeAllDialogs]);
+
     const handleOpenUpdateDialog = useCallback(() => {
+        closeAllDialogs();
         setUpdateDialogOpen(true);
         void runUpdateCheck();
-    }, [runUpdateCheck]);
+    }, [closeAllDialogs, runUpdateCheck]);
+
+    const handleOpenCacheDialog = useCallback(() => {
+        closeAllDialogs();
+        setCacheDialogOpen(true);
+    }, [closeAllDialogs]);
+
+    const handleOpenNoticesDialog = useCallback(() => {
+        closeAllDialogs();
+        setNoticesDialogOpen(true);
+    }, [closeAllDialogs]);
 
     const handleOpenUpdateDownload = useCallback((url: string) => {
         void window.moesekaiDesktop.updates.openDownload(url).catch(err => {
+            setSnack(err instanceof Error ? err.message : String(err));
+        });
+    }, []);
+
+    const handleOpenExternal = useCallback((url: string) => {
+        void window.moesekaiDesktop.app.openExternal(url).catch(err => {
             setSnack(err instanceof Error ? err.message : String(err));
         });
     }, []);
@@ -292,6 +387,45 @@ export const App: React.FC = () => {
             setSnack(formatDesktopMessage(localeRef.current, "updateVersionIgnoredNotice", { version }));
         } catch (err) {
             setSnack(err instanceof Error ? err.message : String(err));
+        }
+    }, []);
+
+    const handleToggleCacheEnabled = useCallback(async (enabled: boolean) => {
+        try {
+            const stats = await window.moesekaiDesktop.cache.setEnabled(enabled);
+            setCacheStats(stats);
+            setSettings(prev => ({ ...prev, assetCacheEnabled: stats.enabled }));
+        } catch (err) {
+            setSnack(err instanceof Error ? err.message : String(err));
+        }
+    }, []);
+
+    const handleChangeCacheMaxMb = useCallback(async (mb: number) => {
+        try {
+            const stats = await window.moesekaiDesktop.cache.setMaxMb(mb);
+            setCacheStats(stats);
+            setSettings(prev => ({ ...prev, assetCacheMaxMb: stats.maxMb }));
+        } catch (err) {
+            setSnack(err instanceof Error ? err.message : String(err));
+        }
+    }, []);
+
+    const handleOpenCacheDir = useCallback(() => {
+        void window.moesekaiDesktop.cache.openDir().catch(err => {
+            setSnack(err instanceof Error ? err.message : String(err));
+        });
+    }, []);
+
+    const handleClearCache = useCallback(async () => {
+        setLoadingCacheStats(true);
+        try {
+            const stats = await window.moesekaiDesktop.cache.clear();
+            setCacheStats(stats);
+            setSnack(formatDesktopMessage(localeRef.current, "cacheClearedNotice"));
+        } catch (err) {
+            setSnack(err instanceof Error ? err.message : String(err));
+        } finally {
+            setLoadingCacheStats(false);
         }
     }, []);
 
@@ -382,12 +516,17 @@ export const App: React.FC = () => {
                 agentPanelRef.current.setHistoryDrawerOpen(open, tab);
                 return true;
             },
+            openSettingsDialog: (tab: SettingsDialogTab = "general") => {
+                closeAllDialogs();
+                setSettingsDialogTab(tab);
+                setSettingsDialogOpen(true);
+            },
             openUpdateDialogPreview: () => {
-                setExportDialogOpen(false);
+                closeAllDialogs();
                 setUpdateChecking(false);
                 setUpdateResult({
                     status: "update-available",
-                    currentVersion: appInfo?.version ?? "0.1.0",
+                    currentVersion: appInfo?.version ?? "0.1.2",
                     latestVersion: "0.2.0",
                     source: "cnb",
                     fallbackUsed: false,
@@ -395,24 +534,35 @@ export const App: React.FC = () => {
                     releaseNotes: [
                         "### 本次更新亮点",
                         "",
-                        "- **Live2D 层级 (`z`) 与防遮挡引擎**：支持在 `.msk` 中显式指定 `z=<int>`，角色移动与发言时自动置前。",
-                        "- **MoeSekai Agent 持久化会话**：按工程独立保存对话历史，随时恢复上下文继续编写剧情。",
+                        "- **Live2D 层级 (`z`) 与抗锯齿渲染**：默认开启高清 SSAA 抗锯齿，支持在偏好设置中随时切换画质。",
+                        "- **本地常态资源缓存 (`moesekai-cache://`)**：自动缓存 Live2D 模型、动作、背景与音频，重启即秒开。",
                         "- **CNB 国内高速更新源**：默认优先从 CNB 检查新版本，网络波动时自动静默回退 GitHub。",
-                        "",
-                        "| 平台 | 安装包 |",
-                        "| --- | --- |",
-                        "| Windows | `MoeSekai-Story-Studio-0.2.0-Setup.exe` |",
-                        "| macOS | `MoeSekai-Story-Studio-0.2.0-arm64.dmg` |",
                     ].join("\n"),
                     publishedAt: "2026-11-23T10:00:00Z",
                     releasePageUrl: "https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/tag/v0.2.0",
                     alternateReleasePageUrl: "https://github.com/StarMoe-org/moesekai-story-studio/releases/tag/v0.2.0",
-                    downloadUrl: "https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/download/v0.2.0/MoeSekai-Story-Studio-0.2.0-Setup.exe",
-                    assetName: "MoeSekai-Story-Studio-0.2.0-Setup.exe",
-                    assetSize: 89_400_000,
+                    downloadUrl: "https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/download/v0.2.0/MoeSekai%20Story%20Studio%20Setup%200.2.0.exe",
+                    assetName: "MoeSekai Story Studio Setup 0.2.0.exe",
+                    assetSize: 114_122_578,
                     checkedAt: Date.now(),
                 });
                 setUpdateDialogOpen(true);
+            },
+            openCacheDialog: () => {
+                closeAllDialogs();
+                setCacheDialogOpen(true);
+            },
+            openNoticesDialog: () => {
+                closeAllDialogs();
+                setNoticesDialogOpen(true);
+            },
+            closeAllDialogs: () => {
+                closeAllDialogs();
+            },
+            switchToPlaytestMode: () => {
+                closeAllDialogs();
+                setViewMode("editor");
+                editorRef.current?.setWorkspaceMode("playtest");
             },
             setAgentPanelWidth: (width: number) => {
                 const clamped = clampAgentPanelWidth(width, window.innerWidth);
@@ -425,7 +575,7 @@ export const App: React.FC = () => {
         return () => {
             delete window.__moesekaiCaptureHook;
         };
-    }, [appInfo?.version, handleOpenStarterDemo, persistSettings]);
+    }, [appInfo?.version, closeAllDialogs, handleOpenStarterDemo, persistSettings]);
 
     const handleOpenFolder = useCallback(async () => {
         try {
@@ -677,10 +827,19 @@ export const App: React.FC = () => {
                     setExternalPresetTrigger({ preset: cmd.preset, nonce: Date.now() });
                     break;
                 case "open-agent-settings":
-                    setAgentSettingsOpen(true);
+                    handleOpenSettings("agent");
+                    break;
+                case "open-settings":
+                    handleOpenSettings(cmd.tab ?? "general");
+                    break;
+                case "open-cache-dialog":
+                    handleOpenCacheDialog();
                     break;
                 case "check-for-updates":
                     handleOpenUpdateDialog();
+                    break;
+                case "open-notices":
+                    handleOpenNoticesDialog();
                     break;
             }
         });
@@ -693,15 +852,28 @@ export const App: React.FC = () => {
             unsubCmd();
             unsubOpen();
         };
-    }, [handleManualSave, handleOpenFolder, handleOpenMskFile, handleOpenPath, handleOpenUpdateDialog, persistSettings]);
+    }, [
+        handleManualSave,
+        handleOpenCacheDialog,
+        handleOpenFolder,
+        handleOpenMskFile,
+        handleOpenNoticesDialog,
+        handleOpenPath,
+        handleOpenSettings,
+        handleOpenUpdateDialog,
+        persistSettings,
+    ]);
 
-    // Global desktop shortcuts (Ctrl+S, Ctrl+Shift+E, Ctrl+Shift+A)
+    // Global desktop shortcuts (Ctrl+,, Ctrl+S, Ctrl+Shift+E, Ctrl+Shift+A)
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
             const mod = e.ctrlKey || e.metaKey;
             if (!mod) return;
             const key = e.key.toLowerCase();
-            if (key === "s" && !e.shiftKey && project) {
+            if (key === "," && !e.shiftKey && !e.altKey) {
+                e.preventDefault();
+                handleOpenSettings("general");
+            } else if (key === "s" && !e.shiftKey && project) {
                 e.preventDefault();
                 void handleManualSave();
             } else if (key === "e" && e.shiftKey && project) {
@@ -715,7 +887,7 @@ export const App: React.FC = () => {
         };
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
-    }, [handleManualSave, persistSettings, project, settings.agentPanelOpen]);
+    }, [handleManualSave, handleOpenSettings, persistSettings, project, settings.agentPanelOpen]);
 
     const storageAdapter = useMemo(
         () =>
@@ -881,6 +1053,9 @@ export const App: React.FC = () => {
             unitIconBaseUrl={unitIconBaseUrl}
             themeSeed={settings.themeSeed}
             themeMode={settings.themeMode}
+            stageRenderQuality={settings.stageRenderQuality}
+            showAttribution={true}
+            onOpenNotices={handleOpenNoticesDialog}
             storage={storageAdapter}
             exporter={exportAdapter}
             capabilities={DESKTOP_STORY_WORKSPACE_CAPABILITIES}
@@ -904,11 +1079,10 @@ export const App: React.FC = () => {
                         onNewProject={handleOpenNewProject}
                         onOpenFolder={() => void handleOpenFolder()}
                         onOpenMskFile={() => void handleOpenMskFile()}
-                        onOpenAgentSettings={() => setAgentSettingsOpen(true)}
+                        onOpenSettings={handleOpenSettings}
+                        onOpenCacheDialog={handleOpenCacheDialog}
                         onCheckForUpdates={handleOpenUpdateDialog}
-                        onChangeThemeMode={(mode: DesktopThemeMode) => persistSettings({ themeMode: mode })}
-                        onChangeThemeSeed={seed => persistSettings({ themeSeed: seed })}
-                        onChangeLocale={locale => persistSettings({ locale })}
+                        onOpenNoticesDialog={handleOpenNoticesDialog}
                     />
                 ) : null}
 
@@ -929,6 +1103,7 @@ export const App: React.FC = () => {
                                 const next = await window.moesekaiDesktop.workspace.removeRecent(targetPath);
                                 setRecentProjects(next);
                             }}
+                            onOpenNotices={handleOpenNoticesDialog}
                         />
                     ) : viewMode === "player" ? (
                         <div className="h-full w-full overflow-hidden">
@@ -956,10 +1131,10 @@ export const App: React.FC = () => {
                                             availableUpdateVersion={availableUpdateVersion}
                                             onBackToEditor={() => setViewMode("editor")}
                                             onOpenExport={handleOpenExportMsk}
+                                            onOpenSettings={handleOpenSettings}
+                                            onOpenCacheDialog={handleOpenCacheDialog}
                                             onCheckForUpdates={handleOpenUpdateDialog}
-                                            onChangeThemeMode={(mode: DesktopThemeMode) => persistSettings({ themeMode: mode })}
-                                            onChangeThemeSeed={seed => persistSettings({ themeSeed: seed })}
-                                            onChangeLocale={locale => persistSettings({ locale })}
+                                            onOpenNoticesDialog={handleOpenNoticesDialog}
                                         />
                                     ),
                                 }}
@@ -1005,15 +1180,19 @@ export const App: React.FC = () => {
                                             onOpenExportBundle={handleOpenExportBundle}
                                             onEnterTheater={() => setViewMode("player")}
                                             onRevealProject={handleRevealProject}
-                                            onOpenAgentSettings={() => setAgentSettingsOpen(true)}
+                                            onOpenSettings={handleOpenSettings}
+                                            onOpenCacheDialog={handleOpenCacheDialog}
                                             onCheckForUpdates={handleOpenUpdateDialog}
+                                            onOpenNoticesDialog={handleOpenNoticesDialog}
                                             onToggleAgentPanel={handleToggleAgentPanel}
-                                            onChangeThemeMode={(mode: DesktopThemeMode) => persistSettings({ themeMode: mode })}
-                                            onChangeThemeSeed={seed => persistSettings({ themeSeed: seed })}
-                                            onChangeLocale={locale => persistSettings({ locale })}
                                         />
                                     ),
-                                    hasExternalDialogOpen: exportDialogOpen || agentSettingsOpen || updateDialogOpen,
+                                    hasExternalDialogOpen:
+                                        exportDialogOpen ||
+                                        settingsDialogOpen ||
+                                        updateDialogOpen ||
+                                        cacheDialogOpen ||
+                                        noticesDialogOpen,
                                     sidePanel: () =>
                                         settings.agentPanelOpen ? (
                                             <div className="flex h-full shrink-0 items-stretch">
@@ -1063,7 +1242,7 @@ export const App: React.FC = () => {
                                                         agentStatus={agentStatus}
                                                         snapshots={snapshots}
                                                         onConfigChange={setAgentConfig}
-                                                        onOpenSettings={() => setAgentSettingsOpen(true)}
+                                                        onOpenSettings={() => handleOpenSettings("agent")}
                                                         onCollapse={() => persistSettings({ agentPanelOpen: false })}
                                                         onFocusNode={nodeId => editorRef.current?.focusNode(nodeId)}
                                                         onRollbackSnapshot={handleRollbackSnapshot}
@@ -1093,18 +1272,32 @@ export const App: React.FC = () => {
                     onFocusNode={nodeId => editorRef.current?.focusNode(nodeId)}
                 />
 
-                {/* MoeSekai Agent Provider / Key / Mode Settings Dialog */}
-                <AgentSettingsDialog
-                    open={agentSettingsOpen}
-                    locale={settings.locale}
-                    onClose={() => setAgentSettingsOpen(false)}
-                    onSaved={saved => {
+                {/* Unified 3-Tab Preferences Dialog (Appearance & Language / Stage & Cache / MoeSekai Agent) */}
+                <SettingsDialog
+                    open={settingsDialogOpen}
+                    initialTab={settingsDialogTab}
+                    settings={settings}
+                    cacheStats={cacheStats}
+                    loadingCacheStats={loadingCacheStats}
+                    onChangeThemeMode={(mode: DesktopThemeMode) => persistSettings({ themeMode: mode })}
+                    onChangeThemeSeed={seed => persistSettings({ themeSeed: seed })}
+                    onChangeLocale={locale => persistSettings({ locale })}
+                    onChangeStageRenderQuality={(stageRenderQuality: DesktopStageRenderQuality) =>
+                        persistSettings({ stageRenderQuality })
+                    }
+                    onRefreshCacheStats={handleRefreshCacheStats}
+                    onToggleCacheEnabled={enabled => void handleToggleCacheEnabled(enabled)}
+                    onChangeCacheMaxMb={mb => void handleChangeCacheMaxMb(mb)}
+                    onOpenCacheDir={handleOpenCacheDir}
+                    onClearCache={() => void handleClearCache()}
+                    onAgentConfigSaved={saved => {
                         setAgentConfig(saved);
                         setSnack(formatDesktopMessage(settings.locale, "agentSettingsSaved"));
                     }}
+                    onClose={() => setSettingsDialogOpen(false)}
                 />
 
-                {/* Desktop Version & Update Dialog (CNB Primary + GitHub Auto-Fallback) */}
+                {/* Dedicated Software Update Dialog */}
                 <UpdateDialog
                     open={updateDialogOpen}
                     locale={settings.locale}
@@ -1119,6 +1312,31 @@ export const App: React.FC = () => {
                     onCheckNow={channelOverride => void runUpdateCheck(channelOverride)}
                     onOpenDownload={handleOpenUpdateDownload}
                     onIgnoreVersion={ver => void handleIgnoreUpdateVersion(ver)}
+                />
+
+                {/* Dedicated Local Asset Cache Dialog */}
+                <AssetCacheDialog
+                    open={cacheDialogOpen}
+                    locale={settings.locale}
+                    assetCacheEnabled={settings.assetCacheEnabled}
+                    assetCacheMaxMb={settings.assetCacheMaxMb}
+                    cacheStats={cacheStats}
+                    loadingStats={loadingCacheStats}
+                    onRefreshStats={handleRefreshCacheStats}
+                    onToggleEnabled={enabled => void handleToggleCacheEnabled(enabled)}
+                    onChangeMaxMb={mb => void handleChangeCacheMaxMb(mb)}
+                    onOpenCacheDir={handleOpenCacheDir}
+                    onClearCache={() => void handleClearCache()}
+                    onClose={() => setCacheDialogOpen(false)}
+                />
+
+                {/* Dedicated About & Legal Notices Dialog (with Official MoeSekai Community Links) */}
+                <AboutNoticesDialog
+                    open={noticesDialogOpen}
+                    locale={settings.locale}
+                    currentVersion={appVersion}
+                    onOpenExternal={handleOpenExternal}
+                    onClose={() => setNoticesDialogOpen(false)}
                 />
 
                 <Snackbar

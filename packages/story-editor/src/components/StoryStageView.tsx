@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useState, type ReactNode, type RefObject } from "react";
 import { Button, Icon, LoadingIndicator, cn } from "../md3";
 import { mdClose, mdErrorFill, mdInfo, mdRefresh, mdWarningFill } from "../md3/icons";
-import { useStoryI18n as useI18n } from "../context/StoryStudioContext";
+import { useStoryI18n as useI18n, useStoryStudio } from "../context/StoryStudioContext";
 import { getCharacterIconUrl, type AssetLine } from "@moesekai/story-core";
 import { md3EasingStandard } from "../md3/motion";
 import { storyBackgroundUrl } from "@moesekai/story-core";
@@ -57,21 +57,63 @@ interface StoryStageViewProps extends StoryStageStatusProps {
     compactStatus?: boolean;
     /** Active solo/audition preview banner (lifts scene overlays so 0-actor & off-stage preview stays unobstructed). */
     soloPreview?: { name: string; onExit: () => void } | null;
+    /** Enables the non-intrusive MoeSekai attribution badge in the top-right corner (Playback / Playtest). */
+    showAttribution?: boolean;
     onClick?: () => void;
     children?: ReactNode;
     className?: string;
 }
 
+/** Pure visibility predicate for the stage's non-intrusive MoeSekai resource attribution micro-pill. */
+export function shouldShowStageAttribution(params: {
+    stageEnabled?: boolean;
+    providerEnabled?: boolean;
+    uiHidden?: boolean;
+    soloPreviewActive?: boolean;
+}): boolean {
+    return Boolean(
+        params.stageEnabled
+        && params.providerEnabled !== false
+        && !params.uiHidden
+        && !params.soloPreviewActive,
+    );
+}
+
 const MISSING_KEYS = ["webgpu", "webgpu-adapter", "offscreen-canvas", "worker"] as const;
 
-/** The engine's state as a small note in the stage's top-right corner, clear of the game menu button. */
-function StageStatus({
-    phase, problems: actorProblems, loadingActors, onRetry, doc, compact, offsetForMenu,
-}: StoryStageStatusProps & { doc: StoryDocument; compact?: boolean; offsetForMenu?: boolean }) {
+/** Top-right corner stack: non-intrusive MoeSekai attribution micro-pill + engine status notes, clear of the game menu button. */
+function StageTopRightOverlay({
+    phase, problems: actorProblems, loadingActors, onRetry, doc, compact, offsetForMenu, showAttribution, onOpenNotices,
+}: StoryStageStatusProps & {
+    doc: StoryDocument;
+    compact?: boolean;
+    offsetForMenu?: boolean;
+    showAttribution?: boolean;
+    onOpenNotices?: () => void;
+}) {
     const { t } = useI18n();
     const problems = Object.entries(actorProblems);
     const chip = "pointer-events-auto flex min-w-0 max-w-full items-center gap-2 rounded-md3-md glass px-3 py-1.5 type-label-m text-on-surface";
     const notes: ReactNode[] = [];
+    if (showAttribution) {
+        notes.push(
+            <button
+                key="moesekai-attribution"
+                type="button"
+                data-testid="moesekai-attribution-badge"
+                onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenNotices?.();
+                }}
+                title={t("page.storyMaker.attribution.badgeTooltip")}
+                aria-label={t("page.storyMaker.attribution.badgeTooltip")}
+                className="sekai-attribution-badge pointer-events-auto"
+            >
+                <Icon path={mdInfo} size={12} className="shrink-0 opacity-80" />
+                <span className="truncate">{t("page.storyMaker.attribution.stageBadge")}</span>
+            </button>,
+        );
+    }
     if (phase.kind === "loading" || phase.kind === "recovering" || loadingActors > 0) {
         const statusKey = phase.kind === "recovering"
             ? "page.storyMaker.engine.recovering"
@@ -159,9 +201,11 @@ export function StoryStageView({
     uiKit = null, uiHidden = false, dialogueText, autoPlay = false, showEndSign = false,
     choice = null, choiceInteractive = false, onChoose, onChoiceSound,
     showMenuButton = false, menuOpen = false, onMenuClick, animateCinemascope = false,
-    flash, fadeSeconds = 0.5, compactStatus, soloPreview = null, onClick, children, className,
+    flash, fadeSeconds = 0.5, compactStatus, soloPreview = null, showAttribution = false,
+    onClick, children, className,
 }: StoryStageViewProps) {
     const { t } = useI18n();
+    const { showAttribution: providerShowAttribution, openNotices } = useStoryStudio();
     const reduced = useReducedMotion();
     const background = state.background ? storyBackgroundUrl(state.background, doc.region, line) : null;
     const [failedBackground, setFailedBackground] = useState<string | null>(null);
@@ -169,6 +213,12 @@ export function StoryStageView({
     const showPortraitFallback = phase.kind === "unavailable" || phase.kind === "unsupported" || phase.kind === "failed";
     const fade = reduced ? 0 : fadeSeconds;
     const isSoloPreviewActive = soloPreview !== null;
+    const renderAttribution = shouldShowStageAttribution({
+        stageEnabled: showAttribution,
+        providerEnabled: providerShowAttribution,
+        uiHidden,
+        soloPreviewActive: isSoloPreviewActive,
+    });
 
     return (
         <div
@@ -312,8 +362,8 @@ export function StoryStageView({
                 </div>
             )}
 
-            {/* Layer 6b: Engine status notes */}
-            <StageStatus
+            {/* Layer 6b: Top-right MoeSekai attribution badge & engine status notes */}
+            <StageTopRightOverlay
                 phase={phase}
                 problems={problems}
                 loadingActors={loadingActors}
@@ -321,6 +371,8 @@ export function StoryStageView({
                 doc={doc}
                 compact={compactStatus}
                 offsetForMenu={!uiHidden && showMenuButton}
+                showAttribution={renderAttribution}
+                onOpenNotices={openNotices}
             />
 
             {children}

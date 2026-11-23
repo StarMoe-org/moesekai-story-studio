@@ -1031,6 +1031,21 @@ export const storyMakerMessages = {
             "lowCreditScore": "信用スコアが不足しているため、ボイスをアップロードできません。",
             "uploadFailed": "アップロードに失敗しました。通信状況を確認して再試行してください。"
         }
+    },
+    "attribution": {
+        "stageBadge": "素材無償提供 · MoeSekai (pjsk.moe)",
+        "badgeTooltip": "素材クレジット・法的表記を表示",
+        "endingFooter": "素材配信：MoeSekai (pjsk.moe) 無償提供 · 非公式ファン創作ツール",
+        "dialogTitle": "クレジット・法的表記",
+        "dialogSubtitle": "無償素材配信・原作著作権・オープンソースライセンスおよび創作物の責任について",
+        "serviceTitle": "MoeSekai 無償素材配信と適正利用",
+        "serviceBody": "ステージで使用される Live2D モデル・背景・BGM・SE・ボイス素材は MoeSekai（pjsk.moe / assets.pjsk.moe / storage.pjsk.moe / metadata.pjsk.moe）により非営利のコミュニティ基盤として無償配信されています。過度な連続アクセスや一括スクレイピングはご遠慮ください。",
+        "ipTitle": "Project SEKAI 原作著作権および非公式表記",
+        "ipBody": "本ツールは非公式のファン創作ツールであり、株式会社セガ、株式会社Colorful Palette、クリプトン・フューチャー・メディア株式会社とは一切関係ありません。キャラクター・Live2D モデル・背景・楽曲・ボイス等の権利はすべて各権利者に帰属します。営利目的での利用は禁止されています。",
+        "licenseTitle": "オープンソースおよびサードパーティライセンス",
+        "licenseBody": "本ソフトウェアおよび @moesekai/story-* パッケージは Mozilla Public License 2.0 (MPL-2.0) の下で公開されています。実行時に読み込まれる Live2D Cubism Core for Web は Live2D Inc. の独自ライセンスに従い、MPL-2.0 の適用対象外です。",
+        "contentTitle": "創作コンテンツ・カスタム音声に関する責任",
+        "contentBody": "すべてのシナリオ台本・翻訳・独自に組み込んだ音声ファイルは制作者自身の責任において作成・管理されます。法令およびガイドラインを遵守のうえ、大切なプロジェクトは定期的にバックアップしてください。"
     }
 };
 

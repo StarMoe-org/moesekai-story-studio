@@ -19,6 +19,7 @@ import {
 } from "../shared/ipc.ts";
 import { sanitizeExportFilename } from "../shared/path-jail.ts";
 import type { PiAgentHost } from "./agent-host.ts";
+import type { AssetCacheManager } from "./asset-cache.ts";
 import {
     exportCleanMskToFile,
     exportFullBundleToPath,
@@ -35,6 +36,7 @@ export interface IpcHandlersDeps {
     settings: DesktopSettingsStore;
     agentHost: PiAgentHost;
     updater: DesktopUpdateService;
+    assetCache: AssetCacheManager;
     appInfo: DesktopAppInfo;
     refreshMenu: () => void;
     syncWindowChrome?: (themeMode: "light" | "dark") => void;
@@ -50,7 +52,7 @@ function isAllowedExternalUrl(rawUrl: string): boolean {
 }
 
 export function registerIpcHandlers(deps: IpcHandlersDeps): void {
-    const { getMainWindow, workspace, settings, agentHost, updater, appInfo, refreshMenu, syncWindowChrome } = deps;
+    const { getMainWindow, workspace, settings, agentHost, updater, assetCache, appInfo, refreshMenu, syncWindowChrome } = deps;
 
     const getOwnerWindow = (): BrowserWindow | undefined => getMainWindow() ?? undefined;
 
@@ -65,6 +67,12 @@ export function registerIpcHandlers(deps: IpcHandlersDeps): void {
 
     ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, (_ev, patch: Partial<DesktopAppSettings>) => {
         const updated = settings.updateAppSettings(patch ?? {});
+        if (typeof patch?.assetCacheEnabled === "boolean") {
+            assetCache.setEnabled(updated.assetCacheEnabled);
+        }
+        if (typeof patch?.assetCacheMaxMb === "number") {
+            assetCache.setMaxMb(updated.assetCacheMaxMb);
+        }
         refreshMenu();
         syncWindowChrome?.(updated.themeMode);
         return updated;
@@ -90,6 +98,26 @@ export function registerIpcHandlers(deps: IpcHandlersDeps): void {
     ipcMain.handle(IPC_CHANNELS.UPDATES_OPEN_DOWNLOAD, (_ev, url: string) =>
         updater.openDownload(url),
     );
+
+    // ==================== Persistent Local Asset Cache (`moesekai-cache://`) ====================
+
+    ipcMain.handle(IPC_CHANNELS.CACHE_GET_STATS, () => assetCache.getStats());
+
+    ipcMain.handle(IPC_CHANNELS.CACHE_CLEAR, () => assetCache.clear());
+
+    ipcMain.handle(IPC_CHANNELS.CACHE_OPEN_DIR, async () => {
+        await shell.openPath(assetCache.cacheDir);
+    });
+
+    ipcMain.handle(IPC_CHANNELS.CACHE_SET_MAX_MB, (_ev, mb: number) => {
+        const updated = settings.updateAppSettings({ assetCacheMaxMb: mb });
+        return assetCache.setMaxMb(updated.assetCacheMaxMb);
+    });
+
+    ipcMain.handle(IPC_CHANNELS.CACHE_SET_ENABLED, (_ev, enabled: boolean) => {
+        const updated = settings.updateAppSettings({ assetCacheEnabled: Boolean(enabled) });
+        return assetCache.setEnabled(updated.assetCacheEnabled);
+    });
 
     // ==================== Workspace ====================
 
