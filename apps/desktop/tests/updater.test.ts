@@ -5,6 +5,7 @@ import path from "node:path";
 import { DesktopSettingsStore } from "../src/main/settings.ts";
 import {
     checkForDesktopUpdates,
+    CNB_RELEASE_API_URL,
     compareSemver,
     isSafeHttpsUrl,
     normalizeReleasePayload,
@@ -49,6 +50,15 @@ describe("SemVer comparison & HTTPS URL safety guard", () => {
         expect(isSafeHttpsUrl("//evil.example/payload.exe")).toBe(false);
         expect(isSafeHttpsUrl("not a url")).toBe(false);
         expect(resolveReleaseUrl("//evil.example/payload.exe", "cnb")).toBeNull();
+        expect(CNB_RELEASE_API_URL).toBe("https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/latest");
+        expect(
+            resolveReleaseUrl(
+                "https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/download/v0.1.0/MoeSekai Story Studio Setup 0.1.0.exe",
+                "cnb",
+            ),
+        ).toBe(
+            "https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/download/v0.1.0/MoeSekai%20Story%20Studio%20Setup%200.1.0.exe",
+        );
     });
 });
 
@@ -158,7 +168,7 @@ describe("checkForDesktopUpdates CNB primary + GitHub auto-fallback", () => {
         });
 
         expect(calls).toHaveLength(1);
-        expect(calls[0]).toContain("api.cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/latest");
+        expect(calls[0]).toBe("https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/latest");
         expect(res.status).toBe("update-available");
         expect(res.source).toBe("cnb");
         expect(res.fallbackUsed).toBe(false);
@@ -174,7 +184,7 @@ describe("checkForDesktopUpdates CNB primary + GitHub auto-fallback", () => {
         const fetch500 = (async (input: string | URL | Request) => {
             const url = String(input);
             calls500.push(url);
-            if (url.includes("api.cnb.cool")) {
+            if (url.startsWith("https://cnb.cool/")) {
                 return new Response("Internal Server Error", { status: 500 });
             }
             return new Response(
@@ -204,7 +214,7 @@ describe("checkForDesktopUpdates CNB primary + GitHub auto-fallback", () => {
         });
 
         expect(calls500).toHaveLength(2);
-        expect(calls500[0]).toContain("api.cnb.cool");
+        expect(calls500[0]).toBe("https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/latest");
         expect(calls500[1]).toContain("api.github.com");
         expect(res500.status).toBe("update-available");
         expect(res500.source).toBe("github");
@@ -214,7 +224,7 @@ describe("checkForDesktopUpdates CNB primary + GitHub auto-fallback", () => {
         // Case B: CNB timeout -> GitHub 200 (up-to-date)
         const fetchTimeout = (async (input: string | URL | Request, init?: RequestInit) => {
             const url = String(input);
-            if (url.includes("api.cnb.cool")) {
+            if (url.startsWith("https://cnb.cool/")) {
                 return await new Promise<Response>((_resolve, reject) => {
                     init?.signal?.addEventListener("abort", () => {
                         const err = new Error("Aborted");
@@ -260,7 +270,7 @@ describe("checkForDesktopUpdates CNB primary + GitHub auto-fallback", () => {
             fetchImpl: cnbFailFetch,
         });
         expect(cnbOnlyCalls).toHaveLength(1);
-        expect(cnbOnlyCalls[0]).toContain("api.cnb.cool");
+        expect(cnbOnlyCalls[0]).toBe("https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/latest");
         expect(cnbRes.status).toBe("error");
         expect(cnbRes.fallbackUsed).toBe(false);
 

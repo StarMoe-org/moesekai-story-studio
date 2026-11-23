@@ -8,7 +8,11 @@ export type UpdateSource = "cnb" | "github";
 
 export const DEFAULT_UPDATE_REPO_SLUG = "StarMoe-org/moesekai-story-studio";
 export const CNB_ORIGIN = "https://cnb.cool";
-export const CNB_API_ORIGIN = "https://api.cnb.cool";
+/**
+ * Public anonymous JSON release endpoint on CNB (`https://cnb.cool/.../-/releases/latest`
+ * with `Accept: application/json` returns HTTP 200 without auth; `api.cnb.cool` requires a Bearer token).
+ */
+export const CNB_API_ORIGIN = CNB_ORIGIN;
 export const GITHUB_ORIGIN = "https://github.com";
 export const GITHUB_API_ORIGIN = "https://api.github.com";
 
@@ -61,8 +65,10 @@ export interface CheckDesktopUpdatesOptions {
 }
 
 export function getCnbLatestApiUrl(repoSlug = DEFAULT_UPDATE_REPO_SLUG): string {
-    return `${CNB_API_ORIGIN}/${repoSlug}/-/releases/latest`;
+    return `${CNB_ORIGIN}/${repoSlug}/-/releases/latest`;
 }
+
+export const CNB_RELEASE_API_URL = getCnbLatestApiUrl();
 
 export function getCnbReleasePageUrl(repoSlug = DEFAULT_UPDATE_REPO_SLUG, tag?: string): string {
     if (tag && tag.trim()) {
@@ -180,10 +186,10 @@ export function resolveReleaseUrl(
                 ? `/${repoSlug}${trimmed}`
                 : trimmed;
         const resolved = `${origin}${normalizedPath}`;
-        return isSafeHttpsUrl(resolved) ? resolved : null;
+        return isSafeHttpsUrl(resolved) ? new URL(resolved).toString() : null;
     }
 
-    return isSafeHttpsUrl(trimmed) ? trimmed : null;
+    return isSafeHttpsUrl(trimmed) ? new URL(trimmed).toString() : null;
 }
 
 /**
