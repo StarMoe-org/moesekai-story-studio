@@ -145,7 +145,20 @@ export async function isPackageVersionPublished(
     fetchImpl: FetchLike = fetch,
 ): Promise<boolean> {
     const cleanBase = registryUrl.replace(/\/+$/, "");
-    // Direct version endpoint works on registry.npmjs.org and standard npm registries.
+    // Query the package packument first: works reliably on registry.npmjs.org for both scoped
+    // (`@scope/name`) and unscoped packages (scoped `/<version>` subpaths return 404 on npmjs.org).
+    const packumentUrl = `${cleanBase}/${encodeURIComponent(packageName)}`;
+    const packRes = await fetchImpl(packumentUrl, {
+        method: "GET",
+        headers: { Accept: "application/vnd.npm.install-v1+json, application/json" },
+    });
+    if (packRes.status === 404) return false;
+    if (packRes.ok) {
+        const packument = await packRes.json() as { versions?: Record<string, unknown> };
+        return Boolean(packument.versions && Object.prototype.hasOwnProperty.call(packument.versions, version));
+    }
+
+    // Fallback to direct version endpoint for custom registries that only expose `/<pkg>/<version>`.
     const directUrl = `${cleanBase}/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`;
     const directRes = await fetchImpl(directUrl, {
         method: "GET",
@@ -153,19 +166,7 @@ export async function isPackageVersionPublished(
     });
     if (directRes.status === 200) return true;
     if (directRes.status === 404) return false;
-
-    // Fallback to packument check for registries that disallow scoped /<version> subpaths.
-    const packumentUrl = `${cleanBase}/${encodeURIComponent(packageName)}`;
-    const packRes = await fetchImpl(packumentUrl, {
-        method: "GET",
-        headers: { Accept: "application/vnd.npm.install-v1+json, application/json" },
-    });
-    if (packRes.status === 404) return false;
-    if (!packRes.ok) {
-        throw new Error(`Registry check failed for ${packageName}@${version}: HTTP ${packRes.status}`);
-    }
-    const packument = await packRes.json() as { versions?: Record<string, unknown> };
-    return Boolean(packument.versions && Object.prototype.hasOwnProperty.call(packument.versions, version));
+    throw new Error(`Registry check failed for ${packageName}@${version}: HTTP ${packRes.status} / ${directRes.status}`);
 }
 
 function hasNpmAuthConfigured(repoRoot: string, pkgDir: string): boolean {

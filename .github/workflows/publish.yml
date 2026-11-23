@@ -160,7 +160,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
           bun run build
-          bunx electron-builder --config electron-builder.yml --publish never
+          bunx electron-builder --config electron-builder.yml -c.linux.executableName=moesekai-story-studio --publish never
 
       - name: Collect installer artifacts
         shell: bash

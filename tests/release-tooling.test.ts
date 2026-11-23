@@ -175,14 +175,22 @@ describe("npm publish verification (scripts/publish-packages.ts)", () => {
         }
     });
 
-    test("isPackageVersionPublished handles 200 skip, 404 unpublished, and packument fallback", async () => {
+    test("isPackageVersionPublished handles packument versions, 404 unpublished, and direct-version fallback", async () => {
         const published = await isPackageVersionPublished(
             "@moesekai/story-core",
             "0.1.0",
             "https://registry.npmjs.org",
-            async () => new Response("{}", { status: 200 }),
+            async () => new Response(JSON.stringify({ versions: { "0.1.0": {} } }), { status: 200 }),
         );
         assert.equal(published, true);
+
+        const stagedOnly = await isPackageVersionPublished(
+            "@moesekai/story-core",
+            "0.1.0",
+            "https://registry.npmjs.org",
+            async () => new Response(JSON.stringify({ versions: { "0.0.0-stage": {} } }), { status: 200 }),
+        );
+        assert.equal(stagedOnly, false);
 
         const missing = await isPackageVersionPublished(
             "@moesekai/story-core",
@@ -200,8 +208,8 @@ describe("npm publish verification (scripts/publish-packages.ts)", () => {
             async (input) => {
                 const url = String(input);
                 calls.push(url);
-                if (url.endsWith("/0.1.0")) return new Response("", { status: 405 });
-                return new Response(JSON.stringify({ versions: { "0.1.0": {} } }), { status: 200 });
+                if (!url.endsWith("/0.1.0")) return new Response("", { status: 405 });
+                return new Response("{}", { status: 200 });
             },
         );
         assert.equal(fallbackHit, true);
