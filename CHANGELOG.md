@@ -4,6 +4,17 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-11-23
+
+### Added
+- **Translucent Official MoeSekai SVG Watermark (`@moesekai/story-editor`)**: Replaced the dark stage text pill with a delicate translucent inline `MoeSekaiWordmarkSvg` (`opacity: 0.32` -> `0.85` on hover/focus) with a portaled MD3 tooltip and direct Notices dialog trigger.
+- **Desktop Preloading Parity (`@moesekai/story-core`, `@moesekai/story-editor`, Desktop)**: Added `moesekai-cache://` Cache API bypass, `X-MoeSekai-Cache: HIT|STALE` detection, zero-network `HEAD` cache probing (`X-MoeSekai-Cache-Probe: 1`), `isStoryUiKitSupported()` graceful skip for hosts without `kit-worker.js`, default automatic background preloading on Desktop, and a compact Player top-bar preload status indicator.
+- **MoeSekai Agent UX & Provider Icons (`apps/desktop`)**: Replaced the empty-state quick-action cards with a clean 3-step minimalist usage guide and added 12 centered zero-network inline SVG provider icons (`ProviderIcon`: OpenAI, Anthropic/Claude, Google/Gemini, DeepSeek, Qwen, xAI/Grok, OpenRouter, Mistral, Ollama, Moonshot/Kimi, Zhipu/GLM, and Custom) across the model picker and Settings dialog.
+
+### Fixed
+- **Multi-Actor Live2D Loading & Progress Bar (`@moesekai/story-editor`)**: Fixed missing actors caused by mid-fade `alpha: 0` supersede (`AppliedActor.alpha` tracking + restoration) and worker state drift, parallelized arriving scene actors (`Promise.all` batch loading), and added aggregate multi-actor progress reporting (`StoryStageLoadProgress` + MD3 `<LinearProgress>`) so the loading indicator remains visible until every actor settles.
+- **Windows Concurrent Asset Cache Hardening (`apps/desktop`)**: Serialized `index.json` flushes with Windows `EPERM`/`EBUSY` resilience, switched to UUID temp files, and returned independent in-memory buffers on cache misses so concurrent Live2D fetches never fail on disk locks.
+
 ## [0.1.3] - 2026-11-23
 
 ### Added
