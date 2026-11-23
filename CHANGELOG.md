@@ -4,6 +4,17 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-11-23
+
+### Added
+- **Persistent Disk Asset Cache (`moesekai-cache://`, Desktop + `@moesekai/story-core`)**: Added a content-addressed local disk cache (`AssetCacheManager`) for Live2D models, textures, motions, backgrounds, BGM, SE, voices, UI Kit, and directory listings with strict host allowlisting, traversal/redirect guards, in-flight request coalescing, HTTP `Range` (`206`) audio seeking, stale-while-revalidate offline fallback, configurable LRU budget (`512 MB` – `4 GB`), and custom protocol support in `@moesekai/story-core`.
+- **Live2D Stage SSAA Antialiasing (`@moesekai/story-editor` + Desktop)**: Added `StoryStageRenderQuality` (`standard` / `high` / `ultra`, defaulting to `high` adaptive SSAA with a `1280×720` minimum internal floor and live serialized resize) across `<StoryStudioProvider>`, `StoryStageController`, and Desktop preferences.
+- **Non-Intrusive MoeSekai Attribution & Legal Notices (`@moesekai/story-editor` + Desktop)**: Added a subtle top-right stage attribution pill and Ending Card credit in the Story Player (`showAttribution`, `onOpenNotices`, and built-in `<StoryNoticesDialog>` fallback for standalone/Web hosts), plus a dedicated Desktop `AboutNoticesDialog` with official MoeSekai community links and 5-locale legal notices.
+- **Consolidated Desktop Navigation & Unified Settings**: Replaced scattered popovers with a unified 3-tab `SettingsDialog` (`Appearance & Language`, `Stage & Cache`, `MoeSekai Agent`), a top-bar `About` dropdown menu (`Check for Updates`, `Asset Cache`, `About & Notices`), and focused single-purpose dialogs.
+
+### Fixed
+- **UI Kit Manifest Probing (`@moesekai/story-core`)**: Added `hasKitWorkerScript()` manifest probing in `loadStoryUiKit` so newer `sse-web` releases without `kit-worker.js` skip spawning a missing worker cleanly without noisy 404 requests.
+
 ## [0.1.2] - 2026-11-23
 
 ### Added
