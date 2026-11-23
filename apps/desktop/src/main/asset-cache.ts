@@ -26,6 +26,8 @@ const ASSET_SITE_HOSTS: ReadonlySet<string> = new Set([
 ]);
 
 const VERSION_PINNED_CANONICAL_PATH_RE = /^\/(?:jp|en|tw|kr|cn)@[^/]+\//i;
+const VERSION_PINNED_LISTINGS_PATH_RE = /^\/listings\/(?:jp|en|tw|kr|cn)\/[^/@]+@[^/]+(?:\/|$)/i;
+const UNPINNED_LISTINGS_PATH_RE = /^\/listings\/(?:jp|en|tw|kr|cn)\/[^/@]+(?:\/|$)/i;
 
 export type AssetCacheCategory = "live2d" | "audio" | "image" | "metadata" | "ui" | "other";
 
@@ -88,6 +90,16 @@ export function classifyAsset(upstreamUrl: URL): { category: AssetCacheCategory;
     const pathname = upstreamUrl.pathname.toLowerCase();
     const isAssetSiteHost = ASSET_SITE_HOSTS.has(host);
     const isVersionPinnedAssetSite = isAssetSiteHost && VERSION_PINNED_CANONICAL_PATH_RE.test(pathname);
+
+    // Version-pinned canonical form listings (`/listings/<region>/<view>@<version>[/<form>]`) are immutable snapshots.
+    if (isAssetSiteHost && VERSION_PINNED_LISTINGS_PATH_RE.test(pathname)) {
+        return { category: "metadata", isDynamic: false };
+    }
+
+    // Unpinned canonical form listings (`/listings/<region>/<view>[/<form>]`) follow the moving publication.
+    if (isAssetSiteHost && UNPINNED_LISTINGS_PATH_RE.test(pathname)) {
+        return { category: "metadata", isDynamic: true };
+    }
 
     // Version-pinned canonical asset-site routes (`/<region>@<version>/...`) are immutable snapshots:
     // `.asset.json`, `.moc3`, `.png`, physics/motion/facial `.json` clips, and pinned dir listings.

@@ -9,6 +9,7 @@ import {
     extractLive2DMotionClips,
     fetchLive2DModels,
     inferLive2DMotionBundleCandidates,
+    live2dDirectoryPath,
     live2dSiteListingUrl,
     live2dSources,
     parseStoryScript,
@@ -455,7 +456,7 @@ export async function verifyAssetsLive(
                     try {
                         const resolved = await resolveLive2DAssetDocument(
                             l2dSources,
-                            bundle,
+                            live2dDirectoryPath(bundle),
                             "live2d-motions",
                         );
                         if (!resolved) {
@@ -497,7 +498,7 @@ export async function verifyAssetsLive(
                         try {
                             const resolvedModel = await resolveLive2DAssetDocument(
                                 l2dSources,
-                                item.modelAssetPath,
+                                live2dDirectoryPath(item.modelAssetPath),
                                 "live2d-model",
                             );
                             if (resolvedModel) {

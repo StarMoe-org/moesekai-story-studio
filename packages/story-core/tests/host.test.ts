@@ -262,8 +262,10 @@ describe("host contracts & .msk export preflight", () => {
             },
         };
 
+        const requestedUrls: string[] = [];
         const mockFetch = (async (input: string | URL | Request, init?: RequestInit) => {
             const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            requestedUrls.push(url);
             if (init?.method === "HEAD") {
                 const hdrs = new Headers(init.headers);
                 headProbes.push({ url, probeHeader: hdrs.get("X-MoeSekai-Cache-Probe") });
@@ -316,13 +318,13 @@ describe("host contracts & .msk export preflight", () => {
                     { status: 200, headers: { "Content-Type": "application/json", "X-MoeSekai-Cache": "HIT" } },
                 );
             }
-            // Direct `.asset.json` for Mafuyu
-            if (url === `moesekai-cache://storage.pjsk.moe/jp@${VERSION}/live2d/model/v2_18mafuyu_casual.asset.json`) {
+            // Exact nested `.asset.json` path for Mafuyu (e.g. from pre-resolved index)
+            if (url === `moesekai-cache://storage.pjsk.moe/jp@${VERSION}/live2d/model/v2_18mafuyu_casual/buildmodeldata.asset.json`) {
                 return new Response(
                     JSON.stringify({
                         format: "asset",
                         version: 1,
-                        name: "live2d/model/v2_18mafuyu_casual",
+                        name: "live2d/model/v2_18mafuyu_casual/buildmodeldata",
                         form: "live2d-model",
                         members: [{ role: "moc", extension: "moc3" }],
                     }),
@@ -361,10 +363,18 @@ describe("host contracts & .msk export preflight", () => {
                 ],
             });
 
-            const models = live2dModelsFromListings(["v2_17kanade_casual", "v2_18mafuyu_casual"], []);
+            const models = live2dModelsFromListings(["v2_17kanade_casual", "v2_18mafuyu_casual"], []).map(m =>
+                m.id === "v2_18mafuyu_casual"
+                    ? { ...m, asset: "live2d/model/v2_18mafuyu_casual/buildmodeldata" }
+                    : m,
+            );
 
-            // 1. Cold-start inspectStoryCacheStatus probes resolved versioned moc URLs via HEAD
+            // 1. Cold-start inspectStoryCacheStatus probes resolved versioned moc URLs via HEAD with 0 404 `.asset.json` probes
             const before = await inspectStoryCacheStatus(doc, { models, includeUiKit: true });
+            assert.equal(
+                requestedUrls.some(u => u.endsWith("/v2_17kanade_casual.asset.json") || u.endsWith("/v2_18mafuyu_casual.asset.json")),
+                false,
+            );
             assert.equal(headProbes.length, 2);
             assert.ok(headProbes.every(p => p.probeHeader === "1"));
             assert.ok(headProbes.every(p => p.url.startsWith(`moesekai-cache://storage.pjsk.moe/jp@${VERSION}/`)));

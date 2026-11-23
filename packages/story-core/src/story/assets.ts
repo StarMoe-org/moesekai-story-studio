@@ -8,6 +8,7 @@ import type { Live2DSources } from "../live2d/config";
 import { inferLive2DMotionBundleCandidates } from "../live2d/models";
 import {
     extractLive2DMotionClips,
+    live2dDirectoryPath,
     resolveLive2DAssetDocument,
     resolveLive2DPublishedVersion,
 } from "../live2d/site";
@@ -542,7 +543,8 @@ export async function fetchMotionBundleClips(
     if (signal?.aborted) throw createAbortError();
     const asset = normalizeAssetPath(motionAsset);
     if (!asset) return { motions: [], facials: [] };
-    const resolved = await resolveLive2DAssetDocument(sources, asset, "live2d-motions", signal);
+    const lookupPath = live2dDirectoryPath(motionAsset);
+    const resolved = await resolveLive2DAssetDocument(sources, lookupPath, "live2d-motions", signal);
     if (!resolved) {
         throw new Error(`Live2D motion asset not found: ${asset}`);
     }
@@ -566,13 +568,13 @@ export async function fetchLive2DModelClips(
     signal?: AbortSignal,
 ): Promise<ResolvedLive2DModelClips> {
     if (signal?.aborted) throw createAbortError();
-    const candidates: string[] = [];
+    const candidates: Array<{ canonical: string; lookup: string }> = [];
     const seen = new Set<string>();
     const addCandidate = (asset: string | null | undefined) => {
         const clean = asset ? normalizeAssetPath(asset) : "";
         if (clean && !seen.has(clean)) {
             seen.add(clean);
-            candidates.push(clean);
+            candidates.push({ canonical: clean, lookup: live2dDirectoryPath(asset!) });
         }
     };
     addCandidate(motionAsset);
@@ -591,8 +593,8 @@ export async function fetchLive2DModelClips(
     for (const candidate of candidates) {
         if (signal?.aborted) throw createAbortError();
         try {
-            const clips = await fetchMotionBundleClips(pinnedSources, candidate, signal);
-            return { ...clips, motionBundle: candidate };
+            const clips = await fetchMotionBundleClips(pinnedSources, candidate.lookup, signal);
+            return { ...clips, motionBundle: candidate.canonical };
         } catch (err) {
             if (signal?.aborted) throw createAbortError();
             lastError = err;

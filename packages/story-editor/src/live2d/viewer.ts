@@ -19,9 +19,17 @@ export interface Live2DViewerView {
 
 /** Model descriptor matching `SekaiLive2DViewer` 0.2.x / `SekaiLive2DStage` 0.3.x. */
 export interface Live2DViewerModel {
-    /** Canonical `live2d-model` asset path (e.g. `live2d/model/01ichika_normal`). */
+    /**
+     * Canonical `live2d-model` asset path. Pass a trailing `/` for directory containers
+     * (e.g. `live2d/model/01ichika_normal/`) so the loader skips the guaranteed-404
+     * `<path>.asset.json` probe, or an exact resolved asset path (e.g. `.../buildmodeldata`).
+     */
     asset: string;
-    /** Optional canonical `live2d-motions` asset path (e.g. `live2d/motion/01ichika_motion_base`), or `null` for no motions. */
+    /**
+     * Optional canonical `live2d-motions` asset path (trailing `/` for directory containers
+     * such as `live2d/motion/01ichika_motion_base/`, or an exact resolved asset path),
+     * or `null` for no motions.
+     */
     motion?: string | null;
 }
 

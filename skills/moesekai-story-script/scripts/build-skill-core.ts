@@ -27,6 +27,10 @@ export { live2dListingUrl, live2dSources } from ${JSON.stringify(resolve(coreSrc
 export { inferLive2DMotionBundleCandidates, live2dModelsFromListings, live2dMotionSet } from ${JSON.stringify(resolve(coreSrcDir, "live2d/models.ts"))};
 export {
     extractLive2DMotionClips,
+    fetchLive2DFormListing,
+    live2dAssetRequestPath,
+    live2dDirectoryPath,
+    live2dFormListingUrl,
     live2dMemberUrl,
     live2dSiteListingUrl,
     live2dVersionedBaseUrl,

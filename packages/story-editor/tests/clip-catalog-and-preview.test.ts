@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { INITIAL_STAGE_STATE, type Live2DSources, type StoryCastMember, type StoryStageState } from "@moesekai/story-core";
+import {
+    clearLive2DSiteCache,
+    configureStoryCore,
+    fetchLive2DFormListing,
+    INITIAL_STAGE_STATE,
+    resetStoryCoreConfig,
+    type Live2DSources,
+    type StoryCastMember,
+    type StoryStageState,
+} from "@moesekai/story-core";
 import { canBrowseClipPicker } from "../src/components/ClipPickerField";
 import {
     candidateMotionBundlesForModelId,
@@ -58,10 +67,14 @@ class MinimalHost implements StageHostAdapter {
 }
 
 class FallbackTestStage extends EventTarget implements Live2DStage {
+    base: string | null = null;
     readonly mounted = new Map<string, { asset: string; motionAsset: string | null; motion: string | null; facial: string | null }>();
     readonly addAttempts: Array<{ id: string; asset: string; motion: string | null }> = [];
+    readonly missingModelAssets = new Set<string>();
     readonly missingMotionAssets = new Set<string>();
     readonly silentMissingMotionAssets = new Set<string>();
+    readonly resolvedModelMap = new Map<string, string>();
+    readonly resolvedMotionMap = new Map<string, string>();
     paused = false;
 
     get actors(): string[] {
@@ -76,21 +89,30 @@ class FallbackTestStage extends EventTarget implements Live2DStage {
         const motionAsset = model.motion ?? null;
         this.addAttempts.push({ id, asset: model.asset, motion: motionAsset });
         await waitMs(2);
-        if (motionAsset && this.missingMotionAssets.has(motionAsset)) {
-            throw Object.assign(new Error(`the asset site has no ${motionAsset}`), {
+        const bareModel = model.asset.replace(/^\/+|\/+$/g, "");
+        if (this.missingModelAssets.has(model.asset) || this.missingModelAssets.has(bareModel)) {
+            throw Object.assign(new Error(`the published version has no model ${bareModel}`), {
                 kind: "not-found",
-                url: `https://storage.test/jp@1.0.0/${motionAsset}/buildmotiondata.asset.json`,
+                url: `https://storage.test/jp@1.0.0/${bareModel}`,
             });
         }
-        if (motionAsset && this.silentMissingMotionAssets.has(motionAsset)) {
+        const bareMotion = motionAsset ? motionAsset.replace(/^\/+|\/+$/g, "") : null;
+        if (motionAsset && (this.missingMotionAssets.has(motionAsset) || (bareMotion && this.missingMotionAssets.has(bareMotion)))) {
+            throw Object.assign(new Error(`the asset site has no ${bareMotion}`), {
+                kind: "not-found",
+                url: `https://storage.test/jp@1.0.0/${bareMotion}`,
+            });
+        }
+        if (motionAsset && (this.silentMissingMotionAssets.has(motionAsset) || (bareMotion && this.silentMissingMotionAssets.has(bareMotion)))) {
             if (placement?.motion) {
                 throw Object.assign(new Error(`no body motion ${placement.motion}`), { kind: "internal" });
             }
             if (placement?.facial) {
                 throw Object.assign(new Error(`no facial ${placement.facial}`), { kind: "internal" });
             }
+            const resolvedModel = this.resolvedModelMap.get(model.asset) ?? this.resolvedModelMap.get(bareModel) ?? model.asset;
             const emptyInfo: Live2DActorInfo = {
-                model: model.asset,
+                model: resolvedModel,
                 motionSet: null,
                 motions: [],
                 facials: [],
@@ -106,9 +128,13 @@ class FallbackTestStage extends EventTarget implements Live2DStage {
             });
             return emptyInfo;
         }
+        const resolvedModel = this.resolvedModelMap.get(model.asset) ?? this.resolvedModelMap.get(bareModel) ?? model.asset;
+        const resolvedMotion = motionAsset
+            ? (this.resolvedMotionMap.get(motionAsset) ?? (bareMotion ? this.resolvedMotionMap.get(bareMotion) : undefined) ?? motionAsset)
+            : null;
         const info: Live2DActorInfo = {
-            model: model.asset,
-            motionSet: motionAsset,
+            model: resolvedModel,
+            motionSet: resolvedMotion,
             motions: ["w-normal01-tilthead", "w-normal15-nod", "w-kanade07-nod"],
             facials: ["face_normal_01", "face_smile_01", "face_sad_01"],
             defaultMotion: "w-normal01-tilthead",
@@ -319,20 +345,20 @@ describe("StoryStageController — empty-catalog fallback, graceful missing stag
             ],
         }), { instant: true });
 
-        // Both actors rendered cleanly with deterministic assets; Miku automatically fell back to 21miku_motion_base!
+        // Both actors rendered cleanly with explicit trailing `/` directory paths; Miku automatically fell back to 21miku_motion_base/!
         expect(stage.actors).toEqual(["kanade", "miku"]);
-        expect(stage.mounted.get("kanade")?.asset).toBe("live2d/model/v2_17kanade_casual");
-        expect(stage.mounted.get("kanade")?.motionAsset).toBe("live2d/motion/v2_17kanade_motion_base");
-        expect(stage.mounted.get("miku")?.asset).toBe("live2d/model/v2_21miku_night");
-        expect(stage.mounted.get("miku")?.motionAsset).toBe("live2d/motion/21miku_motion_base");
+        expect(stage.mounted.get("kanade")?.asset).toBe("live2d/model/v2_17kanade_casual/");
+        expect(stage.mounted.get("kanade")?.motionAsset).toBe("live2d/motion/v2_17kanade_motion_base/");
+        expect(stage.mounted.get("miku")?.asset).toBe("live2d/model/v2_21miku_night/");
+        expect(stage.mounted.get("miku")?.motionAsset).toBe("live2d/motion/21miku_motion_base/");
         expect(controller.getSnapshot().problems).toEqual({});
 
-        // Off-stage speaker (Mafuyu): silent missing v2 motion set falls back to 18mafuyu_motion_base cleanly!
+        // Off-stage speaker (Mafuyu): silent missing v2 motion set falls back to 18mafuyu_motion_base/ cleanly!
         await controller.previewClip(CAST_MAFUYU, { motion: "w-kanade07-nod", facial: "face_sad_01" });
         expect(controller.getSnapshot().isSoloPreview).toBe(true);
         expect(controller.getSnapshot().previewingCastKey).toBe("mafuyu");
-        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/v2_18mafuyu_casual");
-        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.motionAsset).toBe("live2d/motion/18mafuyu_motion_base");
+        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/v2_18mafuyu_casual/");
+        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.motionAsset).toBe("live2d/motion/18mafuyu_motion_base/");
         expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.motion).toBe("w-kanade07-nod");
         expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.facial).toBe("face_sad_01");
 
@@ -343,20 +369,268 @@ describe("StoryStageController — empty-catalog fallback, graceful missing stag
         expect(controller.getSnapshot().isSoloPreview).toBe(false);
         expect(stage.mounted.get("kanade")?.motion).toBe("w-kanade07-nod");
 
-        // Re-entering Mafuyu AFTER infoCache is populated passes initialMotion/initialFacial to addActor;
-        // SekaiLive2DStage 0.3.0 rejects missing v2 motion set with `no body motion ...`, and controller falls back cleanly!
+        // Re-entering Mafuyu AFTER infoCache is populated reuses the resolved motion set directly (zero wasted v2 retry)!
+        const attemptsBeforeReenter = stage.addAttempts.length;
         await controller.apply(makeStageState({
             actors: [
                 { cast: "mafuyu", slot: "center", x: 0, y: 0, scale: 1, mirror: false, motion: "w-normal15-nod", facial: "face_smile_01" },
             ],
         }), { instant: true });
         expect(stage.actors).toEqual(["mafuyu"]);
-        expect(stage.mounted.get("mafuyu")?.motionAsset).toBe("live2d/motion/18mafuyu_motion_base");
+        expect(stage.mounted.get("mafuyu")?.motionAsset).toBe("live2d/motion/18mafuyu_motion_base/");
+        expect(stage.addAttempts.slice(attemptsBeforeReenter)).toEqual([
+            { id: "mafuyu", asset: "live2d/model/v2_18mafuyu_casual/", motion: "live2d/motion/18mafuyu_motion_base/" },
+        ]);
         expect(stage.mounted.get("mafuyu")?.motion).toBe("w-normal15-nod");
         expect(stage.mounted.get("mafuyu")?.facial).toBe("face_smile_01");
         expect(controller.getSnapshot().problems).toEqual({});
 
         controller.dispose();
+    });
+
+    test("reuses exact resolved info.model / info.motionSet on re-entry and falls back to trailing `/` directory if cached exact path turns stale", async () => {
+        const stage = new FallbackTestStage();
+        const exactModel = "live2d/model/v2_17kanade_casual/live2d/model/v2/main/17_kanade/v2_17kanade_casual/buildmodeldata";
+        const exactMotion = "live2d/motion/v2_17kanade_motion_base/live2d/motion/v2/main/17_kanade/v2_17kanade_motion_base/buildmotiondata";
+        stage.resolvedModelMap.set("live2d/model/v2_17kanade_casual", exactModel);
+        stage.resolvedMotionMap.set("live2d/motion/v2_17kanade_motion_base", exactMotion);
+
+        const StageStatic: Live2DStageStatic = {
+            supported: async () => ({ ok: true, missing: [] }),
+            create: async () => stage,
+        };
+
+        const controller = new StoryStageController({
+            loadStage: async () => StageStatic,
+            resolveScriptBase: () => "https://example.test/live2d-viewer/",
+            resolveCoreUrl: () => "https://example.test/core.js",
+        });
+
+        controller.setContext({ cast: [CAST_KANADE], models: [] });
+        controller.setConfig({ sources: TEST_SOURCES });
+        controller.setHost(new MinimalHost());
+        await waitMs(15);
+
+        // 1. Cold load passes explicit directory trailing `/` (0 404 `.asset.json` probes!)
+        await controller.apply(makeStageState({
+            actors: [
+                { cast: "kanade", slot: "center", x: 0, y: 0, scale: 1, mirror: false, motion: "w-normal15-nod", facial: "face_smile_01" },
+            ],
+        }), { instant: true });
+        expect(stage.addAttempts[0]).toEqual({
+            id: "kanade",
+            asset: "live2d/model/v2_17kanade_casual/",
+            motion: "live2d/motion/v2_17kanade_motion_base/",
+        });
+
+        // 2. Actor leaves and re-enters -> reuses exact resolved `.../buildmodeldata` & `.../buildmotiondata` (NO trailing `/`, 0 walks!)
+        await controller.apply(makeStageState({ actors: [] }), { instant: true });
+        const attemptsBeforeWarm = stage.addAttempts.length;
+        await controller.apply(makeStageState({
+            actors: [
+                { cast: "kanade", slot: "center", x: 0, y: 0, scale: 1, mirror: false, motion: "w-kanade07-nod", facial: "face_sad_01" },
+            ],
+        }), { instant: true });
+        expect(stage.addAttempts.slice(attemptsBeforeWarm)).toEqual([
+            { id: "kanade", asset: exactModel, motion: exactMotion },
+        ]);
+
+        // 3. Simulate version rollover where cached exact paths become 404 -> falls back cleanly to explicit trailing `/` directory paths!
+        await controller.apply(makeStageState({ actors: [] }), { instant: true });
+        stage.missingModelAssets.add(exactModel);
+        stage.missingMotionAssets.add(exactMotion);
+        const attemptsBeforeStale = stage.addAttempts.length;
+        await controller.apply(makeStageState({
+            actors: [
+                { cast: "kanade", slot: "center", x: 0, y: 0, scale: 1, mirror: false, motion: "w-normal15-nod", facial: "face_smile_01" },
+            ],
+        }), { instant: true });
+        expect(stage.actors).toEqual(["kanade"]);
+        expect(stage.mounted.get("kanade")?.asset).toBe("live2d/model/v2_17kanade_casual/");
+        expect(stage.mounted.get("kanade")?.motionAsset).toBe("live2d/motion/v2_17kanade_motion_base/");
+        expect(stage.addAttempts.slice(attemptsBeforeStale)).toEqual([
+            { id: "kanade", asset: exactModel, motion: exactMotion },
+            { id: "kanade", asset: "live2d/model/v2_17kanade_casual/", motion: exactMotion },
+            { id: "kanade", asset: "live2d/model/v2_17kanade_casual/", motion: "live2d/motion/v2_17kanade_motion_base/" },
+        ]);
+        expect(controller.getSnapshot().problems).toEqual({});
+
+        controller.dispose();
+    });
+
+    test("uses exact canonical asset paths from /listings/ form index on the very first cold addActor (0 walks, 0 404s) and falls back to `/` dir if stale", async () => {
+        const VERSION = "7.1.0-stage-index";
+        const exactModel = "live2d/model/v2_17kanade_casual/live2d/model/v2/main/17_kanade/v2_17kanade_casual/buildmodeldata";
+        const exactMotion = "live2d/motion/v2_17kanade_motion_base/live2d/motion/v2/main/17_kanade/v2_17kanade_motion_base/buildmotiondata";
+        const stage = new FallbackTestStage();
+        stage.base = `https://storage.test/jp@${VERSION}/`;
+
+        const StageStatic: Live2DStageStatic = {
+            supported: async () => ({ ok: true, missing: [] }),
+            create: async () => stage,
+        };
+
+        try {
+            clearLive2DSiteCache();
+            configureStoryCore({
+                fetchImpl: (async (input: string | URL | Request) => {
+                    const url = String(input);
+                    if (url === "https://storage.test/listings/jp/canonical/live2d-model") {
+                        return new Response(JSON.stringify({
+                            format: "form-listing",
+                            version: 1,
+                            view: "canonical",
+                            published_version: VERSION,
+                            form: "live2d-model",
+                            assets: [{ name: exactModel }],
+                        }), { status: 200 });
+                    }
+                    if (url === "https://storage.test/listings/jp/canonical/live2d-motions") {
+                        return new Response(JSON.stringify({
+                            format: "form-listing",
+                            version: 1,
+                            view: "canonical",
+                            published_version: VERSION,
+                            form: "live2d-motions",
+                            assets: [{ name: exactMotion }],
+                        }), { status: 200 });
+                    }
+                    return new Response("Not Found", { status: 404 });
+                }) as unknown as typeof fetch,
+            });
+
+            await fetchLive2DFormListing(TEST_SOURCES, "live2d-model");
+            await fetchLive2DFormListing(TEST_SOURCES, "live2d-motions");
+
+            const controller = new StoryStageController({
+                loadStage: async () => StageStatic,
+                resolveScriptBase: () => "https://example.test/live2d-viewer/",
+                resolveCoreUrl: () => "https://example.test/core.js",
+            });
+
+            controller.setContext({ cast: [CAST_KANADE], models: [] });
+            controller.setConfig({ sources: TEST_SOURCES });
+            controller.setHost(new MinimalHost());
+            await waitMs(15);
+
+            // Cold first addActor uses exact `.../buildmodeldata` & `.../buildmotiondata` immediately!
+            await controller.apply(makeStageState({
+                actors: [
+                    { cast: "kanade", slot: "center", x: 0, y: 0, scale: 1, mirror: false, motion: "w-normal15-nod", facial: "face_smile_01" },
+                ],
+            }), { instant: true });
+            expect(stage.addAttempts).toEqual([
+                { id: "kanade", asset: exactModel, motion: exactMotion },
+            ]);
+            expect(controller.getSnapshot().problems).toEqual({});
+
+            controller.dispose();
+        } finally {
+            clearLive2DSiteCache();
+            resetStoryCoreConfig();
+        }
+    });
+
+    test("prefers version-matched /listings/ exact paths over stale v1 cachedInfo across crash recovery and never regresses to bare cachedInfo.model", async () => {
+        const V1 = "7.1.0-v1";
+        const V2 = "7.2.0-v2";
+        const v1Model = "live2d/model/v2_17kanade_casual/v1/buildmodeldata";
+        const v1Motion = "live2d/motion/v2_17kanade_motion_base/v1/buildmotiondata";
+        const v2Model = "live2d/model/v2_17kanade_casual/v2/buildmodeldata";
+        const v2Motion = "live2d/motion/v2_17kanade_motion_base/v2/buildmotiondata";
+
+        const stage1 = new FallbackTestStage();
+        stage1.base = `https://storage.test/jp@${V1}/`;
+        // Simulate a mock/custom stage returning bare container path for info.model on stage1
+        stage1.resolvedModelMap.set(v1Model, "live2d/model/v2_17kanade_casual");
+        stage1.resolvedMotionMap.set(v1Motion, v1Motion);
+
+        const stage2 = new FallbackTestStage();
+        stage2.base = `https://storage.test/jp@${V2}/`;
+        stage2.resolvedModelMap.set(v2Model, v2Model);
+        stage2.resolvedMotionMap.set(v2Motion, v2Motion);
+
+        const stages = [stage1, stage2];
+        let createIdx = 0;
+        const StageStatic: Live2DStageStatic = {
+            supported: async () => ({ ok: true, missing: [] }),
+            create: async () => stages[createIdx++]!,
+        };
+
+        try {
+            clearLive2DSiteCache();
+            configureStoryCore({
+                fetchImpl: (async (input: string | URL | Request) => {
+                    const url = String(input);
+                    if (url === `https://storage.test/listings/jp/canonical@${V1}/live2d-model`) {
+                        return new Response(JSON.stringify({
+                            format: "form-listing", version: 1, published_version: V1, form: "live2d-model",
+                            assets: [{ name: v1Model }],
+                        }), { status: 200 });
+                    }
+                    if (url === `https://storage.test/listings/jp/canonical@${V1}/live2d-motions`) {
+                        return new Response(JSON.stringify({
+                            format: "form-listing", version: 1, published_version: V1, form: "live2d-motions",
+                            assets: [{ name: v1Motion }],
+                        }), { status: 200 });
+                    }
+                    if (url === `https://storage.test/listings/jp/canonical@${V2}/live2d-model`) {
+                        return new Response(JSON.stringify({
+                            format: "form-listing", version: 1, published_version: V2, form: "live2d-model",
+                            assets: [{ name: v2Model }],
+                        }), { status: 200 });
+                    }
+                    if (url === `https://storage.test/listings/jp/canonical@${V2}/live2d-motions`) {
+                        return new Response(JSON.stringify({
+                            format: "form-listing", version: 1, published_version: V2, form: "live2d-motions",
+                            assets: [{ name: v2Motion }],
+                        }), { status: 200 });
+                    }
+                    return new Response("Not Found", { status: 404 });
+                }) as unknown as typeof fetch,
+            });
+
+            await fetchLive2DFormListing({ ...TEST_SOURCES, version: V1 }, "live2d-model");
+            await fetchLive2DFormListing({ ...TEST_SOURCES, version: V1 }, "live2d-motions");
+            await fetchLive2DFormListing({ ...TEST_SOURCES, version: V2 }, "live2d-model");
+            await fetchLive2DFormListing({ ...TEST_SOURCES, version: V2 }, "live2d-motions");
+
+            const controller = new StoryStageController({
+                loadStage: async () => StageStatic,
+                resolveScriptBase: () => "https://example.test/live2d-viewer/",
+                resolveCoreUrl: () => "https://example.test/core.js",
+                recoveryDelaysMs: [5],
+            });
+
+            controller.setContext({ cast: [CAST_KANADE], models: [] });
+            controller.setConfig({ sources: TEST_SOURCES });
+            controller.setHost(new MinimalHost());
+            await waitMs(15);
+
+            // 1. Mount on stage1 (V1); stage1 populates infoCache with bare `live2d/model/v2_17kanade_casual` & v1Motion.
+            await controller.apply(makeStageState({
+                actors: [{ cast: "kanade", slot: "center", x: 0, y: 0, scale: 1, mirror: false, motion: "w-normal15-nod", facial: "face_smile_01" }],
+            }), { instant: true });
+            expect(stage1.addAttempts).toEqual([{ id: "kanade", asset: v1Model, motion: v1Motion }]);
+
+            // 2. Re-enter on stage1 (V1): bare cachedInfo.model must NOT overwrite V1's exact `/listings/` path!
+            await controller.apply(makeStageState({ actors: [] }), { instant: true });
+            await controller.apply(makeStageState({
+                actors: [{ cast: "kanade", slot: "center", x: 0, y: 0, scale: 1, mirror: false, motion: "w-normal15-nod", facial: "face_smile_01" }],
+            }), { instant: true });
+            expect(stage1.addAttempts[1]).toEqual({ id: "kanade", asset: v1Model, motion: v1Motion });
+
+            // 3. Crash stage1 -> recover onto stage2 (V2): V2's exact `/listings/` paths MUST win over stale V1 cachedInfo!
+            stage1.dispatchEvent(new CustomEvent("error", { detail: { message: "GPU lost", kind: "internal" } }));
+            await waitMs(40);
+            expect(stage2.addAttempts).toEqual([{ id: "kanade", asset: v2Model, motion: v2Motion }]);
+            expect(controller.getSnapshot().problems).toEqual({});
+
+            controller.dispose();
+        } finally {
+            clearLive2DSiteCache();
+            resetStoryCoreConfig();
+        }
     });
 
     test("surfaces diagnostic message & url when host serves viewer release without stage.js", async () => {

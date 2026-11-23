@@ -20,6 +20,7 @@ import { inferLive2DMotionBundleCandidates, type Live2DModel } from "../live2d/m
 import {
     getCachedLive2DAssetDocument,
     getCachedLive2DSiteBase,
+    live2dDirectoryPath,
     live2dMemberUrl,
     live2dSiteListingUrl,
     resolveLive2DAssetDocument,
@@ -505,7 +506,26 @@ function cloneProgress(state: StoryPreloadProgress): StoryPreloadProgress {
     };
 }
 
-async function storeAssetDocInBrowserCache(cache: Cache | null, resolved: ResolvedLive2DAssetDocument): Promise<void> {
+function normalizeCacheAssetPath(path: string): string {
+    return path.trim().replace(/^\/+|\/+$/g, "").replace(/\.asset\.json$/i, "");
+}
+
+function assetResolveCacheUrl(
+    baseUrl: string,
+    containerPath: string,
+    form: string,
+    proxy?: string,
+): string {
+    const cleanBase = baseUrl.trim().replace(/\/+$/, "");
+    const url = `${cleanBase}/${encodePath(containerPath)}/?sekai-asset-resolve=${encodeURIComponent(form)}`;
+    return proxy ? live2dFetchUrl(url, proxy) : url;
+}
+
+async function storeAssetDocInBrowserCache(
+    cache: Cache | null,
+    resolved: ResolvedLive2DAssetDocument,
+    containerPath?: string,
+): Promise<void> {
     if (!cache) return;
     try {
         const existing = await cache.match(resolved.url);
@@ -517,6 +537,25 @@ async function storeAssetDocInBrowserCache(cache: Cache | null, resolved: Resolv
                 }),
             );
         }
+        const cleanContainer = containerPath ? normalizeCacheAssetPath(containerPath) : "";
+        const cleanResolved = normalizeCacheAssetPath(resolved.assetPath ?? resolved.doc.name);
+        if (cleanContainer && cleanResolved && cleanResolved.startsWith(`${cleanContainer}/`)) {
+            const resolveUrl = assetResolveCacheUrl(
+                resolved.baseUrl,
+                cleanContainer,
+                resolved.doc.form,
+                resolved.proxy,
+            );
+            const existingResolve = await cache.match(resolveUrl);
+            if (!existingResolve) {
+                await cache.put(
+                    resolveUrl,
+                    new Response(JSON.stringify({ asset: cleanResolved }), {
+                        headers: { "Content-Type": "application/json" },
+                    }),
+                );
+            }
+        }
     } catch {
         // Ignore private-mode / quota Cache API failures.
     }
@@ -526,7 +565,7 @@ async function resolveMotionDocForItem(
     pinnedSources: Live2DSources,
     item: StoryPreloadLive2DItem,
     signal?: AbortSignal,
-): Promise<ResolvedLive2DAssetDocument | null> {
+): Promise<{ resolved: ResolvedLive2DAssetDocument; containerPath: string } | null> {
     const candidates: string[] = [];
     if (item.motionAsset) candidates.push(item.motionAsset);
     if (item.motions.length > 0 || item.facials.length > 0) {
@@ -537,8 +576,13 @@ async function resolveMotionDocForItem(
     for (const candidate of candidates) {
         if (signal?.aborted) return null;
         try {
-            const resolved = await resolveLive2DAssetDocument(pinnedSources, candidate, "live2d-motions", signal);
-            if (resolved) return resolved;
+            const resolved = await resolveLive2DAssetDocument(
+                pinnedSources,
+                live2dDirectoryPath(candidate),
+                "live2d-motions",
+                signal,
+            );
+            if (resolved) return { resolved, containerPath: candidate };
         } catch {
             // Try next candidate
         }
@@ -664,8 +708,8 @@ export async function preloadStoryAssets(
         } else {
             const activeSources = pinnedSources;
             await runPool(manifest.live2d, PRELOAD_CONCURRENCY, signal, async (item) => {
-                const [modelResolved, motionResolved] = await Promise.all([
-                    resolveLive2DAssetDocument(activeSources, item.asset, "live2d-model", signal).catch(() => null),
+                const [modelResolved, motionHit] = await Promise.all([
+                    resolveLive2DAssetDocument(activeSources, live2dDirectoryPath(item.asset), "live2d-model", signal).catch(() => null),
                     resolveMotionDocForItem(activeSources, item, signal),
                 ]);
                 if (signal?.aborted) return;
@@ -674,7 +718,7 @@ export async function preloadStoryAssets(
                     return;
                 }
 
-                await storeAssetDocInBrowserCache(live2dCache, modelResolved);
+                await storeAssetDocInBrowserCache(live2dCache, modelResolved, item.asset);
 
                 for (const member of selectModelMembers(modelResolved.doc.members)) {
                     const url = live2dMemberUrl(
@@ -692,8 +736,9 @@ export async function preloadStoryAssets(
                     });
                 }
 
-                if (motionResolved) {
-                    await storeAssetDocInBrowserCache(live2dCache, motionResolved);
+                if (motionHit) {
+                    const { resolved: motionResolved, containerPath: motionContainerPath } = motionHit;
+                    await storeAssetDocInBrowserCache(live2dCache, motionResolved, motionContainerPath);
                     const motionMembers = new Map<string, AssetSiteMember>();
                     const facialMembers = new Map<string, AssetSiteMember>();
                     for (const member of motionResolved.doc.members) {
@@ -902,7 +947,10 @@ export async function inspectStoryCacheStatus(
                 if (await caches.has(LIVE2D_CACHE_NAME)) {
                     const cache = await caches.open(LIVE2D_CACHE_NAME);
                     const keys = await cache.keys();
-                    const urls = keys.map(req => req.url);
+                    // Exclude synthetic resolution-pointer entries (query-tagged `dir -> asset`
+                    // cache markers written by SekaiLive2DViewer/Stage) so a pointer alone never
+                    // reports an uncached model's binary members as ready.
+                    const urls = keys.map(req => req.url).filter(u => !u.includes("?"));
                     const cleanSite = manifest.live2dSources.site.replace(/\/+$/, "");
                     const regionVersionPrefix = live2dFetchUrl(
                         `${cleanSite}/${encodeURIComponent(manifest.live2dSources.region)}@`,
@@ -969,7 +1017,7 @@ export async function inspectStoryCacheStatus(
                         }
                         try {
                             const resolved = getCachedLive2DAssetDocument(manifest.live2dSources, item.asset, "live2d-model")
-                                ?? await resolveLive2DAssetDocument(manifest.live2dSources, item.asset, "live2d-model");
+                                ?? await resolveLive2DAssetDocument(manifest.live2dSources, live2dDirectoryPath(item.asset), "live2d-model");
                             if (!resolved) return false;
                             const mocMember = resolved.doc.members.find(m => m.role === "moc");
                             const probeUrl = mocMember

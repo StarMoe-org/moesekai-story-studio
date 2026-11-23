@@ -1,6 +1,10 @@
 import {
     computeActorRenderOrders,
+    getCachedLive2DAssetDocument,
+    live2dAssetRequestPath,
     live2dCoreUrl,
+    live2dDirectoryPath,
+    live2dFetchUrl,
     STORY_FADE_SECONDS,
     type Live2DModel,
     type Live2DSources,
@@ -227,13 +231,58 @@ function isStageDestroyedError(error: unknown): boolean {
     return /stage is destroyed|stage was destroyed/i.test(message);
 }
 
+function trimAssetSlashes(path: string): string {
+    return path.trim().replace(/^\/+|\/+$/g, "");
+}
+
+function containerDirectoryFallback(assetPath: string): string {
+    const clean = trimAssetSlashes(assetPath);
+    const match = /^(live2d\/(?:model|motion)\/[^/]+)\/.+$/.exec(clean);
+    if (match) return `${match[1]}/`;
+    return live2dDirectoryPath(assetPath);
+}
+
+function extractVersionFromStageBase(stageBase: string | null | undefined, region: string): string | undefined {
+    if (!stageBase) return undefined;
+    const clean = stageBase.trim().replace(/\/+$/, "");
+    const marker = `/${encodeURIComponent(region)}@`;
+    const idx = clean.lastIndexOf(marker);
+    if (idx < 0) return undefined;
+    const encodedVersion = clean.slice(idx + marker.length).split("/")[0];
+    if (!encodedVersion) return undefined;
+    try {
+        return decodeURIComponent(encodedVersion);
+    } catch {
+        return encodedVersion;
+    }
+}
+
+function isResolvedChildOrSame(candidatePath: string, containerPath: string): boolean {
+    const cleanCandidate = trimAssetSlashes(candidatePath);
+    const cleanContainer = trimAssetSlashes(containerPath);
+    if (!cleanCandidate || !cleanContainer) return false;
+    return cleanCandidate === cleanContainer || cleanCandidate.startsWith(`${cleanContainer}/`);
+}
+
+function stageBaseMatchesCachedDoc(
+    stageBase: string | null | undefined,
+    docBaseUrl: string,
+    proxy?: string,
+): boolean {
+    if (!stageBase) return false;
+    const expected = live2dFetchUrl(docBaseUrl, proxy ?? null).replace(/\/+$/, "");
+    return stageBase.trim().replace(/\/+$/, "") === expected;
+}
+
 function isMotionAssetNotFoundError(error: unknown, triedMotion: string | null): boolean {
     if (!triedMotion || !error || typeof error !== "object") return false;
     const detail = error as { kind?: unknown; url?: unknown; message?: unknown };
     if (detail.kind !== "not-found") return false;
     const haystack = `${String(detail.url ?? "")} ${String(detail.message ?? "")}`;
-    const encoded = triedMotion.split("/").map(encodeURIComponent).join("/");
-    return haystack.includes(triedMotion)
+    const bare = trimAssetSlashes(triedMotion);
+    if (!bare) return false;
+    const encoded = bare.split("/").map(encodeURIComponent).join("/");
+    return haystack.includes(bare)
         || haystack.includes(encoded)
         || haystack.includes("/live2d/motion/");
 }
@@ -1461,9 +1510,112 @@ export class StoryStageController {
         resolved: ResolvedLive2DModelBundles,
         placement: Live2DActorPlacement & { motion?: string; facial?: string },
         onProgress?: (progress: { loaded: number; total: number }) => void,
+        cachedInfo?: Live2DActorInfo,
     ): Promise<Live2DActorInfo> {
-        const motionSequence: Array<string | null> = resolved.motion !== null
-            ? [resolved.motion, ...resolved.fallbackMotionCandidates, null]
+        const baseSources = this.config.sources;
+        const stageVersion = baseSources ? extractVersionFromStageBase(activeStage.base, baseSources.region) : undefined;
+        const lookupSources: Live2DSources | null = baseSources
+            ? (stageVersion ? { ...baseSources, version: stageVersion } : baseSources)
+            : null;
+
+        const fallbackModelAsset = containerDirectoryFallback(resolved.asset);
+        // Priority for model asset path:
+        // 1. Version-matched `/listings/` exact path (`lookupSources` pinned to `stage.base` version)
+        // 2. `stage.base`-matched pre-resolved `story-core` document exact path
+        // 3. Previously resolved exact `cachedInfo.model` (never overwriting an exact path with a bare dir)
+        // 4. Latest unversioned `/listings/` exact path
+        // 5. Explicit trailing `/` directory fallback (`fallbackModelAsset`)
+        let activeModelAsset = live2dAssetRequestPath(lookupSources, resolved.asset, "live2d-model");
+        if (activeModelAsset === fallbackModelAsset && baseSources && activeStage.base) {
+            const preResolvedModel = getCachedLive2DAssetDocument(baseSources, resolved.asset, "live2d-model");
+            const preResolvedModelPath = preResolvedModel ? (preResolvedModel.assetPath ?? preResolvedModel.doc.name) : null;
+            if (
+                preResolvedModel
+                && preResolvedModelPath
+                && stageBaseMatchesCachedDoc(activeStage.base, preResolvedModel.baseUrl, preResolvedModel.proxy)
+                && isResolvedChildOrSame(preResolvedModelPath, resolved.asset)
+            ) {
+                const candidate = live2dDirectoryPath(preResolvedModelPath);
+                if (candidate && candidate !== fallbackModelAsset) {
+                    activeModelAsset = candidate;
+                }
+            }
+        }
+        if (
+            activeModelAsset === fallbackModelAsset
+            && cachedInfo?.model
+            && isResolvedChildOrSame(cachedInfo.model, resolved.asset)
+        ) {
+            const cachedCandidate = live2dDirectoryPath(cachedInfo.model);
+            if (cachedCandidate && cachedCandidate !== fallbackModelAsset) {
+                activeModelAsset = cachedCandidate;
+            }
+        }
+        if (activeModelAsset === fallbackModelAsset && baseSources && stageVersion) {
+            const latestIndexed = live2dAssetRequestPath(baseSources, resolved.asset, "live2d-model");
+            if (latestIndexed && latestIndexed !== fallbackModelAsset) {
+                activeModelAsset = latestIndexed;
+            }
+        }
+
+        const rawOrderedMotions = resolved.motion !== null
+            ? [resolved.motion, ...resolved.fallbackMotionCandidates]
+            : [];
+        const motionCandidates: string[] = [];
+        const seenMotions = new Set<string>();
+        const pushMotion = (raw: string | null | undefined) => {
+            if (!raw) return;
+            const formatted = live2dDirectoryPath(raw);
+            if (formatted && !seenMotions.has(formatted)) {
+                seenMotions.add(formatted);
+                motionCandidates.push(formatted);
+            }
+        };
+        // Pass 1: Version-matched exact motion paths from `/listings/` and `stage.base`-matched `story-core` cache
+        //         take precedence over potentially stale `cachedInfo.motionSet` from an older stage version.
+        for (const base of rawOrderedMotions) {
+            const fallbackDir = containerDirectoryFallback(base);
+            const preferred = live2dAssetRequestPath(lookupSources, base, "live2d-motions");
+            if (preferred && preferred !== fallbackDir) {
+                pushMotion(preferred);
+            }
+            if (baseSources && activeStage.base) {
+                const preResolvedMotion = getCachedLive2DAssetDocument(baseSources, base, "live2d-motions");
+                const preResolvedMotionPath = preResolvedMotion ? (preResolvedMotion.assetPath ?? preResolvedMotion.doc.name) : null;
+                if (
+                    preResolvedMotion
+                    && preResolvedMotionPath
+                    && stageBaseMatchesCachedDoc(activeStage.base, preResolvedMotion.baseUrl, preResolvedMotion.proxy)
+                    && isResolvedChildOrSame(preResolvedMotionPath, base)
+                ) {
+                    const candidate = live2dDirectoryPath(preResolvedMotionPath);
+                    if (candidate && candidate !== fallbackDir) {
+                        pushMotion(candidate);
+                    }
+                }
+            }
+        }
+        // Pass 2: Previously working `cachedInfo.motionSet` (exact path or winning fallback set).
+        if (
+            cachedInfo?.motionSet
+            && rawOrderedMotions.some(base => isResolvedChildOrSame(cachedInfo.motionSet!, base))
+        ) {
+            pushMotion(cachedInfo.motionSet);
+        }
+        // Pass 3: Latest unversioned `/listings/` exact paths followed by explicit trailing `/` directory fallbacks.
+        for (const base of rawOrderedMotions) {
+            const fallbackDir = containerDirectoryFallback(base);
+            if (baseSources && stageVersion) {
+                const latestPreferred = live2dAssetRequestPath(baseSources, base, "live2d-motions");
+                if (latestPreferred && latestPreferred !== fallbackDir) {
+                    pushMotion(latestPreferred);
+                }
+            }
+            pushMotion(fallbackDir);
+        }
+
+        const motionSequence: Array<string | null> = motionCandidates.length > 0
+            ? [...motionCandidates, null]
             : [null];
         const stripClips = (p: Live2DActorPlacement & { motion?: string; facial?: string }) => {
             const stripped = { ...p };
@@ -1471,18 +1623,19 @@ export class StoryStageController {
             delete stripped.facial;
             return stripped;
         };
+        let retriedModelDirFallback = false;
         let lastError: unknown = null;
         for (let i = 0; i < motionSequence.length; i += 1) {
             const motionAsset = motionSequence[i] ?? null;
             const nextCandidate = motionSequence[i + 1] ?? null;
             const nextPlacement = motionAsset !== null ? placement : stripClips(placement);
-            if (i > 0) {
+            if (i > 0 || retriedModelDirFallback) {
                 onProgress?.({ loaded: 0, total: 0 });
             }
             try {
                 const info = await activeStage.addActor(
                     actorId,
-                    { asset: resolved.asset, motion: motionAsset },
+                    { asset: activeModelAsset, motion: motionAsset },
                     nextPlacement,
                     onProgress,
                 );
@@ -1513,6 +1666,18 @@ export class StoryStageController {
                 if (i < motionSequence.length - 1 && isMotionAssetNotFoundError(err, motionAsset)) {
                     continue;
                 }
+                // If a cached exact model path (e.g. `.../buildmodeldata`) became stale after a version
+                // rollover or crash recovery, fall back once to the explicit directory path (`live2d/model/<id>/`).
+                if (
+                    !retriedModelDirFallback
+                    && activeModelAsset !== fallbackModelAsset
+                    && (err as { kind?: unknown })?.kind === "not-found"
+                ) {
+                    retriedModelDirFallback = true;
+                    activeModelAsset = fallbackModelAsset;
+                    i -= 1;
+                    continue;
+                }
                 // In SekaiLive2DStage 0.3.0, a missing motion set resolves to `motions: []`, which causes
                 // an explicit `placement.motion`/`placement.facial` to reject with `no body motion/facial <name>`.
                 if (motionAsset !== null && isMotionClipMismatchError(err)) {
@@ -1523,7 +1688,7 @@ export class StoryStageController {
                         onProgress?.({ loaded: 0, total: 0 });
                         return await activeStage.addActor(
                             actorId,
-                            { asset: resolved.asset, motion: motionAsset },
+                            { asset: activeModelAsset, motion: motionAsset },
                             stripClips(nextPlacement),
                             onProgress,
                         );
@@ -1775,6 +1940,7 @@ export class StoryStageController {
                                 state.total = Math.max(0, progress.total);
                                 publishBatchProgress();
                             },
+                            cached,
                         );
 
                         if (this.stage !== activeStage || this.disposed) return;
@@ -2046,6 +2212,7 @@ export class StoryStageController {
                     };
                     this.emit();
                 },
+                cached,
             );
 
             if (this.stage !== activeStage || this.disposed) return;

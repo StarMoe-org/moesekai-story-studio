@@ -561,7 +561,7 @@ describe("StoryStageController — first-class 0-actor Solo / Audition Preview",
         await controller.previewClip(CAST_KANADE, { motion: "w-nod01" });
         expect(controller.getSnapshot().previewingCastKey).toBe("kanade");
         expect(stage.actors).toEqual([SOLO_PREVIEW_ACTOR_ID]);
-        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/17_kanade");
+        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/17_kanade/");
 
         // Exit solo preview: cleanly returns to 0 actors on stage!
         controller.clearClipPreview();
@@ -668,7 +668,7 @@ describe("StoryStageController — first-class 0-actor Solo / Audition Preview",
 
         const stage = latestStage()!;
         expect(stage.actors).toEqual([SOLO_PREVIEW_ACTOR_ID]);
-        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/17_kanade");
+        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/17_kanade/");
         expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.motion).toBe("w-wave01");
         expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.facial).toBe("face_smile");
         controller.dispose();
@@ -753,7 +753,7 @@ describe("StoryStageController — crash recovery, state replay & error classifi
         expect(controller.getSnapshot().phase.kind).toBe("ready");
         expect(controller.getSnapshot().isSoloPreview).toBe(true);
         expect(stage2.actors).toEqual([SOLO_PREVIEW_ACTOR_ID]);
-        expect(stage2.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/17_kanade");
+        expect(stage2.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/17_kanade/");
         expect(stage2.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.motion).toBe("w-wave01");
         expect(stage2.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.facial).toBe("face_surprise");
         controller.dispose();

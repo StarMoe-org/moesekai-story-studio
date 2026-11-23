@@ -2,7 +2,11 @@ import { getCoreFetch, getStoryCoreConfig } from "../config";
 import { getAssetBaseUrl, type AssetLine } from "../pjskAssets";
 import { hasExplicitLive2DSite, live2dSources, type Live2DRegion } from "./config";
 import { live2dModelsFromListings, type Live2DModel } from "./models";
-import { live2dSiteListingUrl } from "./site";
+import {
+    extractLive2DFormContainerIds,
+    fetchLive2DFormListing,
+    live2dSiteListingUrl,
+} from "./site";
 
 /** Network loaders for a server's Live2D model catalog and story background listings. */
 
@@ -53,6 +57,21 @@ async function fetchDirectorySubdirectories(url: string): Promise<string[] | nul
         : [];
 }
 
+async function fetchModelsFromFormListingsOnLine(region: Live2DRegion, line: AssetLine): Promise<Live2DModel[] | null> {
+    const sources = live2dSources(region, line);
+    const [modelListing, motionListing] = await Promise.all([
+        fetchLive2DFormListing(sources, "live2d-model"),
+        fetchLive2DFormListing(sources, "live2d-motions").catch(() => null),
+    ]);
+    if (!modelListing) return null;
+    const modelDirs = extractLive2DFormContainerIds("live2d-model", modelListing.assets);
+    if (modelDirs.length === 0) return null;
+    const motionDirs = motionListing
+        ? extractLive2DFormContainerIds("live2d-motions", motionListing.assets)
+        : (await fetchDirectorySubdirectories(live2dSiteListingUrl(sources, "live2d/motion/")).catch(() => null) ?? []);
+    return live2dModelsFromListings(modelDirs, motionDirs);
+}
+
 async function fetchModelsFromListingsOnLine(region: Live2DRegion, line: AssetLine): Promise<Live2DModel[] | null> {
     const sources = live2dSources(region, line);
     const [modelDirs, motionDirs] = await Promise.all([
@@ -63,12 +82,38 @@ async function fetchModelsFromListingsOnLine(region: Live2DRegion, line: AssetLi
     return live2dModelsFromListings(modelDirs, motionDirs ?? []);
 }
 
+async function fetchModelsOnLine(region: Live2DRegion, line: AssetLine): Promise<Live2DModel[] | null> {
+    let formError: unknown = null;
+    try {
+        const fromForms = await fetchModelsFromFormListingsOnLine(region, line);
+        if (fromForms && fromForms.length > 0) return fromForms;
+    } catch (err) {
+        formError = err;
+    }
+
+    try {
+        const fromDirs = await fetchModelsFromListingsOnLine(region, line);
+        if (fromDirs && fromDirs.length > 0) return fromDirs;
+    } catch (err) {
+        throw err;
+    }
+
+    if (formError) throw formError;
+    return null;
+}
+
 /**
- * A server's Live2D models, resolved from canonical asset-site directory listings
- * (`/<region>/live2d/model/` and `/<region>/live2d/motion/`), with automatic backup-line fallback
- * when using the default storage asset domains.
+ * A server's Live2D models, preferring canonical `sekai-serve` form listings
+ * (`<site>/listings/<region>/canonical/live2d-{model,motions}`, seeding the exact
+ * `dirPath -> .../build*data` asset index and `published_version` in one pass) and falling back
+ * gracefully to directory listings (`/<region>/live2d/{model,motion}/`) and the backup asset line
+ * when using default storage domains.
  *
- * Returns `[]` when directory listings are not published (404).
+ * `Live2DModel.{asset,motion,motions}` remain bare (`live2d/model/<id>`, `live2d/motion/<set>`)
+ * for backwards compatibility; pass paths through `live2dAssetRequestPath(sources, path)` when
+ * calling `SekaiLive2DViewer` or `SekaiLive2DStage`.
+ *
+ * Returns `[]` when listings are not published (404).
  * Cached per `${region}|${primaryUrl}|${backupUrl}` (retries on rejection).
  */
 export function fetchLive2DModels(region: Live2DRegion, signal?: AbortSignal): Promise<Live2DModel[]> {
@@ -90,7 +135,7 @@ export function fetchLive2DModels(region: Live2DRegion, signal?: AbortSignal): P
         const loading = (async (): Promise<Live2DModel[]> => {
             let lastError: unknown = null;
             try {
-                const listed = await fetchModelsFromListingsOnLine(region, primaryLine);
+                const listed = await fetchModelsOnLine(region, primaryLine);
                 if (listed && listed.length > 0) return listed;
             } catch (err) {
                 lastError = err;
@@ -98,7 +143,7 @@ export function fetchLive2DModels(region: Live2DRegion, signal?: AbortSignal): P
 
             if (canFallback) {
                 try {
-                    const backupListed = await fetchModelsFromListingsOnLine(region, backupLine);
+                    const backupListed = await fetchModelsOnLine(region, backupLine);
                     if (backupListed && backupListed.length > 0) return backupListed;
                 } catch (err) {
                     lastError ??= err;

@@ -564,6 +564,28 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
             ),
         ).toEqual({ category: "live2d", isDynamic: false });
 
+        // Version-pinned canonical form listings are immutable (long TTL); unpinned form listings are mutable (short TTL)
+        expect(
+            classifyAsset(
+                new URL("https://storage.pjsk.moe/listings/jp/canonical@7.1.0.70-abc/live2d-model"),
+            ),
+        ).toEqual({ category: "metadata", isDynamic: false });
+        expect(
+            classifyAsset(
+                new URL("https://storage.exmeaning.com/listings/en/canonical@6.1.50.1-def/live2d-motions"),
+            ),
+        ).toEqual({ category: "metadata", isDynamic: false });
+        expect(
+            classifyAsset(
+                new URL("https://storage.pjsk.moe/listings/jp/canonical/live2d-model"),
+            ),
+        ).toEqual({ category: "metadata", isDynamic: true });
+        expect(
+            classifyAsset(
+                new URL("https://storage.pjsk.moe/listings/jp/canonical"),
+            ),
+        ).toEqual({ category: "metadata", isDynamic: true });
+
         // Unpinned canonical directory listings are mutable (short TTL)
         expect(classifyAsset(new URL("https://storage.pjsk.moe/jp/"))).toEqual({
             category: "metadata",
@@ -601,10 +623,14 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
         });
 
         const unpinnedListingUrl = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp/`;
+        const unpinnedFormListingUrl = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/listings/jp/canonical/live2d-model`;
+        const pinnedFormListingUrl = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/listings/jp/canonical@7.1.0.70-abc/live2d-model`;
         const pinnedAssetDocUrl = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata.asset.json`;
         const pinnedClipUrl = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/motion/01ichika_motion_base/buildmotiondata/motion/w-normal-nod01.json`;
 
         await (await cache.handleRequest(new Request(unpinnedListingUrl))).text();
+        await (await cache.handleRequest(new Request(unpinnedFormListingUrl))).text();
+        await (await cache.handleRequest(new Request(pinnedFormListingUrl))).text();
         await (await cache.handleRequest(new Request(pinnedAssetDocUrl))).text();
         await (await cache.handleRequest(new Request(pinnedClipUrl))).text();
 
@@ -613,6 +639,10 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
 
         const listingAfter = await cache.handleRequest(new Request(unpinnedListingUrl));
         expect(listingAfter.headers.get("X-MoeSekai-Cache")).toBe("STALE");
+        const unpinnedFormAfter = await cache.handleRequest(new Request(unpinnedFormListingUrl));
+        expect(unpinnedFormAfter.headers.get("X-MoeSekai-Cache")).toBe("STALE");
+        const pinnedFormAfter = await cache.handleRequest(new Request(pinnedFormListingUrl));
+        expect(pinnedFormAfter.headers.get("X-MoeSekai-Cache")).toBe("HIT");
         await listingAfter.text();
 
         const pinnedAssetAfter = await cache.handleRequest(new Request(pinnedAssetDocUrl));
