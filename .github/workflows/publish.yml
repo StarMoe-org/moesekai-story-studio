@@ -156,11 +156,17 @@ jobs:
 
       - name: Build & package desktop installers (${{ matrix.platform }})
         working-directory: apps/desktop
+        shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          TARGET_PLATFORM: ${{ matrix.platform }}
         run: |
           bun run build
-          bunx electron-builder --config electron-builder.yml -c.linux.executableName=moesekai-story-studio --publish never
+          if [ "$TARGET_PLATFORM" = "linux" ]; then
+            bunx electron-builder --config electron-builder.yml -c.linux.executableName=moesekai-story-studio --publish never
+          else
+            bunx electron-builder --config electron-builder.yml --publish never
+          fi
 
       - name: Collect installer artifacts
         shell: bash
