@@ -1,6 +1,6 @@
 {
   "name": "@moesekai/story-editor",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "MoeSekai Story Studio React editor, player, Live2D stage, MD3 Expressive primitives, and 5-locale dictionaries",
   "type": "module",
   "license": "MPL-2.0",
@@ -96,7 +96,7 @@
     "node": ">=20"
   },
   "peerDependencies": {
-    "@moesekai/story-core": "^0.1.4",
+    "@moesekai/story-core": "^0.2.0",
     "framer-motion": "^12.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

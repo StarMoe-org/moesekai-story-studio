@@ -4,6 +4,20 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-24
+
+### Breaking Changes
+- **Retired `assets.pjsk.moe` Live2D Library Contracts (`@moesekai/story-core`, `@moesekai/story-editor`, `@moesekai/story-agent`)**: Removed legacy `live2dLibraryBase` / `live2dIndexBase` / `libraryBaseUrl` options, `models.json` / `_ripper.json` / `ripper.lock` parsers, `sekai-live2d-v1` cache keys, and `model.bytes` fields in favor of canonical `Live2DSources` (`{ site, region, version?, proxy? }`) and `model.asset` / `model.motion` references.
+- **Host-Served Live2D Viewer Runtime (`@moesekai/story-editor`)**: Removed bundled `SekaiLive2DViewer` WASM/worker assets and the `./live2d-viewer/*` subpath export from `@moesekai/story-editor`. Host applications now serve their own vendored `SekaiLive2DViewer` release and configure `live2dScriptBase` (with optional `live2dScriptVersion` and `live2dSources`) via `<StoryStudioProvider>`.
+
+### Added
+- **Unified Canonical `storage.pjsk.moe` Live2D Module (`@moesekai/story-core`)**: Consolidated Live2D site configuration (`live2dSite`, `live2dSources`, `normalizeLive2DSiteUrl`), published-version resolution, directory listing, model/motion pairing, sub-character naming, clip catalog loading, and client utilities into `@moesekai/story-core` as the single source of truth across Web, Desktop, Agent, and CLI skills, with automatic `storage.pjsk.moe` (main) / `storage.exmeaning.com` (backup) switching and ESM `"default"` export conditions.
+- **Desktop Host `SekaiLive2DViewer 0.3.0` (`apps/desktop`)**: Vendored `SekaiLive2DViewer 0.3.0` (`8f0235c97ec5`) under `apps/desktop/vendor/live2d-viewer/` and wired Desktop's `moesekai-app://` host protocol, Vite dev server, and `electron-builder` packaging to serve `viewer.js`, `stage.js`, workers, and WASM directly.
+
+### Changed
+- **Live2D Asset-Site Migration Across Preloader, Agent, Exporter & Skill**: Migrated `StoryPreloader` (`sekai-live2d-v2`), `@moesekai/story-agent` live validator & official story tooling, Desktop `.msk` exporter, and `skills/moesekai-story-script` (`official-story.mjs`, `validate-msk.mjs`, `msk-core.mjs`) to canonical `storage.pjsk.moe` `live2d/model` and `live2d/motion` endpoints, with graceful fallback when a host serves a viewer release without `stage.js`. *(Note: the `sekai-story-search` endpoint remains unchanged.)*
+- **Desktop Disk Asset Cache Allowlist & Stale Pruning (`apps/desktop`)**: Removed retired `assets.pjsk.moe` from the `moesekai-cache://` persistent disk cache host allowlist and added automatic pruning of legacy `assets.pjsk.moe` cache entries and orphan blobs on index load.
+
 ## [0.1.4] - 2026-11-23
 
 ### Added
