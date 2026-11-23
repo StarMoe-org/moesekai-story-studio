@@ -50,6 +50,12 @@ export interface StoryCoreConfig {
     fetchImpl: typeof fetch | null;
     /** Optional host-injected masterdata fetcher (e.g. Web's IndexedDB-cached `fetchMasterDataForServer`). */
     masterDataFetcher: MasterDataFetcher | null;
+    /**
+     * Optional host callback (e.g. Electron persistent disk cache) checking whether URL prefixes
+     * are already cached locally without making network requests. Used by `inspectStoryCacheStatus()`
+     * for custom protocols (`moesekai-cache://`) that Chromium's Cache Storage API does not support.
+     */
+    checkCachedUrlPrefixes: ((prefixes: readonly string[]) => Promise<boolean[]> | boolean[]) | null;
 }
 
 export const DEFAULT_STORY_CORE_CONFIG: Readonly<StoryCoreConfig> = Object.freeze({
@@ -70,6 +76,7 @@ export const DEFAULT_STORY_CORE_CONFIG: Readonly<StoryCoreConfig> = Object.freez
     sseWebFontBase: null,
     fetchImpl: null,
     masterDataFetcher: null,
+    checkCachedUrlPrefixes: null,
 });
 
 let currentConfig: StoryCoreConfig = { ...DEFAULT_STORY_CORE_CONFIG };

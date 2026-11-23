@@ -338,6 +338,7 @@ export const storyMakerMessages = {
         "starting": "Live2D ステージを起動中…",
         "recovering": "Live2D ステージを復旧中…",
         "loadingModels": "Live2D モデルを読み込み中…",
+        "loadingModelsProgress": "Live2D モデルを読み込み中 ({completed}/{total})",
         "unavailable": "Live2D マルチステージ未対応ビルド",
         "unavailableDescription": "このビルドには Live2D ステージ（stage.js）が含まれていないためアイコン表示で動作します。",
         "unavailableBanner": "Live2D ステージ（stage.js）未同梱のためアイコン表示で動作します。編集・再生・.msk 書き出しは利用可能です。",

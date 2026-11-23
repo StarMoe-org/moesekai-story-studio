@@ -21,7 +21,8 @@ var DEFAULT_STORY_CORE_CONFIG = Object.freeze({
   sseWebAssetProxy: null,
   sseWebFontBase: null,
   fetchImpl: null,
-  masterDataFetcher: null
+  masterDataFetcher: null,
+  checkCachedUrlPrefixes: null
 });
 var currentConfig = { ...DEFAULT_STORY_CORE_CONFIG };
 function getStoryCoreConfig() {

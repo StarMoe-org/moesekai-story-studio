@@ -338,6 +338,7 @@ export const storyMakerMessages = {
         "starting": "Live2D 무대 시작 중…",
         "recovering": "Live2D 무대를 복구하는 중…",
         "loadingModels": "Live2D 모델 불러오는 중…",
+        "loadingModelsProgress": "Live2D 모델 불러오는 중 ({completed}/{total})",
         "unavailable": "Live2D 멀티 무대 미지원 빌드",
         "unavailableDescription": "현재 빌드에 Live2D 무대(stage.js)가 없어 아이콘 미리보기로 표시합니다.",
         "unavailableBanner": "Live2D 무대(stage.js)가 없어 아이콘 모드로 표시합니다. 편집, 재생, 오디오 및 .msk 내보내기는 정상 작동합니다.",

@@ -338,6 +338,7 @@ export const storyMakerMessages = {
         "starting": "正在启动 Live2D 舞台…",
         "recovering": "正在恢复 Live2D 舞台…",
         "loadingModels": "正在加载角色模型…",
+        "loadingModelsProgress": "正在加载角色模型 ({completed}/{total})",
         "unavailable": "Live2D 多人舞台暂未就绪",
         "unavailableDescription": "当前构建未包含 Live2D 舞台脚本（stage.js），已切换为头像站位预览。",
         "unavailableBanner": "当前构建未内置 Live2D 舞台（stage.js），已降级为头像站位模式；编辑、播放与 .msk 导出正常可用。",

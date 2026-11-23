@@ -386,4 +386,132 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
         expect(reloaded.assetCacheMaxMb).toBe(4096);
         expect(reloaded.stageRenderQuality).toBe("ultra");
     });
+
+    it("handles 32 concurrent overlapping and distinct asset fetches on Windows without stream/rename failures", async () => {
+        const cacheDir = makeTempDir();
+        const upstreamCounts = new Map<string, number>();
+
+        const mockFetch = (async (input: string | URL | Request) => {
+            const url = String(input);
+            upstreamCounts.set(url, (upstreamCounts.get(url) ?? 0) + 1);
+            // Small jitter so many writers finish and flush concurrently
+            await new Promise(resolve => setTimeout(resolve, 10 + (url.length % 15)));
+            const body = Buffer.from(`payload-for:${url}:`.repeat(256), "utf8");
+            return new Response(new Uint8Array(body), {
+                status: 200,
+                headers: { "Content-Type": "application/octet-stream", ETag: `"${url.slice(-8)}"` },
+            });
+        }) as unknown as typeof fetch;
+
+        const cache = new AssetCacheManager({ cacheDir, fetchImpl: mockFetch });
+
+        // 4 actors x 8 files (mix of shared motion bundles + distinct model textures/moc3) = 32 concurrent calls
+        const sharedUrls = [
+            `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/library/live2d/motion/shared_01/motion/nod.sse-motion.json`,
+            `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/library/live2d/motion/shared_01/facial/smile.sse-motion.json`,
+        ];
+        const distinctUrls = Array.from({ length: 16 }, (_, idx) =>
+            `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/library/live2d/model/actor_${idx % 4}/file_${idx}.moc3`,
+        );
+
+        const allRequests: Array<{ url: string; range?: string }> = [
+            // 8 callers per shared URL (overlapping coalesced reads + Range reads!)
+            ...sharedUrls.flatMap(url => [
+                { url },
+                { url },
+                { url },
+                { url },
+                { url, range: "bytes=0-63" },
+                { url, range: "bytes=10-73" },
+                { url },
+                { url },
+            ]),
+            // 16 distinct model files simultaneously
+            ...distinctUrls.map(url => ({ url })),
+        ];
+        expect(allRequests.length).toBe(32);
+
+        const responses = await Promise.all(
+            allRequests.map(async (item, idx) => {
+                if (idx % 5 === 0) cache.flushIndexNow();
+                const req = item.range
+                    ? new Request(item.url, { headers: { Range: item.range } })
+                    : new Request(item.url);
+                const res = await cache.handleRequest(req);
+                const text = await res.text();
+                return { item, status: res.status, text };
+            }),
+        );
+
+        // Every single one of the 32 concurrent requests MUST succeed with exact uncorrupted bytes!
+        for (const r of responses) {
+            const upstream = r.item.url.replace(`${CACHE_PROTOCOL_SCHEME}://`, "https://");
+            const expectedFull = `payload-for:${upstream}:`.repeat(256);
+            if (r.item.range === "bytes=0-63") {
+                expect(r.status).toBe(206);
+                expect(r.text).toBe(expectedFull.slice(0, 64));
+            } else if (r.item.range === "bytes=10-73") {
+                expect(r.status).toBe(206);
+                expect(r.text).toBe(expectedFull.slice(10, 74));
+            } else {
+                expect(r.status).toBe(200);
+                expect(r.text).toBe(expectedFull);
+            }
+        }
+
+        // Coalescing verified: each unique URL was fetched upstream strictly ONCE!
+        expect(upstreamCounts.size).toBe(sharedUrls.length + distinctUrls.length);
+        for (const count of upstreamCounts.values()) {
+            expect(count).toBe(1);
+        }
+
+        cache.dispose();
+    });
+
+    it("supports zero-network HEAD cache probe (X-MoeSekai-Cache-Probe: 1) and recovers gracefully if cached blob vanishes", async () => {
+        const cacheDir = makeTempDir();
+        let upstreamCalls = 0;
+
+        const mockFetch = (async () => {
+            upstreamCalls += 1;
+            return new Response(new Uint8Array(Buffer.from("live2d-probe-bytes")), {
+                status: 200,
+                headers: { "Content-Type": "application/octet-stream" },
+            });
+        }) as unknown as typeof fetch;
+
+        const cache = new AssetCacheManager({ cacheDir, fetchImpl: mockFetch });
+        const url = `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/library/live2d/model/kanade/model.moc3`;
+
+        // 1. Probe BEFORE caching -> 204 MISS with ZERO upstream network calls
+        const probeMiss = await cache.handleRequest(
+            new Request(url, { method: "HEAD", headers: { "X-MoeSekai-Cache-Probe": "1" } }),
+        );
+        expect(probeMiss.status).toBe(204);
+        expect(probeMiss.headers.get("X-MoeSekai-Cache")).toBe("MISS");
+        expect(upstreamCalls).toBe(0);
+
+        // 2. Fetch -> caches on disk
+        const missRes = await cache.handleRequest(new Request(url));
+        expect(missRes.status).toBe(200);
+        expect(await missRes.text()).toBe("live2d-probe-bytes");
+        expect(upstreamCalls).toBe(1);
+
+        // 3. Probe AFTER caching -> 200 HIT with ZERO extra upstream calls
+        const probeHit = await cache.handleRequest(
+            new Request(url, { method: "HEAD", headers: { "X-MoeSekai-Cache-Probe": "1" } }),
+        );
+        expect(probeHit.status).toBe(200);
+        expect(probeHit.headers.get("X-MoeSekai-Cache")).toBe("HIT");
+        expect(upstreamCalls).toBe(1);
+
+        // 4. Simulate external deletion of blobs directory while index still thinks blob exists -> seamlessly refetches!
+        fs.rmSync(path.join(cacheDir, "blobs"), { recursive: true, force: true });
+        const recovered = await cache.handleRequest(new Request(url));
+        expect(recovered.status).toBe(200);
+        expect(await recovered.text()).toBe("live2d-probe-bytes");
+        expect(upstreamCalls).toBe(2);
+
+        cache.dispose();
+    });
 });

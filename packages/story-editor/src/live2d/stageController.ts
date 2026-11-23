@@ -49,11 +49,27 @@ export interface StoryClipPreviewRequest {
     facial?: string;
 }
 
+export interface StoryStageLoadProgress {
+    /** Total actors queued in the active loading batch. */
+    totalActors: number;
+    /** Actors in the batch that have finished mounting (or settled). */
+    completedActors: number;
+    /** Actors in the batch still loading. */
+    activeActors: number;
+    /** Aggregate file units reported loaded across the active batch. */
+    loadedFiles: number;
+    /** Aggregate total file units reported across the active batch. */
+    totalFiles: number;
+    /** Combined 0–100 integer progress across all actors in the batch (`null` while indeterminate). */
+    percent: number | null;
+}
+
 export interface StoryStageSnapshot {
     phase: StoryStagePhase;
     modelInfo: Record<string, Live2DActorInfo>;
     problems: Record<string, StoryActorProblem>;
     loadingActors: number;
+    loadProgress: StoryStageLoadProgress | null;
     isSoloPreview: boolean;
     previewingCastKey: string | null;
     previewingCast: StoryCastMember | null;
@@ -120,6 +136,7 @@ interface AppliedActor {
     scale: number;
     mirror: boolean;
     order: number;
+    alpha: number;
     motion: string | null;
     facial: string | null;
     info: Live2DActorInfo | null;
@@ -495,6 +512,9 @@ export class StoryStageController {
     private modelInfo: Record<string, Live2DActorInfo> = {};
     private problems: Record<string, StoryActorProblem> = {};
     private loadingActors = 0;
+    private loadProgress: StoryStageLoadProgress | null = null;
+    private loadBatchToken = 0;
+    private abortRetryState: { seq: number; count: number } = { seq: 0, count: 0 };
     private snapshot: StoryStageSnapshot;
     private listeners = new Set<() => void>();
 
@@ -662,7 +682,7 @@ export class StoryStageController {
             && this.hiddenForSolo.size === 0
             && this.pendingClipReplay === null
             && this.lastRenderedVisualKey === nextVisualKey
-            && !this.hasUnmountedWantedActors(target)
+            && !this.hasMissingOrHiddenWantedActors(target)
         ) {
             this.appliedSceneSeq = seq;
             this.completedSeq = Math.max(this.completedSeq, seq);
@@ -833,6 +853,7 @@ export class StoryStageController {
             modelInfo: this.modelInfo,
             problems: this.problems,
             loadingActors: this.loadingActors,
+            loadProgress: this.loadProgress,
             isSoloPreview: this.desiredSolo !== null,
             previewingCastKey: this.desiredSolo?.cast.key ?? null,
             previewingCast: this.desiredSolo?.cast ?? null,
@@ -942,6 +963,9 @@ export class StoryStageController {
         this.pendingPaused = null;
         this.pendingFinish = false;
         this.loadingActors = 0;
+        this.loadProgress = null;
+        this.loadBatchToken += 1;
+        this.abortRetryState = { seq: 0, count: 0 };
     }
 
     private measureSafeSize(): StageCanvasSize | null {
@@ -1248,13 +1272,27 @@ export class StoryStageController {
         return false;
     }
 
-    private hasUnmountedWantedActors(target: StoryStageState): boolean {
+    private syncAppliedActorsWithStage(activeStage: Live2DStage): void {
+        const liveIds = new Set(activeStage.actors);
+        for (const id of [...this.appliedActors.keys()]) {
+            if (!liveIds.has(id)) {
+                this.appliedActors.delete(id);
+                this.hiddenForSolo.delete(id);
+            }
+        }
+    }
+
+    private hasMissingOrHiddenWantedActors(target: StoryStageState): boolean {
+        const liveIds = this.stage ? new Set(this.stage.actors) : null;
         const castByKey = new Map(this.cast.map(member => [member.key, member]));
         for (const actor of target.actors) {
             const member = castByKey.get(actor.cast);
             if (!member) continue;
             const current = this.appliedActors.get(actor.cast);
-            if (!current || current.modelId !== member.modelId) {
+            if (!current || current.modelId !== member.modelId || current.alpha !== 1) {
+                return true;
+            }
+            if (liveIds && !liveIds.has(actor.cast)) {
                 return true;
             }
         }
@@ -1395,6 +1433,7 @@ export class StoryStageController {
         actorId: string,
         resolved: ResolvedLive2DModelBundles,
         placement: Live2DActorPlacement & { motion?: string; facial?: string },
+        onProgress?: (progress: { loaded: number; total: number }) => void,
     ): Promise<Live2DActorInfo> {
         const motionSequence: Array<string | null> = resolved.motion !== null
             ? [resolved.motion, ...resolved.fallbackMotionCandidates, null]
@@ -1410,11 +1449,15 @@ export class StoryStageController {
                     delete stripped.facial;
                     return stripped;
                 })();
+            if (i > 0) {
+                onProgress?.({ loaded: 0, total: 0 });
+            }
             try {
                 return await activeStage.addActor(
                     actorId,
                     { bundle: resolved.bundle, motion: motionBundle },
                     nextPlacement,
+                    onProgress,
                 );
             } catch (err) {
                 lastError = err;
@@ -1434,6 +1477,9 @@ export class StoryStageController {
         const currentDesired = this.desiredScene;
         const modelList = this.models;
         if (!currentDesired || !modelList) return;
+
+        // Reconcile controller bookkeeping against the live worker actor list before diffing.
+        this.syncAppliedActorsWithStage(activeStage);
 
         const { state: target, options, seq, visualKey } = currentDesired;
         const castByKey = new Map(this.cast.map(member => [member.key, member]));
@@ -1490,13 +1536,15 @@ export class StoryStageController {
             if (this.isSceneStepSuperseded(activeStage, seq)) return;
         }
 
-        // Step 2b: Update transforms, motions, and facials on actors already mounted on stage.
+        // Step 2b: Update transforms, visibility (`alpha`), motions, and facials on already-mounted actors.
         for (const [id, { actor, order }] of wanted) {
             const current = this.appliedActors.get(id);
             if (!current) continue;
 
             const wasHiddenForSolo = this.hiddenForSolo.delete(id);
+            const alphaHidden = current.alpha !== 1;
             const transformChanged = wasHiddenForSolo
+                || alphaHidden
                 || current.x !== actor.x
                 || current.y !== actor.y
                 || current.scale !== actor.scale
@@ -1504,7 +1552,15 @@ export class StoryStageController {
                 || current.order !== order;
 
             if (transformChanged) {
-                const moving = !wasHiddenForSolo && (current.x !== actor.x || current.y !== actor.y || current.scale !== actor.scale) && !options.instant;
+                const moving = !wasHiddenForSolo
+                    && (current.x !== actor.x || current.y !== actor.y || current.scale !== actor.scale)
+                    && !options.instant;
+                const revealingWithFade = !wasHiddenForSolo && alphaHidden && !options.instant && Boolean(options.fade);
+                const duration = moving
+                    ? (options.moveSeconds ?? STORY_FADE_SECONDS)
+                    : revealingWithFade
+                        ? STORY_FADE_SECONDS
+                        : 0;
                 try {
                     await activeStage.setActor(id, {
                         x: actor.x,
@@ -1514,8 +1570,8 @@ export class StoryStageController {
                         order,
                         alpha: 1,
                     }, {
-                        duration: moving ? (options.moveSeconds ?? STORY_FADE_SECONDS) : 0,
-                        easing: "in-out",
+                        duration,
+                        easing: moving ? "in-out" : "in",
                     }).catch(() => false);
                 } catch (err) {
                     if (isStageDestroyedError(err)) {
@@ -1529,6 +1585,7 @@ export class StoryStageController {
                 current.scale = actor.scale;
                 current.mirror = actor.mirror;
                 current.order = order;
+                current.alpha = 1;
             }
 
             const info = current.info;
@@ -1549,94 +1606,210 @@ export class StoryStageController {
             if (this.isSceneStepSuperseded(activeStage, seq)) return;
         }
 
-        // Step 3: Load arriving actors strictly one-at-a-time (prevents overlapping WASM mutations &
-        // enables instant early bailout if user scrubs to another node mid-load).
+        // Step 3: Load ALL arriving actors in parallel as a single tracked batch so multi-actor
+        // scenes load ~2x-4x faster and the aggregate progress indicator stays visible until
+        // EVERY target actor finishes (without blacking out actors that already rendered).
+        const arrivingBatch: Array<{
+            id: string;
+            actor: StoryActorState;
+            order: number;
+            modelId: string;
+            resolved: ResolvedLive2DModelBundles;
+        }> = [];
         for (const [id, { actor, order, modelId }] of wanted) {
             if (this.appliedActors.has(id)) continue;
-            if (this.isSceneStepSuperseded(activeStage, seq)) return;
-
             const resolved = resolveModelBundlesForStage(modelId, modelList);
             if (!resolved) {
                 nextProblems[id] = "modelMissing";
                 continue;
             }
+            arrivingBatch.push({ id, actor, order, modelId, resolved });
+        }
 
-            const cached = this.infoCache.get(modelId);
-            const initialMotion = cached ? pickClip(actor.motion, cached.motions, null) : null;
-            const initialFacial = cached ? pickClip(actor.facial, cached.facials, null) : null;
+        if (arrivingBatch.length > 0) {
+            if (this.isSceneStepSuperseded(activeStage, seq)) return;
+
             const fadeIn = !options.instant && Boolean(options.fade);
+            const batchToken = ++this.loadBatchToken;
+            const tracker = new Map<string, { loaded: number; total: number; done: boolean }>();
+            for (const item of arrivingBatch) {
+                tracker.set(item.id, { loaded: 0, total: 0, done: false });
+            }
 
-            this.loadingActors += 1;
-            this.emit();
+            const publishBatchProgress = () => {
+                if (this.stage !== activeStage || this.disposed || this.loadBatchToken !== batchToken) return;
+                let completedActors = 0;
+                let loadedFiles = 0;
+                let totalFiles = 0;
+                let sumFrac = 0;
+                let hasDeterminate = false;
+                for (const progress of tracker.values()) {
+                    loadedFiles += progress.loaded;
+                    totalFiles += progress.total;
+                    if (progress.done) {
+                        completedActors += 1;
+                        sumFrac += 1;
+                        hasDeterminate = true;
+                    } else if (progress.total > 0) {
+                        sumFrac += Math.min(0.99, progress.loaded / progress.total);
+                        hasDeterminate = true;
+                    }
+                }
+                const totalActors = tracker.size;
+                const activeActors = Math.max(0, totalActors - completedActors);
+                const percent = hasDeterminate
+                    ? Math.min(100, Math.max(0, Math.round((sumFrac / totalActors) * 100)))
+                    : null;
+                const prev = this.loadProgress;
+                const unchanged = this.loadingActors === activeActors
+                    && (
+                        activeActors === 0
+                            ? prev === null
+                            : prev !== null
+                                && prev.totalActors === totalActors
+                                && prev.completedActors === completedActors
+                                && prev.activeActors === activeActors
+                                && prev.loadedFiles === loadedFiles
+                                && prev.totalFiles === totalFiles
+                                && prev.percent === percent
+                    );
+                if (unchanged) return;
+                this.loadingActors = activeActors;
+                this.loadProgress = activeActors > 0
+                    ? { totalActors, completedActors, activeActors, loadedFiles, totalFiles, percent }
+                    : null;
+                this.emit();
+            };
+
+            publishBatchProgress();
+
+            let abortedCount = 0;
+            let stageDestroyedError: unknown = null;
+
             try {
-                const info = await this.addActorWithMotionFallback(
-                    activeStage,
-                    id,
-                    resolved,
-                    {
-                        x: actor.x,
-                        y: actor.y,
-                        scale: actor.scale,
-                        mirror: actor.mirror,
-                        order,
-                        alpha: fadeIn ? 0 : 1,
-                        ...(initialMotion ? { motion: initialMotion } : {}),
-                        ...(initialFacial ? { facial: initialFacial } : {}),
-                    },
-                );
+                await Promise.all(arrivingBatch.map(async ({ id, actor, order, modelId, resolved }) => {
+                    const cached = this.infoCache.get(modelId);
+                    const initialMotion = cached ? pickClip(actor.motion, cached.motions, null) : null;
+                    const initialFacial = cached ? pickClip(actor.facial, cached.facials, null) : null;
+                    try {
+                        const info = await this.addActorWithMotionFallback(
+                            activeStage,
+                            id,
+                            resolved,
+                            {
+                                x: actor.x,
+                                y: actor.y,
+                                scale: actor.scale,
+                                mirror: actor.mirror,
+                                order,
+                                alpha: fadeIn ? 0 : 1,
+                                ...(initialMotion ? { motion: initialMotion } : {}),
+                                ...(initialFacial ? { facial: initialFacial } : {}),
+                            },
+                            (progress) => {
+                                const state = tracker.get(id);
+                                if (!state || state.done) return;
+                                state.loaded = Math.max(0, progress.loaded);
+                                state.total = Math.max(0, progress.total);
+                                publishBatchProgress();
+                            },
+                        );
 
-                if (this.stage !== activeStage || this.disposed) return;
+                        if (this.stage !== activeStage || this.disposed) return;
 
-                this.infoCache.set(modelId, info);
-                this.modelInfo = { ...this.modelInfo, [modelId]: info };
-                const wantMotion = pickClip(actor.motion, info.motions, info.defaultMotion);
-                const wantFacial = pickClip(actor.facial, info.facials, info.defaultFacial);
-                const entry: AppliedActor = {
-                    modelId,
-                    x: actor.x,
-                    y: actor.y,
-                    scale: actor.scale,
-                    mirror: actor.mirror,
-                    order,
-                    motion: initialMotion ?? info.defaultMotion,
-                    facial: initialFacial ?? info.defaultFacial,
-                    info,
-                };
-                this.appliedActors.set(id, entry);
-                this.emit();
+                        this.infoCache.set(modelId, info);
+                        this.modelInfo = { ...this.modelInfo, [modelId]: info };
+                        const wantMotion = pickClip(actor.motion, info.motions, info.defaultMotion);
+                        const wantFacial = pickClip(actor.facial, info.facials, info.defaultFacial);
+                        const entry: AppliedActor = {
+                            modelId,
+                            x: actor.x,
+                            y: actor.y,
+                            scale: actor.scale,
+                            mirror: actor.mirror,
+                            order,
+                            alpha: fadeIn ? 0 : 1,
+                            motion: initialMotion ?? info.defaultMotion,
+                            facial: initialFacial ?? info.defaultFacial,
+                            info,
+                        };
+                        this.appliedActors.set(id, entry);
+                        this.emit();
 
-                if (this.isSceneStepSuperseded(activeStage, seq)) return;
-
-                if (!initialMotion && wantMotion && wantMotion !== info.defaultMotion) {
-                    await safePlayMotion(activeStage, id, wantMotion, false);
-                    if (this.stage !== activeStage || this.disposed) return;
-                    entry.motion = wantMotion;
-                }
-                if (!initialFacial && wantFacial && wantFacial !== info.defaultFacial) {
-                    await safeSetFacial(activeStage, id, wantFacial);
-                    if (this.stage !== activeStage || this.disposed) return;
-                    entry.facial = wantFacial;
-                }
-                if (fadeIn) {
-                    await activeStage.setActor(id, { alpha: 1 }, { duration: STORY_FADE_SECONDS, easing: "in" }).catch(() => false);
-                    if (this.stage !== activeStage || this.disposed) return;
-                }
-            } catch (err) {
-                if (this.stage !== activeStage || this.disposed || isLive2DAbortError(err)) {
-                    return;
-                }
-                if (isStageDestroyedError(err)) {
-                    this.handleRuntimeFailure(activeStage, err);
-                    return;
-                }
-                nextProblems[id] = "loadFailed";
+                        // If superseded mid-load, leave entry.alpha === 0 accurately recorded so the
+                        // superseding executeSceneSync restores alpha: 1 (or removes the actor) in Step 1/2b.
+                        if (!this.isSceneStepSuperseded(activeStage, seq)) {
+                            if (!initialMotion && wantMotion && wantMotion !== info.defaultMotion) {
+                                await safePlayMotion(activeStage, id, wantMotion, false);
+                                if (this.stage !== activeStage || this.disposed) return;
+                                entry.motion = wantMotion;
+                            }
+                            if (!initialFacial && wantFacial && wantFacial !== info.defaultFacial) {
+                                await safeSetFacial(activeStage, id, wantFacial);
+                                if (this.stage !== activeStage || this.disposed) return;
+                                entry.facial = wantFacial;
+                            }
+                            if (fadeIn && !this.isSceneStepSuperseded(activeStage, seq)) {
+                                await activeStage.setActor(id, { alpha: 1 }, { duration: STORY_FADE_SECONDS, easing: "in" }).catch(() => false);
+                                if (this.stage !== activeStage || this.disposed) return;
+                                entry.alpha = 1;
+                            }
+                        }
+                    } catch (err) {
+                        if (this.stage !== activeStage || this.disposed) return;
+                        if (isLive2DAbortError(err)) {
+                            abortedCount += 1;
+                            return;
+                        }
+                        if (isStageDestroyedError(err)) {
+                            stageDestroyedError ??= err;
+                            return;
+                        }
+                        nextProblems[id] = "loadFailed";
+                    } finally {
+                        const state = tracker.get(id);
+                        if (state) {
+                            state.done = true;
+                            if (state.total > 0) state.loaded = state.total;
+                        }
+                        publishBatchProgress();
+                    }
+                }));
             } finally {
-                this.loadingActors = Math.max(0, this.loadingActors - 1);
+                if (this.loadBatchToken === batchToken && !this.disposed) {
+                    if (this.loadingActors !== 0 || this.loadProgress !== null) {
+                        this.loadingActors = 0;
+                        this.loadProgress = null;
+                        this.emit();
+                    }
+                }
+            }
+
+            if (stageDestroyedError !== null) {
+                this.handleRuntimeFailure(activeStage, stageDestroyedError);
+                return;
+            }
+            if (this.stage !== activeStage || this.disposed) return;
+            if (this.isSceneStepSuperseded(activeStage, seq)) return;
+
+            if (abortedCount > 0) {
+                const retryCount = this.abortRetryState.seq === seq ? this.abortRetryState.count + 1 : 1;
+                this.abortRetryState = { seq, count: retryCount };
+                if (retryCount <= 2) {
+                    // Self-heal benign one-shot aborts on the next drain cycle without marking failed.
+                    return;
+                }
+                this.problems = nextProblems;
+                this.appliedSceneSeq = seq;
+                this.lastRenderedVisualKey = null;
+                this.completedSeq = Math.max(this.completedSeq, seq);
                 this.emit();
+                return;
             }
         }
 
         if (this.stage !== activeStage || this.disposed) return;
+        if (this.isSceneStepSuperseded(activeStage, seq)) return;
 
         if (options.instant) {
             try {
@@ -1647,9 +1820,10 @@ export class StoryStageController {
             }
         }
 
+        const hasLoadFailure = Object.values(nextProblems).some(problem => problem === "loadFailed");
         this.problems = nextProblems;
         this.appliedSceneSeq = seq;
-        this.lastRenderedVisualKey = visualKey;
+        this.lastRenderedVisualKey = hasLoadFailure ? null : visualKey;
         this.completedSeq = Math.max(this.completedSeq, seq);
         this.emit();
     }
@@ -1719,6 +1893,8 @@ export class StoryStageController {
                     }
                 }
                 if (this.stage !== activeStage || this.disposed) return;
+                const stowed = this.appliedActors.get(id);
+                if (stowed) stowed.alpha = 0;
             }
         }
 
@@ -1756,7 +1932,16 @@ export class StoryStageController {
             ? (wantFacial && cached.facials.includes(wantFacial) ? wantFacial : (cached.defaultFacial ?? undefined))
             : undefined;
 
-        this.loadingActors += 1;
+        const batchToken = ++this.loadBatchToken;
+        this.loadingActors = 1;
+        this.loadProgress = {
+            totalActors: 1,
+            completedActors: 0,
+            activeActors: 1,
+            loadedFiles: 0,
+            totalFiles: 0,
+            percent: null,
+        };
         this.emit();
         try {
             const info = await this.addActorWithMotionFallback(
@@ -1771,6 +1956,33 @@ export class StoryStageController {
                     order: 100,
                     ...(initialMotion ? { motion: initialMotion } : {}),
                     ...(initialFacial ? { facial: initialFacial } : {}),
+                },
+                (progress) => {
+                    if (this.stage !== activeStage || this.disposed || this.loadBatchToken !== batchToken) return;
+                    const loadedFiles = Math.max(0, progress.loaded);
+                    const totalFiles = Math.max(0, progress.total);
+                    const percent = totalFiles > 0
+                        ? Math.min(100, Math.max(0, Math.round((loadedFiles / totalFiles) * 100)))
+                        : null;
+                    const prev = this.loadProgress;
+                    if (
+                        prev !== null
+                        && prev.totalActors === 1
+                        && prev.loadedFiles === loadedFiles
+                        && prev.totalFiles === totalFiles
+                        && prev.percent === percent
+                    ) {
+                        return;
+                    }
+                    this.loadProgress = {
+                        totalActors: 1,
+                        completedActors: 0,
+                        activeActors: 1,
+                        loadedFiles,
+                        totalFiles,
+                        percent,
+                    };
+                    this.emit();
                 },
             );
 
@@ -1826,8 +2038,11 @@ export class StoryStageController {
             }
             this.emit();
         } finally {
-            this.loadingActors = Math.max(0, this.loadingActors - 1);
-            this.emit();
+            if (this.loadBatchToken === batchToken && !this.disposed) {
+                this.loadingActors = 0;
+                this.loadProgress = null;
+                this.emit();
+            }
         }
     }
 
@@ -1879,6 +2094,8 @@ export class StoryStageController {
                     }
                 }
                 if (this.stage !== activeStage || this.disposed) return;
+                const restored = this.appliedActors.get(id);
+                if (restored) restored.alpha = 1;
             }
         }
         this.appliedTalking = null;

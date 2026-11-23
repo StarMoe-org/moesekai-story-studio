@@ -212,6 +212,7 @@ function parseByteRange(rangeHeader: string | null, totalSize: number): ParsedRa
 interface UpstreamFetchOutcome {
     kind: "stored";
     entry: AssetCacheIndexEntry;
+    body: Buffer;
 }
 
 interface UpstreamNotModifiedOutcome {
@@ -227,6 +228,49 @@ interface UpstreamPassthroughOutcome {
 }
 
 type FetchOutcome = UpstreamFetchOutcome | UpstreamNotModifiedOutcome | UpstreamPassthroughOutcome;
+
+function isTransientWindowsLockError(err: unknown): boolean {
+    if (!err || typeof err !== "object") return false;
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === "EPERM" || code === "EBUSY" || code === "EACCES";
+}
+
+function safeUnlink(filePath: string): void {
+    try {
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+    } catch {
+        // Best-effort temp cleanup
+    }
+}
+
+function atomicRenameWithFallback(tmpPath: string, targetPath: string, fallbackContent?: string | Buffer): void {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+            fs.renameSync(tmpPath, targetPath);
+            return;
+        } catch (err) {
+            if (!isTransientWindowsLockError(err) || attempt === 2) {
+                if (fallbackContent !== undefined) {
+                    try {
+                        if (typeof fallbackContent === "string") {
+                            fs.writeFileSync(targetPath, fallbackContent, "utf8");
+                        } else {
+                            fs.writeFileSync(targetPath, fallbackContent);
+                        }
+                        safeUnlink(tmpPath);
+                        return;
+                    } catch {
+                        // Fall through to cleanup & rethrow
+                    }
+                }
+                safeUnlink(tmpPath);
+                throw err;
+            }
+        }
+    }
+}
 
 /**
  * Persistent content-addressed disk cache for Live2D models, Cubism Core,
@@ -255,6 +299,7 @@ export class AssetCacheManager {
     private readonly activeBlobReads = new Map<string, number>();
     private saveTimer: ReturnType<typeof setTimeout> | null = null;
     private indexDirty = false;
+    private flushingIndex = false;
     private disposed = false;
 
     constructor(options: AssetCacheManagerOptions) {
@@ -354,17 +399,31 @@ export class AssetCacheManager {
             clearTimeout(this.saveTimer);
             this.saveTimer = null;
         }
+        if (this.flushingIndex) {
+            this.indexDirty = true;
+            return;
+        }
         if (!this.indexDirty && fs.existsSync(this.indexPath)) return;
 
-        fs.mkdirSync(this.cacheDir, { recursive: true });
-        const payload: AssetCacheIndexFile = {
-            version: 1,
-            entries: Object.fromEntries(this.entries.entries()),
-        };
-        const tmpPath = `${this.indexPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
-        fs.writeFileSync(tmpPath, JSON.stringify(payload), "utf8");
-        fs.renameSync(tmpPath, this.indexPath);
-        this.indexDirty = false;
+        this.flushingIndex = true;
+        try {
+            fs.mkdirSync(this.cacheDir, { recursive: true });
+            const payload: AssetCacheIndexFile = {
+                version: 1,
+                entries: Object.fromEntries(this.entries.entries()),
+            };
+            const json = JSON.stringify(payload);
+            const tmpPath = `${this.indexPath}.tmp.${process.pid}.${crypto.randomUUID()}`;
+            fs.writeFileSync(tmpPath, json, "utf8");
+            atomicRenameWithFallback(tmpPath, this.indexPath, json);
+            this.indexDirty = false;
+        } catch {
+            // Never crash or fail an asset request if Windows antivirus briefly locks index.json;
+            // keep dirty flag so the next scheduled flush persists cleanly.
+            this.indexDirty = true;
+        } finally {
+            this.flushingIndex = false;
+        }
     }
 
     private isBlobReferenced(sha256: string): boolean {
@@ -483,16 +542,15 @@ export class AssetCacheManager {
         fs.mkdirSync(subdir, { recursive: true });
 
         if (!fs.existsSync(blobPath)) {
-            const tmpPath = `${blobPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
+            const tmpPath = `${blobPath}.tmp.${process.pid}.${crypto.randomUUID()}`;
             fs.writeFileSync(tmpPath, body);
             try {
-                fs.renameSync(tmpPath, blobPath);
-            } catch {
+                atomicRenameWithFallback(tmpPath, blobPath);
+            } catch (err) {
+                safeUnlink(tmpPath);
                 // Another writer may have raced on identical content-addressed blob
-                try {
-                    fs.unlinkSync(tmpPath);
-                } catch {
-                    // ignore
+                if (!fs.existsSync(blobPath)) {
+                    throw err;
                 }
             }
         }
@@ -574,8 +632,18 @@ export class AssetCacheManager {
 
             const { category } = classifyAsset(upstreamUrl);
             const etag = res.headers.get("etag");
-            const stored = this.storeBlob(upstreamUrl, buf, contentType, etag, category);
-            return { kind: "stored", entry: stored };
+            try {
+                const stored = this.storeBlob(upstreamUrl, buf, contentType, etag, category);
+                return { kind: "stored", entry: stored, body: buf };
+            } catch {
+                // Disk write error (e.g. transient Windows lock / disk full) must NEVER fail the asset response!
+                return {
+                    kind: "passthrough",
+                    status: 200,
+                    contentType,
+                    body: buf,
+                };
+            }
         })().finally(() => {
             this.inFlight.delete(key);
         });
@@ -667,6 +735,55 @@ export class AssetCacheManager {
         return new Response(webStream, { status: 200, headers });
     }
 
+    private buildResponseFromBuffer(
+        request: Request,
+        body: Buffer,
+        contentType: string,
+        etag: string | null,
+        cacheStatus: "HIT" | "MISS" | "STALE",
+        statusCode = 200,
+    ): Response {
+        const totalSize = body.byteLength;
+        const headers = new Headers({
+            "Content-Type": contentType,
+            "Accept-Ranges": "bytes",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, X-MoeSekai-Cache, ETag",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+            "X-MoeSekai-Cache": cacheStatus,
+        });
+        if (etag) {
+            headers.set("ETag", etag);
+        }
+
+        if (request.method === "HEAD") {
+            headers.set("Content-Length", String(totalSize));
+            return new Response(null, { status: statusCode, headers });
+        }
+
+        if (statusCode === 200) {
+            const parsedRange = parseByteRange(request.headers.get("range"), totalSize);
+            if (parsedRange === "invalid") {
+                headers.set("Content-Range", `bytes */${totalSize}`);
+                return new Response("Range Not Satisfiable", { status: 416, headers });
+            }
+            if (parsedRange) {
+                const { start, end } = parsedRange;
+                const chunkLength = end - start + 1;
+                headers.set("Content-Range", `bytes ${start}-${end}/${totalSize}`);
+                headers.set("Content-Length", String(chunkLength));
+                // Allocate an independent copy per caller so coalesced requests never alias buffers.
+                const slice = Uint8Array.from(body.subarray(start, end + 1));
+                return new Response(slice, { status: 206, headers });
+            }
+        }
+
+        headers.set("Content-Length", String(totalSize));
+        return new Response(Uint8Array.from(body), { status: statusCode, headers });
+    }
+
     /**
      * Handles an Electron `protocol.handle("moesekai-cache", ...)` request.
      */
@@ -677,7 +794,7 @@ export class AssetCacheManager {
                 headers: {
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-                    "Access-Control-Allow-Headers": "Range, Accept, Content-Type",
+                    "Access-Control-Allow-Headers": "Range, Accept, Content-Type, X-MoeSekai-Cache-Probe",
                 },
             });
         }
@@ -697,6 +814,24 @@ export class AssetCacheManager {
                 });
             }
             return new Response("Bad Request", { status: 400 });
+        }
+
+        // Zero-network cache probe (`HEAD` + `X-MoeSekai-Cache-Probe: 1`) used by story-core
+        // `inspectStoryCacheStatus()` to detect disk-cached `moesekai-cache://` assets cleanly.
+        if (request.method === "HEAD" && request.headers.get("x-moesekai-cache-probe") === "1") {
+            const probeKey = upstreamUrl.href;
+            const probeEntry = this.enabled ? this.entries.get(probeKey) : undefined;
+            const hit = Boolean(probeEntry && fs.existsSync(this.getBlobPath(probeEntry.sha256)));
+            return new Response(null, {
+                status: hit ? 200 : 204,
+                headers: {
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Expose-Headers": "X-MoeSekai-Cache, Content-Length",
+                    "Cross-Origin-Resource-Policy": "cross-origin",
+                    "X-MoeSekai-Cache": hit ? "HIT" : "MISS",
+                    ...(hit && probeEntry ? { "Content-Length": String(probeEntry.size) } : {}),
+                },
+            });
         }
 
         // Bypass mode when user explicitly disables persistent asset cache
@@ -733,23 +868,28 @@ export class AssetCacheManager {
         if (existing) {
             const blobPath = this.getBlobPath(existing.sha256);
             if (fs.existsSync(blobPath)) {
-                const ageMs = this.now() - existing.storedAt;
-                existing.lastAccessAt = this.now();
-                this.scheduleIndexSave();
+                try {
+                    const ageMs = this.now() - existing.storedAt;
+                    existing.lastAccessAt = this.now();
+                    this.scheduleIndexSave();
 
-                if (ageMs <= ttlMs) {
-                    this.hits += 1;
-                    return this.buildResponseFromEntry(request, existing, "HIT");
+                    if (ageMs <= ttlMs) {
+                        const hitResponse = this.buildResponseFromEntry(request, existing, "HIT");
+                        this.hits += 1;
+                        return hitResponse;
+                    }
+
+                    // Stale-while-revalidate: build response from existing blob FIRST, then refresh in background!
+                    const staleResponse = this.buildResponseFromEntry(request, existing, "STALE");
+                    this.staleHits += 1;
+                    this.triggerBackgroundRevalidate(upstreamUrl, existing);
+                    return staleResponse;
+                } catch {
+                    // Blob vanished or briefly locked on disk: purge stale entry and fall through to upstream MISS.
                 }
-
-                // Stale-while-revalidate: build response from existing blob FIRST, then refresh in background!
-                this.staleHits += 1;
-                const staleResponse = this.buildResponseFromEntry(request, existing, "STALE");
-                this.triggerBackgroundRevalidate(upstreamUrl, existing);
-                return staleResponse;
             }
 
-            // Missing blob on disk: purge stale metadata and treat as miss
+            // Missing or unreadable blob on disk: purge stale metadata and treat as miss
             this.entries.delete(key);
             this.recomputeTotalBytes();
             this.scheduleIndexSave();
@@ -759,20 +899,29 @@ export class AssetCacheManager {
         this.misses += 1;
         try {
             const outcome = await this.fetchUpstreamCoalesced(upstreamUrl);
-            if (outcome.kind === "stored" || outcome.kind === "not-modified") {
+            if (outcome.kind === "stored") {
+                // Serve directly from in-memory Buffer copy per coalesced caller so concurrent eviction
+                // or Windows file locks can NEVER break a live Live2D or audio fetch!
+                return this.buildResponseFromBuffer(
+                    request,
+                    outcome.body,
+                    outcome.entry.contentType,
+                    outcome.entry.etag,
+                    "MISS",
+                    200,
+                );
+            }
+            if (outcome.kind === "not-modified") {
                 return this.buildResponseFromEntry(request, outcome.entry, "MISS");
             }
-            const headers = new Headers({
-                "Content-Type": outcome.contentType,
-                "Content-Length": String(outcome.body.byteLength),
-                "Access-Control-Allow-Origin": "*",
-                "Cross-Origin-Resource-Policy": "cross-origin",
-                "X-MoeSekai-Cache": "MISS",
-            });
-            return new Response(request.method === "HEAD" ? null : new Uint8Array(outcome.body), {
-                status: outcome.status,
-                headers,
-            });
+            return this.buildResponseFromBuffer(
+                request,
+                outcome.body,
+                outcome.contentType,
+                null,
+                "MISS",
+                outcome.status,
+            );
         } catch (err) {
             const status = err instanceof CacheSecurityError ? err.status : 502;
             return new Response(err instanceof Error ? err.message : "Upstream fetch failed", {

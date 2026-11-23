@@ -29,11 +29,17 @@ import {
 const CAST_ICHIKA: StoryCastMember = { key: "ichika", name: "星乃一歌", modelId: "01_ichika", characterId: 1 };
 const CAST_SAKI: StoryCastMember = { key: "saki", name: "天马咲希", modelId: "02_saki", characterId: 2 };
 const CAST_KANADE: StoryCastMember = { key: "kanade", name: "宵崎奏", modelId: "17_kanade", characterId: 17 };
+const CAST_MAFUYU: StoryCastMember = { key: "mafuyu", name: "朝比奈真冬", modelId: "18_mafuyu", characterId: 18 };
+const CAST_ENA: StoryCastMember = { key: "ena", name: "东云绘名", modelId: "19_ena", characterId: 19 };
+const CAST_MIZUKI: StoryCastMember = { key: "mizuki", name: "晓山瑞希", modelId: "20_mizuki", characterId: 20 };
 
 const TEST_MODELS: Live2DModel[] = [
     { id: "01_ichika", bundle: "model/01_ichika", motions: ["motion/01_ichika"], characterId: 1 },
     { id: "02_saki", bundle: "model/02_saki", motions: ["motion/02_saki"], characterId: 2 },
     { id: "17_kanade", bundle: "model/17_kanade", motions: ["motion/17_kanade"], characterId: 17 },
+    { id: "18_mafuyu", bundle: "model/18_mafuyu", motions: ["motion/18_mafuyu"], characterId: 18 },
+    { id: "19_ena", bundle: "model/19_ena", motions: ["motion/19_ena"], characterId: 19 },
+    { id: "20_mizuki", bundle: "model/20_mizuki", motions: ["motion/20_mizuki"], characterId: 20 },
 ];
 
 const DEFAULT_ACTOR_INFO: Live2DActorInfo = {
@@ -157,6 +163,8 @@ class FakeLive2DStage extends EventTarget implements Live2DStage {
     playMotionDelayMs = 1;
     failNextAddFor: Set<string> = new Set();
     abortNextAddFor: Set<string> = new Set();
+    actorProgressSteps: Map<string, Array<{ loaded: number; total: number }>> = new Map();
+    private actorAddGates = new Map<string, { promise: Promise<void>; release: () => void }>();
     private addGate: Promise<void> | null = null;
     private releaseAddGate: (() => void) | null = null;
 
@@ -186,6 +194,18 @@ class FakeLive2DStage extends EventTarget implements Live2DStage {
         return () => this.releaseAddGate?.();
     }
 
+    pauseAddActorFor(actorId: string): () => void {
+        let releaseFn: () => void = () => {};
+        const promise = new Promise<void>((resolve) => {
+            releaseFn = () => {
+                this.actorAddGates.delete(actorId);
+                resolve();
+            };
+        });
+        this.actorAddGates.set(actorId, { promise, release: releaseFn });
+        return releaseFn;
+    }
+
     private enterAsync(label: string): void {
         this.calls.push(label);
         this.inFlightOps += 1;
@@ -202,11 +222,27 @@ class FakeLive2DStage extends EventTarget implements Live2DStage {
         id: string,
         model: { bundle: string; motion: string | null },
         placement?: Live2DActorPlacement & { motion?: string; facial?: string },
+        onProgress?: (progress: { loaded: number; total: number }) => void,
     ): Promise<Live2DActorInfo> {
         if (this.destroyed) throw Object.assign(new Error("the stage is destroyed"), { kind: "internal" });
         this.enterAsync(`addActor:${id}:${model.bundle}`);
         try {
+            const customSteps = this.actorProgressSteps.get(id);
+            if (customSteps && customSteps.length > 0) {
+                onProgress?.(customSteps[0]!);
+            } else {
+                onProgress?.({ loaded: 0, total: 10 });
+            }
             if (this.addGate) await this.addGate;
+            const actorGate = this.actorAddGates.get(id);
+            if (actorGate) {
+                if (customSteps && customSteps.length > 1) {
+                    onProgress?.(customSteps[1]!);
+                } else {
+                    onProgress?.({ loaded: 5, total: 10 });
+                }
+                await actorGate.promise;
+            }
             if (this.addActorDelayMs > 0) await waitMs(this.addActorDelayMs);
             if (this.destroyed) throw new DOMException("the stage was destroyed", "AbortError");
             if (this.abortNextAddFor.has(id)) {
@@ -217,6 +253,7 @@ class FakeLive2DStage extends EventTarget implements Live2DStage {
                 this.failNextAddFor.delete(id);
                 throw Object.assign(new Error(`failed to fetch ${model.bundle}`), { kind: "network" });
             }
+            onProgress?.({ loaded: 10, total: 10 });
             this.mounted.set(id, {
                 bundle: model.bundle,
                 placement: {
@@ -329,12 +366,18 @@ class FakeLive2DStage extends EventTarget implements Live2DStage {
         this.destroyed = true;
         this.calls.push("destroy");
         this.releaseAddGate?.();
+        for (const gate of [...this.actorAddGates.values()]) {
+            gate.release();
+        }
     }
 
     simulateCrash(message = "WebGPU device lost", kind: "internal" | "network" = "internal"): void {
         if (this.destroyed) return;
         this.destroyed = true;
         this.releaseAddGate?.();
+        for (const gate of [...this.actorAddGates.values()]) {
+            gate.release();
+        }
         this.dispatchEvent(new CustomEvent("error", { detail: { message, kind } }));
     }
 }
@@ -393,7 +436,7 @@ function createHarness(opts: HarnessOptions = {}) {
 
     const boot = async (withModels = true) => {
         controller.setContext({
-            cast: [CAST_ICHIKA, CAST_SAKI, CAST_KANADE],
+            cast: [CAST_ICHIKA, CAST_SAKI, CAST_KANADE, CAST_MAFUYU, CAST_ENA, CAST_MIZUKI],
             models: withModels ? TEST_MODELS : null,
         });
         controller.setConfig({ library: "https://assets.test/jp/" });
@@ -1207,6 +1250,228 @@ describe("Live2D Stage SSAA Antialiasing (computeStageCanvasSize & dynamic quali
             quality: "standard",
         });
 
+        controller.dispose();
+    });
+});
+
+describe("StoryStageController — multi-actor parallel loading, alpha recovery & aggregate progress (#207/#209)", () => {
+    test("loads 2-actor scenes in parallel and keeps aggregate loadProgress visible until ALL actors finish without blacking out actor 1", async () => {
+        const { controller, boot, latestStage } = createHarness();
+        await boot(true);
+        const stage = latestStage()!;
+        stage.addActorDelayMs = 4;
+
+        // Let Kanade finish quickly while Mafuyu pauses midway at 5/10 files.
+        const releaseMafuyu = stage.pauseAddActorFor("mafuyu");
+        stage.actorProgressSteps.set("mafuyu", [
+            { loaded: 0, total: 10 },
+            { loaded: 5, total: 10 },
+        ]);
+
+        const snapshots: Array<{
+            loadingActors: number;
+            loadProgress: ReturnType<StoryStageController["getSnapshot"]>["loadProgress"];
+        }> = [];
+        const unsub = controller.subscribe(() => {
+            const snap = controller.getSnapshot();
+            snapshots.push({
+                loadingActors: snap.loadingActors,
+                loadProgress: snap.loadProgress ? { ...snap.loadProgress } : null,
+            });
+        });
+
+        const applyPromise = controller.apply(makeStageState({
+            background: "bg_kanade_room",
+            actors: [
+                { cast: "kanade", slot: "left", x: -0.35, y: 0, scale: 1, mirror: false, motion: "w-nod01", facial: "face_smile" },
+                { cast: "mafuyu", slot: "right", x: 0.35, y: 0, scale: 1, mirror: false, motion: "w-wave01", facial: "face_normal" },
+            ],
+        }), { instant: true });
+
+        // Wait deterministically for Kanade (addActor + motion + facial) to settle while Mafuyu stays gated.
+        const deadline = Date.now() + 500;
+        while ((controller.getSnapshot().loadProgress?.completedActors ?? 0) < 1 && Date.now() < deadline) {
+            await waitMs(5);
+            await flushMicrotasks();
+        }
+
+        // Both actors started loading concurrently!
+        expect(stage.maxConcurrentOps).toBeGreaterThanOrEqual(2);
+        // Kanade is ALREADY rendered and visible (not blacked out waiting for Mafuyu)!
+        expect(stage.actors).toContain("kanade");
+        expect(stage.mounted.get("kanade")?.placement.alpha).toBe(1);
+        // Aggregate loading progress MUST remain active (`loadingActors === 1`, 1/2 completed, 75%)!
+        const midSnap = controller.getSnapshot();
+        expect(midSnap.loadingActors).toBe(1);
+        expect(midSnap.loadProgress).toMatchObject({
+            totalActors: 2,
+            completedActors: 1,
+            activeActors: 1,
+            percent: 75,
+        });
+
+        // Now let Mafuyu complete.
+        releaseMafuyu();
+        await applyPromise;
+        unsub();
+
+        expect(stage.actors.sort()).toEqual(["kanade", "mafuyu"]);
+        expect(stage.mounted.get("kanade")?.placement.alpha).toBe(1);
+        expect(stage.mounted.get("mafuyu")?.placement.alpha).toBe(1);
+        expect(controller.getSnapshot().loadingActors).toBe(0);
+        expect(controller.getSnapshot().loadProgress).toBeNull();
+        expect(controller.getSnapshot().problems).toEqual({});
+        // Initial batch snapshot had totalActors: 2 and never prematurely dropped to 0 before Mafuyu finished.
+        expect(snapshots.some(s => s.loadProgress?.totalActors === 2 && s.loadProgress.completedActors === 1)).toBe(true);
+        controller.dispose();
+    });
+
+    test("never leaves actor 1 stranded invisible at alpha=0 when a fade-in multi-actor apply is superseded mid-load by instant apply, setTalking, or resize", async () => {
+        const { controller, host, boot, latestStage } = createHarness();
+        await boot(true);
+        const stage = latestStage()!;
+        stage.addActorDelayMs = 4;
+
+        // Reproduce exact #207 scenario: enterScene fadeBlack (`instant: false, fade: true`)
+        // starts loading Kanade + Mafuyu at alpha=0; while Mafuyu is still loading, user clicks
+        // Next (snapCurrentFrame -> `instant: true`), speaker changes, and viewport resizes!
+        const releaseMafuyu = stage.pauseAddActorFor("mafuyu");
+        const sceneActors = [
+            { cast: "kanade", slot: "left" as const, x: -0.35, y: 0, scale: 1, mirror: false, motion: "w-nod01", facial: "face_smile" },
+            { cast: "mafuyu", slot: "right" as const, x: 0.35, y: 0, scale: 1, mirror: false, motion: "w-idle01", facial: "face_normal" },
+        ];
+
+        const p1 = controller.apply(makeStageState({
+            background: "bg_kanade_room",
+            actors: sceneActors,
+        }), { instant: false, fade: true });
+
+        // Wait until Kanade finishes addActor (mounted at alpha=0), then supersede BEFORE Mafuyu finishes!
+        await waitMs(15);
+        await flushMicrotasks();
+
+        const p2 = controller.apply(makeStageState({
+            background: "bg_kanade_room",
+            speaking: "kanade",
+            actors: sceneActors,
+        }), { instant: true });
+        controller.setTalking("kanade");
+        host.triggerResize({ width: 1440, height: 810 });
+
+        releaseMafuyu();
+        await Promise.all([p1, p2]);
+        await waitMs(25);
+        await flushMicrotasks();
+
+        // BOTH Kanade and Mafuyu MUST be mounted AND fully visible (`alpha === 1`)!
+        expect(stage.actors.sort()).toEqual(["kanade", "mafuyu"]);
+        expect(stage.mounted.get("kanade")?.placement.alpha).toBe(1);
+        expect(stage.mounted.get("mafuyu")?.placement.alpha).toBe(1);
+        expect(stage.mounted.get("kanade")?.placement.x).toBe(-0.35);
+        expect(stage.mounted.get("mafuyu")?.placement.x).toBe(0.35);
+        expect(stage.mounted.get("kanade")?.talking).toBe(true);
+        // Kanade was NOT needlessly reloaded twice.
+        expect(stage.calls.filter(c => c.startsWith("addActor:kanade")).length).toBe(1);
+        controller.dispose();
+    });
+
+    test("recovers cleanly from a transient partial load failure on 1 of 2 actors without dropping or reloading the healthy actor", async () => {
+        const { controller, boot, latestStage } = createHarness();
+        await boot(true);
+        const stage = latestStage()!;
+
+        stage.failNextAddFor.add("mafuyu");
+        const twoActorState = makeStageState({
+            background: "bg_kanade_room",
+            actors: [
+                { cast: "kanade", slot: "left", x: -0.35, y: 0, scale: 1, mirror: false, motion: "w-nod01", facial: "face_smile" },
+                { cast: "mafuyu", slot: "right", x: 0.35, y: 0, scale: 1, mirror: false, motion: "w-wave01", facial: "face_surprise" },
+            ],
+        });
+
+        await controller.apply(twoActorState, { instant: true });
+        expect(stage.actors).toEqual(["kanade"]);
+        expect(stage.mounted.get("kanade")?.placement.alpha).toBe(1);
+        expect(controller.getSnapshot().problems).toEqual({ mafuyu: "loadFailed" });
+
+        const kanadeAddsBeforeRetry = stage.calls.filter(c => c.startsWith("addActor:kanade")).length;
+
+        // Re-applying the exact same scene state MUST retry Mafuyu (not short-circuit on cached visualKey!)
+        // and MUST NOT reload Kanade!
+        await controller.apply(twoActorState, { instant: true });
+        expect(stage.actors.sort()).toEqual(["kanade", "mafuyu"]);
+        expect(stage.mounted.get("kanade")?.placement.alpha).toBe(1);
+        expect(stage.mounted.get("mafuyu")?.placement.alpha).toBe(1);
+        expect(controller.getSnapshot().problems).toEqual({});
+        expect(stage.calls.filter(c => c.startsWith("addActor:kanade")).length).toBe(kanadeAddsBeforeRetry);
+        controller.dispose();
+    });
+
+    test("reconciles rapid multi-scene transitions (1 -> 4 -> 0 -> 2 actors) and worker actor drift with exact final actor set and alpha=1", async () => {
+        const { controller, boot, latestStage } = createHarness();
+        await boot(true);
+        const stage = latestStage()!;
+        stage.addActorDelayMs = 3;
+
+        const scene1 = makeStageState({
+            background: "bg_scene_01",
+            actors: [
+                { cast: "kanade", slot: "center", x: 0, y: 0, scale: 1, mirror: false, motion: null, facial: null },
+            ],
+        });
+        const scene2FourActors = makeStageState({
+            background: "bg_scene_02",
+            speaking: "ena",
+            actors: [
+                { cast: "kanade", slot: "farLeft", x: -0.6, y: 0, scale: 1, mirror: false, motion: null, facial: null },
+                { cast: "mafuyu", slot: "left", x: -0.2, y: 0, scale: 1, mirror: false, motion: null, facial: null },
+                { cast: "ena", slot: "right", x: 0.2, y: 0, scale: 1, mirror: false, motion: null, facial: null },
+                { cast: "mizuki", slot: "farRight", x: 0.6, y: 0, scale: 1, mirror: false, motion: null, facial: null },
+            ],
+        });
+        const scene3Empty = makeStageState({
+            background: "bg_scene_03",
+            actors: [],
+        });
+        const scene4TwoActors = makeStageState({
+            background: "bg_scene_04",
+            speaking: "mafuyu",
+            actors: [
+                { cast: "kanade", slot: "left", x: -0.35, y: 0, scale: 1, mirror: false, motion: "w-nod01", facial: "face_smile" },
+                { cast: "mafuyu", slot: "right", x: 0.35, y: 0, scale: 1, mirror: false, motion: "w-wave01", facial: "face_normal" },
+            ],
+        });
+
+        // Fire rapid sequence mirroring fast player progression across nightcord_unspoken_echo.
+        const p1 = controller.apply(scene1, { instant: false, fade: true });
+        await waitMs(2);
+        const p2 = controller.apply(scene2FourActors, { instant: false, fade: true });
+        await waitMs(4);
+        const p3 = controller.apply(scene3Empty, { instant: false, fade: true });
+        const p4 = controller.apply(scene4TwoActors, { instant: false, fade: true });
+
+        await Promise.all([p1, p2, p3, p4]);
+
+        expect(stage.actors.sort()).toEqual(["kanade", "mafuyu"]);
+        expect(stage.mounted.get("kanade")?.placement.alpha).toBe(1);
+        expect(stage.mounted.get("mafuyu")?.placement.alpha).toBe(1);
+        expect(stage.mounted.get("mafuyu")!.placement.order!).toBeGreaterThan(stage.mounted.get("kanade")!.placement.order!);
+        expect(controller.getSnapshot().loadingActors).toBe(0);
+        expect(controller.getSnapshot().loadProgress).toBeNull();
+
+        // Simulate 4-actor scene finishing completely with all 4 mounted & visible.
+        await controller.apply(scene2FourActors, { instant: false, fade: true });
+        expect(stage.actors.sort()).toEqual(["ena", "kanade", "mafuyu", "mizuki"]);
+        for (const id of ["kanade", "mafuyu", "ena", "mizuki"]) {
+            expect(stage.mounted.get(id)?.placement.alpha).toBe(1);
+        }
+
+        // Simulate worker-side drift dropping Kanade silently -> instant re-apply detects & heals it!
+        stage.mounted.delete("kanade");
+        expect(stage.actors.includes("kanade")).toBe(false);
+        await controller.apply(scene2FourActors, { instant: true });
+        expect(stage.actors.sort()).toEqual(["ena", "kanade", "mafuyu", "mizuki"]);
+        expect(stage.mounted.get("kanade")?.placement.alpha).toBe(1);
         controller.dispose();
     });
 });

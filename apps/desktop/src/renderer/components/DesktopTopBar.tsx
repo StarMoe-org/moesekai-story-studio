@@ -19,6 +19,7 @@ import {
 import {
     mdAdd,
     mdArrowBack,
+    mdCloudDone,
     mdCode,
     mdDashboard,
     mdDescription,
@@ -798,6 +799,32 @@ export const DesktopPlayerTopBar: React.FC<DesktopPlayerTopBarProps> = ({
             />
 
             <div className="flex shrink-0 items-center gap-1">
+                {ctx.openPreloadDialog ? (
+                    <div className="desktop-no-drag shrink-0">
+                        <Tooltip
+                            side="bottom"
+                            label={
+                                ctx.preloadRunning && ctx.preloadProgress
+                                    ? tStudio("page.storyMaker.preload.summaryProgress", {
+                                        completed: ctx.preloadProgress.completed,
+                                        total: ctx.preloadProgress.total,
+                                    })
+                                    : ctx.preloadReady
+                                        ? tStudio("page.storyMaker.preload.readyBadge")
+                                        : tStudio("page.storyMaker.preload.buttonLabel")
+                            }
+                        >
+                            <IconButton
+                                size="xs"
+                                variant={ctx.preloadReady || ctx.preloadRunning ? "tonal" : "standard"}
+                                icon={ctx.preloadRunning ? mdSync : ctx.preloadReady ? mdCloudDone : mdDownload}
+                                label={tStudio("page.storyMaker.preload.buttonLabel")}
+                                data-testid="player-topbar-preload-btn"
+                                onClick={ctx.openPreloadDialog}
+                            />
+                        </Tooltip>
+                    </div>
+                ) : null}
                 <div className="desktop-no-drag shrink-0">
                     <Tooltip side="bottom" label={t("voiceTooltip")}>
                         <IconButton

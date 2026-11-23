@@ -92,6 +92,11 @@ export {
     type PlayerLayoutMode,
     type StoryPlayerViewProps,
 } from "./components/StoryPlayerView";
+export {
+    MoeSekaiWordmarkSvg,
+    MOESEKAI_WORDMARK_PATH,
+    MOESEKAI_WORDMARK_VIEWBOX,
+} from "./components/MoeSekaiWordmarkSvg";
 export { StoryNoticesDialog, type StoryNoticesDialogProps } from "./components/StoryNoticesDialog";
 export { StoryStageView, shouldShowStageAttribution } from "./components/StoryStageView";
 export {
@@ -134,6 +139,7 @@ export {
     type StoryClipPreviewRequest,
     type StoryStageApplyOptions,
     type StoryStageHandle,
+    type StoryStageLoadProgress,
     type StoryStagePhase,
     type StoryStageRenderQuality,
     type UseStoryStageOptions,

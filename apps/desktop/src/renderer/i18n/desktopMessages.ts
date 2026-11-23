@@ -100,6 +100,10 @@ export interface DesktopMessageTable {
     agentSetupRequired: string;
     agentOpenSettings: string;
     agentPresetAuthorTitle: string;
+    agentGuideTitle: string;
+    agentGuideStep1: string;
+    agentGuideStep2: string;
+    agentGuideStep3: string;
     agentPresetFixTitle: string;
     agentPresetTranslateTitle: string;
     agentPresetVoiceTitle: string;
@@ -373,6 +377,10 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         agentSetupRequired: "未配置模型凭据",
         agentOpenSettings: "前往设置",
         agentPresetAuthorTitle: "生成剧情草稿",
+        agentGuideTitle: "操作指南",
+        agentGuideStep1: "选择上方「从零创作」或「修改模式」，并在下方切换模型与思考深度。",
+        agentGuideStep2: "直接描述想要的剧情、角色调度或脚本修改；开启 Plan 时会先生成计划供确认。",
+        agentGuideStep3: "随时可在右上角「历史记录」切换对话会话，或一键回滚至任意快照。",
         agentPresetFixTitle: "全面校验并自动修复",
         agentPresetTranslateTitle: "一键多语言翻译",
         agentPresetVoiceTitle: "生成配音台本与清单",
@@ -641,6 +649,10 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         agentSetupRequired: "尚未設定模型金鑰",
         agentOpenSettings: "前往設定",
         agentPresetAuthorTitle: "產生劇情草稿",
+        agentGuideTitle: "操作指南",
+        agentGuideStep1: "選擇上方「從零創作」或「修改模式」，並在下方切換模型與思考深度。",
+        agentGuideStep2: "直接描述想要的劇情、角色調度或腳本修改；開啟 Plan 時會先產生計畫供確認。",
+        agentGuideStep3: "隨時可在右上角「歷史紀錄」切換對話工作階段，或一鍵回滾至任意快照。",
         agentPresetFixTitle: "全面校驗並自動修復",
         agentPresetTranslateTitle: "一鍵多語言翻譯",
         agentPresetVoiceTitle: "產生語音台本與清單",
@@ -909,6 +921,10 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         agentSetupRequired: "Provider credentials not configured",
         agentOpenSettings: "Configure",
         agentPresetAuthorTitle: "Draft Story Script",
+        agentGuideTitle: "Quick Guide",
+        agentGuideStep1: "Pick Create or Edit mode above, and choose your model and reasoning depth below.",
+        agentGuideStep2: "Describe the scene, staging, or edits you want; with Plan on, review the outline before applying.",
+        agentGuideStep3: "Switch conversations or roll back to any saved snapshot anytime from History in the top-right.",
         agentPresetFixTitle: "Validate & Auto-Fix",
         agentPresetTranslateTitle: "Translate Story (i18n)",
         agentPresetVoiceTitle: "Voice Cue Sheet & Manifest",
@@ -1177,6 +1193,10 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         agentSetupRequired: "API キーが未設定です",
         agentOpenSettings: "設定を開く",
         agentPresetAuthorTitle: "ストーリー草稿を作成",
+        agentGuideTitle: "使い方ガイド",
+        agentGuideStep1: "上部で「新規作成」または「編集モード」を選び、下部でモデルと思考深度を設定します。",
+        agentGuideStep2: "作りたい展開や演出・修正内容を入力してください。Plan 有効時は実行前に計画を確認できます。",
+        agentGuideStep3: "右上の「履歴」からいつでも会話の切り替えや任意スナップショットへの復元が可能です。",
         agentPresetFixTitle: "全項目検証＆自動修正",
         agentPresetTranslateTitle: "多言語翻訳パック生成",
         agentPresetVoiceTitle: "音声台本・マニフェスト作成",
@@ -1445,6 +1465,10 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         agentSetupRequired: "모델 인증이 설정되지 않았습니다",
         agentOpenSettings: "설정",
         agentPresetAuthorTitle: "스토리 초안 작성",
+        agentGuideTitle: "사용 가이드",
+        agentGuideStep1: "상단에서 「처음부터 작성」 또는 「수정 모드」를 고르고, 하단에서 모델과 사고 깊이를 선택하세요.",
+        agentGuideStep2: "원하는 줄거리, 캐릭터 연출 또는 스크립트 수정을 입력하면 Plan 사용 시 먼저 계획을 확인합니다.",
+        agentGuideStep3: "오른쪽 상단 「기록」에서 언제든 대화를 전환하거나 이전 스냅샷으로 되돌릴 수 있습니다.",
         agentPresetFixTitle: "전체 검증 및 자동 수정",
         agentPresetTranslateTitle: "다국어 번역 팩 생성",
         agentPresetVoiceTitle: "음성 대본 및 매니페스트 생성",

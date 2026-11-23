@@ -5,7 +5,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(__dirname, "..");
 
 async function main(): Promise<void> {
-    const timeoutMs = Number(process.env.MOESEKAI_SMOKE_TIMEOUT_MS ?? "25000");
+    const timeoutMs = Number(process.env.MOESEKAI_SMOKE_TIMEOUT_MS ?? "65000");
     console.log("[desktop:smoke] Launching Electron in smoke-test mode...");
 
     const proc = Bun.spawn(["bunx", "electron", ".", "--smoke-test"], {

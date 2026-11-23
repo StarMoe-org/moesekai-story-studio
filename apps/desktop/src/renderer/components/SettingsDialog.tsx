@@ -37,8 +37,20 @@ import type {
 import { CHARACTER_THEME_SEEDS, DESKTOP_LOCALE_OPTIONS } from "../../shared/theme-seeds";
 import { formatDesktopMessage } from "../i18n/desktopMessages";
 import { AssetCachePanel } from "./AssetCachePanel";
+import { ProviderIcon } from "./ProviderIcon";
 
 export type SettingsDialogTab = "general" | "stage" | "agent";
+
+const FEATURED_PROVIDER_PRESETS: ReadonlyArray<{ id: string; shortLabel: string }> = [
+    { id: "anthropic", shortLabel: "Claude" },
+    { id: "openai", shortLabel: "OpenAI" },
+    { id: "google", shortLabel: "Gemini" },
+    { id: "deepseek", shortLabel: "DeepSeek" },
+    { id: "openrouter", shortLabel: "OpenRouter" },
+    { id: "xai", shortLabel: "xAI" },
+    { id: "mistral", shortLabel: "Mistral" },
+    { id: "custom", shortLabel: "Custom" },
+];
 
 const API_PROTOCOL_OPTIONS: Array<{ value: AgentApiProtocol; label: string }> = [
     { value: "openai-completions", label: "OpenAI Chat Completions" },
@@ -256,6 +268,12 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
         if (liveModels && liveModels.length > 0) return liveModels;
         return selectedProviderMeta?.sampleModels ?? [];
     }, [liveModels, selectedProviderMeta]);
+
+    const featuredProviderPills = useMemo(() => {
+        if (providers.length === 0) return FEATURED_PROVIDER_PRESETS.slice(0, 6);
+        const available = new Set(providers.map(p => p.id));
+        return FEATURED_PROVIDER_PRESETS.filter(item => available.has(item.id));
+    }, [providers]);
 
     const providerSelectOptions = useMemo(
         () =>
@@ -537,12 +555,52 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
                         {mode === "sdk" ? (
                             <>
-                                <Select
-                                    label={t("agentProviderLabel")}
-                                    value={provider}
-                                    onValueChange={val => handleProviderChange(String(val))}
-                                    options={providerSelectOptions}
-                                />
+                                <div className="flex flex-col gap-2">
+                                    <div className="flex items-end gap-2">
+                                        <span
+                                            aria-hidden
+                                            className="mb-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-md3-md border border-outline-variant/75 bg-surface-container text-primary"
+                                        >
+                                            <ProviderIcon provider={provider} model={model} size={18} />
+                                        </span>
+                                        <div className="min-w-0 flex-1">
+                                            <Select
+                                                label={t("agentProviderLabel")}
+                                                value={provider}
+                                                onValueChange={val => handleProviderChange(String(val))}
+                                                options={providerSelectOptions}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {featuredProviderPills.length > 0 ? (
+                                        <div
+                                            data-testid="settings-provider-presets"
+                                            className="flex flex-wrap gap-1.5"
+                                        >
+                                            {featuredProviderPills.map(preset => {
+                                                const active = provider === preset.id;
+                                                return (
+                                                    <button
+                                                        key={preset.id}
+                                                        type="button"
+                                                        data-testid={`settings-provider-pill-${preset.id}`}
+                                                        onClick={() => handleProviderChange(preset.id)}
+                                                        className={cn(
+                                                            "state-layer focus-ring inline-flex cursor-pointer items-center gap-1.5 rounded-md3-full border px-2.5 py-1 type-label-s transition-colors",
+                                                            active
+                                                                ? "border-primary bg-primary-container font-medium text-on-primary-container"
+                                                                : "border-outline-variant/70 bg-surface-container text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface",
+                                                        )}
+                                                    >
+                                                        <ProviderIcon provider={preset.id} size={13} />
+                                                        <span>{preset.shortLabel}</span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : null}
+                                </div>
 
                                 <div className="flex flex-col gap-2">
                                     <div className="flex items-end gap-2">
@@ -586,7 +644,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                                                     selected={model === sm.id}
                                                     onClick={() => setModel(sm.id)}
                                                 >
-                                                    {sm.id}
+                                                    <span className="inline-flex items-center gap-1.5">
+                                                        <ProviderIcon provider={provider} model={sm.id} size={13} />
+                                                        <span>{sm.id}</span>
+                                                    </span>
                                                 </Chip>
                                             ))}
                                         </div>

@@ -10,6 +10,7 @@ import {
     UI_LOCALE_LABELS,
     upsertStoryLocalePack,
     type StoryDocument,
+    type StoryPreloadProgress,
     type StoryRegion,
     type StoryVoiceManifest,
     type UiLocale,
@@ -80,6 +81,12 @@ export interface PlayerTopBarSlotContext extends StoryPlayerSlotContext {
     backToDraftsHref: string;
     onEditDraft?: (draftId: string) => void;
     editHref: string | null;
+    /** Open the player's asset preload dialog from a custom top bar (when a story is loaded). */
+    openPreloadDialog?: () => void;
+    /** Live background preload state reported by `<StoryPlayerView>`. */
+    preloadRunning?: boolean;
+    preloadProgress?: StoryPreloadProgress | null;
+    preloadReady?: boolean;
 }
 
 export interface StoryStudioPlayerSlots {
@@ -172,7 +179,19 @@ export function StoryStudioPlayer({
     const [issuesOpen, setIssuesOpen] = useState(false);
     const [snack, setSnack] = useState<string | null>(null);
     const [importCounter, setImportCounter] = useState(0);
+    const [preloadStatus, setPreloadStatus] = useState<{
+        running: boolean;
+        ready: boolean;
+        progress: StoryPreloadProgress | null;
+    }>({ running: false, ready: false, progress: null });
 
+    const preloadTriggerRef = useRef<(() => void) | null>(null);
+    const handleRegisterPreloadTrigger = useCallback((open: (() => void) | null) => {
+        preloadTriggerRef.current = open;
+    }, []);
+    const openPlayerPreloadDialog = useCallback(() => {
+        preloadTriggerRef.current?.();
+    }, []);
     const localePackInputRef = useRef<HTMLInputElement | null>(null);
     const loadSeqRef = useRef(0);
     const onImmersiveChangeRef = useRef(onImmersiveChange);
@@ -474,6 +493,10 @@ export function StoryStudioPlayer({
         backToDraftsHref,
         onEditDraft,
         editHref,
+        openPreloadDialog: activeDoc ? openPlayerPreloadDialog : undefined,
+        preloadRunning: preloadStatus.running,
+        preloadProgress: preloadStatus.progress,
+        preloadReady: preloadStatus.ready,
     };
 
     const slotEndAction = slots?.endAction?.(slotCtx);
@@ -881,6 +904,8 @@ export function StoryStudioPlayer({
                         voiceManifest={voiceManifest}
                         onOpenVoiceManifest={() => setVoiceManifestOpen(true)}
                         endAction={resolvedEndAction}
+                        onRegisterPreloadTrigger={handleRegisterPreloadTrigger}
+                        onPreloadStatusChange={setPreloadStatus}
                     />
                 </div>
             )}

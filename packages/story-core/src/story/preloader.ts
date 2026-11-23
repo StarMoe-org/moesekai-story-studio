@@ -11,6 +11,7 @@
  *   Web Audio `AudioBuffer` LRU cache (`audioCache.ts`).
  * - In-game scenario UI Kit into Cache API `"sse-ui-kit-v1"` via `loadStoryUiKit()`.
  */
+import { getCoreFetch, getStoryCoreConfig } from "../config";
 import { getAssetLine, type AssetLine, type AssetSourceType } from "../pjskAssets";
 import { fetchLive2DModels } from "../live2d/client";
 import { live2dSources } from "../live2d/config";
@@ -21,11 +22,28 @@ import {
 } from "./assets";
 import { resolveVoiceManifestLineUrl } from "./i18nPack";
 import { decodeStoryAudio, getCachedStoryAudio, getSharedAudioContext } from "./audioCache";
-import { loadStoryUiKit } from "./uiKit";
+import { isStoryUiKitSupported, loadStoryUiKit } from "./uiKit";
 
 const LIVE2D_CACHE_NAME = "sekai-live2d-v1";
 const UIKIT_CACHE_NAME = "sse-ui-kit-v1";
 const PRELOAD_CONCURRENCY = 4;
+
+/** In-session record of custom-protocol (e.g. `moesekai-cache://`) bundle prefixes fully warmed. */
+const warmedCustomProtocolBundles = new Set<string>();
+
+function isHttpUrl(url: string): boolean {
+    return /^https?:\/\//i.test(url);
+}
+
+function isCustomCacheHit(response: Response): boolean {
+    const header = response.headers?.get?.("x-moesekai-cache")?.trim().toUpperCase();
+    return header === "HIT" || header === "STALE";
+}
+
+/** Clears in-session custom-protocol preload tracking (primarily for tests). */
+export function clearPreloaderSessionCache(): void {
+    warmedCustomProtocolBundles.clear();
+}
 
 export type StoryPreloadCategory = "live2d" | "background" | "audio" | "uikit";
 
@@ -96,6 +114,8 @@ export interface CollectStoryAssetsOptions {
     voiceManifest?: StoryVoiceManifest | null;
     /** Include the in-game UI Kit in the manifest (default `true`). */
     includeUiKit?: boolean;
+    /** Optional host callback checking whether custom-protocol URL prefixes are cached locally. */
+    checkCachedUrlPrefixes?: (prefixes: readonly string[]) => Promise<boolean[]> | boolean[];
 }
 
 export interface PreloadStoryAssetsOptions extends CollectStoryAssetsOptions {
@@ -155,7 +175,7 @@ export function collectStoryAssets(
     doc: StoryDocument,
     options: CollectStoryAssetsOptions = {},
 ): StoryPreloadManifest {
-    const line: AssetLine = getAssetLine((options.assetSource ?? "main") as AssetSourceType);
+    const line: AssetLine = getAssetLine((options.assetSource ?? getStoryCoreConfig().defaultAssetLine) as AssetSourceType);
     const libraryBaseUrl = normalizeLibraryRoot(options.libraryBaseUrl ?? live2dSources(doc.region).library);
     const includeUiKit = options.includeUiKit !== false;
 
@@ -362,7 +382,7 @@ async function fetchRipperManifest(
 ): Promise<{ bundle: string; crc: string; files: RipperFileEntry[] } | null> {
     const url = `${library}library/${encodePath(bundle)}/_ripper.json`;
     try {
-        const response = await fetch(url, {
+        const response = await getCoreFetch()(url, {
             mode: "cors",
             credentials: "omit",
             cache: "no-cache",
@@ -387,15 +407,16 @@ function pickDefaultClipPath(clips: Map<string, string>, patterns: readonly RegE
     return clips.values().next().value;
 }
 
-async function preloadImage(url: string, signal?: AbortSignal): Promise<"fetched" | "failed" | "aborted"> {
+async function preloadImage(url: string, signal?: AbortSignal): Promise<"cached" | "fetched" | "failed" | "aborted"> {
     if (signal?.aborted) return "aborted";
     if (typeof Image === "undefined") {
-        // Non-DOM fallback: warm HTTP cache directly.
+        // Non-DOM fallback: warm HTTP / custom-protocol cache directly.
         try {
-            const res = await fetch(url, { mode: "cors", credentials: "omit", signal });
+            const res = await getCoreFetch()(url, { mode: "cors", credentials: "omit", signal });
             if (!res.ok) return "failed";
             await res.arrayBuffer();
-            return signal?.aborted ? "aborted" : "fetched";
+            if (signal?.aborted) return "aborted";
+            return isCustomCacheHit(res) ? "cached" : "fetched";
         } catch {
             return signal?.aborted ? "aborted" : "failed";
         }
@@ -435,14 +456,16 @@ async function preloadImage(url: string, signal?: AbortSignal): Promise<"fetched
     });
 }
 
-async function warmHttpAudio(urls: readonly string[], signal?: AbortSignal): Promise<"fetched" | "failed" | "aborted"> {
+async function warmHttpAudio(urls: readonly string[], signal?: AbortSignal): Promise<"cached" | "fetched" | "failed" | "aborted"> {
+    const fetchFn = getCoreFetch();
     for (const url of urls) {
         if (signal?.aborted) return "aborted";
         try {
-            const response = await fetch(url, { mode: "cors", credentials: "omit", signal });
+            const response = await fetchFn(url, { mode: "cors", credentials: "omit", signal });
             if (!response.ok) continue;
             await response.arrayBuffer();
-            return signal?.aborted ? "aborted" : "fetched";
+            if (signal?.aborted) return "aborted";
+            return isCustomCacheHit(response) ? "cached" : "fetched";
         } catch {
             if (signal?.aborted) return "aborted";
         }
@@ -631,8 +654,31 @@ export async function preloadStoryAssets(
         emit();
     }
 
-    const live2dCache = live2dTasks.length > 0 ? await openCacheSafe(LIVE2D_CACHE_NAME) : null;
+    const useBrowserLive2DCache = isHttpUrl(manifest.libraryBaseUrl);
+    const live2dCache = useBrowserLive2DCache && live2dTasks.length > 0 ? await openCacheSafe(LIVE2D_CACHE_NAME) : null;
     const canDecodeAudio = decodeAudio && typeof window !== "undefined" && getSharedAudioContext() !== null;
+    const fetchFn = getCoreFetch();
+
+    // Track per-bundle outcomes when running over custom protocols (e.g. `moesekai-cache://`)
+    // so `inspectStoryCacheStatus()` reflects warmed models immediately without Cache Storage API.
+    const customBundleCounts = new Map<string, { remaining: number; failed: boolean }>();
+    if (!useBrowserLive2DCache) {
+        for (const file of live2dTasks) {
+            const entry = customBundleCounts.get(file.bundle) ?? { remaining: 0, failed: false };
+            entry.remaining += 1;
+            customBundleCounts.set(file.bundle, entry);
+        }
+    }
+    const markCustomBundleFile = (bundle: string, succeeded: boolean) => {
+        if (useBrowserLive2DCache) return;
+        const entry = customBundleCounts.get(bundle);
+        if (!entry) return;
+        if (!succeeded) entry.failed = true;
+        entry.remaining -= 1;
+        if (entry.remaining <= 0 && !entry.failed) {
+            warmedCustomProtocolBundles.add(`${manifest.libraryBaseUrl}library/${encodePath(bundle)}/`);
+        }
+    };
 
     type WorkItem = () => Promise<void>;
     const tasks: WorkItem[] = [];
@@ -642,29 +688,39 @@ export async function preloadStoryAssets(
             if (signal?.aborted) return;
             const url = `${manifest.libraryBaseUrl}library/${encodePath(file.bundle)}/${encodePath(file.path)}`;
             const cacheKey = `${url}?crc=${file.crc}`;
-            try {
-                const hit = await live2dCache?.match(cacheKey);
-                if (hit) {
-                    recordResult("live2d", file.label, "cached");
-                    return;
+            if (useBrowserLive2DCache) {
+                try {
+                    const hit = await live2dCache?.match(cacheKey);
+                    if (hit) {
+                        recordResult("live2d", file.label, "cached");
+                        return;
+                    }
+                } catch {
+                    // fall through to network fetch
                 }
-            } catch {
-                // fall through to network fetch
             }
             try {
-                const response = await fetch(url, { mode: "cors", credentials: "omit", signal });
+                const response = await fetchFn(url, { mode: "cors", credentials: "omit", signal });
                 if (!response.ok) {
+                    markCustomBundleFile(file.bundle, false);
                     recordResult("live2d", file.label, "failed");
                     return;
                 }
                 const bytes = await response.arrayBuffer();
                 if (signal?.aborted) {
+                    markCustomBundleFile(file.bundle, false);
                     recordResult("live2d", file.label, "aborted");
                     return;
                 }
-                await live2dCache?.put(cacheKey, new Response(bytes)).catch(() => undefined);
-                recordResult("live2d", file.label, "fetched");
+                if (useBrowserLive2DCache) {
+                    await live2dCache?.put(cacheKey, new Response(bytes)).catch(() => undefined);
+                    recordResult("live2d", file.label, "fetched");
+                } else {
+                    markCustomBundleFile(file.bundle, true);
+                    recordResult("live2d", file.label, isCustomCacheHit(response) ? "cached" : "fetched");
+                }
             } catch {
+                markCustomBundleFile(file.bundle, false);
                 recordResult("live2d", file.label, signal?.aborted ? "aborted" : "failed");
             }
         });
@@ -706,22 +762,30 @@ export async function preloadStoryAssets(
     }
 
     if (manifest.includeUiKit) {
-        tasks.push(async () => {
-            if (signal?.aborted) return;
-            const kit = await loadStoryUiKit(doc.region, signal).catch(() => null);
-            if (signal?.aborted) {
-                kit?.release();
-                recordResult("uikit", "UI Kit", "aborted");
-                return;
-            }
-            if (kit) {
-                const outcome = kit.cached ? "cached" : "fetched";
-                kit.release();
-                recordResult("uikit", "UI Kit", outcome);
-            } else {
-                recordResult("uikit", "UI Kit", "failed");
-            }
-        });
+        const uiKitSupported = await isStoryUiKitSupported();
+        if (!uiKitSupported) {
+            // Host has no `sse-web` `kit-worker.js` (e.g. Electron desktop or `sse-web 2.0.0+`):
+            // omit UI Kit gracefully instead of counting a non-existent worker as a preload failure.
+            state.byCategory.uikit.total = 0;
+            emit();
+        } else {
+            tasks.push(async () => {
+                if (signal?.aborted) return;
+                const kit = await loadStoryUiKit(doc.region, signal).catch(() => null);
+                if (signal?.aborted) {
+                    kit?.release();
+                    recordResult("uikit", "UI Kit", "aborted");
+                    return;
+                }
+                if (kit) {
+                    const outcome = kit.cached ? "cached" : "fetched";
+                    kit.release();
+                    recordResult("uikit", "UI Kit", outcome);
+                } else {
+                    recordResult("uikit", "UI Kit", "failed");
+                }
+            });
+        }
     }
 
     await runPool(tasks, PRELOAD_CONCURRENCY, signal, async (task) => task());
@@ -733,8 +797,9 @@ export async function preloadStoryAssets(
 }
 
 /**
- * Inspects local Cache API (`sekai-live2d-v1`, `sse-ui-kit-v1`) and in-memory decoded audio cache
- * without issuing any network requests.
+ * Inspects local Cache API (`sekai-live2d-v1`, `sse-ui-kit-v1`), custom-protocol disk cache
+ * probes (`moesekai-cache://` / `checkCachedUrlPrefixes`), and in-memory decoded audio cache
+ * without issuing upstream network requests.
  */
 export async function inspectStoryCacheStatus(
     doc: StoryDocument,
@@ -744,24 +809,75 @@ export async function inspectStoryCacheStatus(
     let live2dCachedModels = 0;
     let uikitCached = false;
 
-    if (typeof caches !== "undefined") {
-        try {
-            if (manifest.live2d.length > 0 && (await caches.has(LIVE2D_CACHE_NAME))) {
-                const cache = await caches.open(LIVE2D_CACHE_NAME);
-                const keys = await cache.keys();
-                const urls = keys.map(req => req.url);
-                for (const item of manifest.live2d) {
-                    const prefix = `${manifest.libraryBaseUrl}library/${encodePath(item.bundle)}/`;
-                    if (urls.some(u => u.startsWith(prefix))) {
-                        live2dCachedModels += 1;
+    const useBrowserLive2DCache = isHttpUrl(manifest.libraryBaseUrl);
+
+    if (manifest.live2d.length > 0) {
+        if (useBrowserLive2DCache && typeof caches !== "undefined") {
+            try {
+                if (await caches.has(LIVE2D_CACHE_NAME)) {
+                    const cache = await caches.open(LIVE2D_CACHE_NAME);
+                    const keys = await cache.keys();
+                    const urls = keys.map(req => req.url);
+                    for (const item of manifest.live2d) {
+                        const prefix = `${manifest.libraryBaseUrl}library/${encodePath(item.bundle)}/`;
+                        if (urls.some(u => u.startsWith(prefix))) {
+                            live2dCachedModels += 1;
+                        }
                     }
                 }
+            } catch {
+                // ignore private-mode / sandboxed Cache API failures
             }
-        } catch {
-            // ignore private-mode / sandboxed Cache API failures
+        } else if (!useBrowserLive2DCache) {
+            const prefixes = manifest.live2d.map(
+                item => `${manifest.libraryBaseUrl}library/${encodePath(item.bundle)}/`,
+            );
+            const prefixChecker = options.checkCachedUrlPrefixes ?? getStoryCoreConfig().checkCachedUrlPrefixes;
+            if (prefixChecker) {
+                try {
+                    const hits = await prefixChecker(prefixes);
+                    for (let i = 0; i < prefixes.length; i++) {
+                        if (hits?.[i] || warmedCustomProtocolBundles.has(prefixes[i])) {
+                            live2dCachedModels += 1;
+                        }
+                    }
+                } catch {
+                    for (const prefix of prefixes) {
+                        if (warmedCustomProtocolBundles.has(prefix)) live2dCachedModels += 1;
+                    }
+                }
+            } else if (manifest.libraryBaseUrl.toLowerCase().startsWith("moesekai-cache://")) {
+                const fetchFn = getCoreFetch();
+                const results = await Promise.all(
+                    prefixes.map(async (prefix) => {
+                        if (warmedCustomProtocolBundles.has(prefix)) return true;
+                        try {
+                            const res = await fetchFn(`${prefix}_ripper.json`, {
+                                method: "HEAD",
+                                credentials: "omit",
+                                headers: { "X-MoeSekai-Cache-Probe": "1" },
+                            });
+                            return res.status === 200 && isCustomCacheHit(res);
+                        } catch {
+                            return false;
+                        }
+                    }),
+                );
+                for (const ok of results) {
+                    if (ok) live2dCachedModels += 1;
+                }
+            } else {
+                for (const prefix of prefixes) {
+                    if (warmedCustomProtocolBundles.has(prefix)) live2dCachedModels += 1;
+                }
+            }
         }
+    }
+
+    const uiKitSupported = manifest.includeUiKit ? await isStoryUiKitSupported() : false;
+    if (manifest.includeUiKit && typeof caches !== "undefined") {
         try {
-            if (manifest.includeUiKit && (await caches.has(UIKIT_CACHE_NAME))) {
+            if (await caches.has(UIKIT_CACHE_NAME)) {
                 const cache = await caches.open(UIKIT_CACHE_NAME);
                 const keys = await cache.keys();
                 uikitCached = keys.length > 0;
@@ -780,7 +896,7 @@ export async function inspectStoryCacheStatus(
     }
 
     const live2dReady = manifest.live2d.length === 0 || live2dCachedModels >= manifest.live2d.length;
-    const uikitReady = !manifest.includeUiKit || uikitCached;
+    const uikitReady = !manifest.includeUiKit || !uiKitSupported || uikitCached;
 
     return {
         live2dCachedModels,
@@ -788,6 +904,6 @@ export async function inspectStoryCacheStatus(
         audioDecodedCount,
         audioTotalDecodable: decodable.length,
         uikitCached,
-        hasLocalCache: (manifest.live2d.length > 0 || manifest.includeUiKit) && live2dReady && uikitReady,
+        hasLocalCache: (manifest.live2d.length > 0 || (manifest.includeUiKit && uiKitSupported)) && live2dReady && uikitReady,
     };
 }

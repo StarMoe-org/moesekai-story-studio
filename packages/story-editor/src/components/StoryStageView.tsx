@@ -1,7 +1,7 @@
 "use client";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useState, type ReactNode, type RefObject } from "react";
-import { Button, Icon, LoadingIndicator, cn } from "../md3";
+import { Button, Icon, LinearProgress, LoadingIndicator, Tooltip, cn } from "../md3";
 import { mdClose, mdErrorFill, mdInfo, mdRefresh, mdWarningFill } from "../md3/icons";
 import { useStoryI18n as useI18n, useStoryStudio } from "../context/StoryStudioContext";
 import { getCharacterIconUrl, type AssetLine } from "@moesekai/story-core";
@@ -10,7 +10,8 @@ import { storyBackgroundUrl } from "@moesekai/story-core";
 import type { StoryUiKit } from "@moesekai/story-core";
 import type { StoryDocument, StoryEffectColor, StoryStageState } from "@moesekai/story-core";
 import { GameStageOverlay, type GameStageChoiceProp } from "./GameStageOverlay";
-import type { StoryActorProblem, StoryStagePhase } from "./useStoryStage";
+import { MoeSekaiWordmarkSvg } from "./MoeSekaiWordmarkSvg";
+import type { StoryActorProblem, StoryStageLoadProgress, StoryStagePhase } from "./useStoryStage";
 
 /** Screen colours of fades and flashes: the game's, not theme roles. */
 export const SCREEN_COLORS: Record<StoryEffectColor, string> = { black: "#000", white: "#fff" };
@@ -19,6 +20,7 @@ export interface StoryStageStatusProps {
     phase: StoryStagePhase;
     problems: Record<string, StoryActorProblem>;
     loadingActors: number;
+    loadProgress?: StoryStageLoadProgress | null;
     onRetry: () => void;
 }
 
@@ -81,9 +83,9 @@ export function shouldShowStageAttribution(params: {
 
 const MISSING_KEYS = ["webgpu", "webgpu-adapter", "offscreen-canvas", "worker"] as const;
 
-/** Top-right corner stack: non-intrusive MoeSekai attribution micro-pill + engine status notes, clear of the game menu button. */
+/** Top-right corner stack: translucent MoeSekai SVG watermark + engine status notes, clear of the game menu button. */
 function StageTopRightOverlay({
-    phase, problems: actorProblems, loadingActors, onRetry, doc, compact, offsetForMenu, showAttribution, onOpenNotices,
+    phase, problems: actorProblems, loadingActors, loadProgress, onRetry, doc, compact, offsetForMenu, showAttribution, onOpenNotices,
 }: StoryStageStatusProps & {
     doc: StoryDocument;
     compact?: boolean;
@@ -96,34 +98,65 @@ function StageTopRightOverlay({
     const chip = "pointer-events-auto flex min-w-0 max-w-full items-center gap-2 rounded-md3-md glass px-3 py-1.5 type-label-m text-on-surface";
     const notes: ReactNode[] = [];
     if (showAttribution) {
+        const badgeLabel = t("page.storyMaker.attribution.stageBadge");
         notes.push(
-            <button
+            <Tooltip
                 key="moesekai-attribution"
-                type="button"
-                data-testid="moesekai-attribution-badge"
-                onClick={(event) => {
-                    event.stopPropagation();
-                    onOpenNotices?.();
-                }}
-                title={t("page.storyMaker.attribution.badgeTooltip")}
-                aria-label={t("page.storyMaker.attribution.badgeTooltip")}
-                className="sekai-attribution-badge pointer-events-auto"
+                side="bottom"
+                label={badgeLabel}
+                className="pointer-events-auto"
             >
-                <Icon path={mdInfo} size={12} className="shrink-0 opacity-80" />
-                <span className="truncate">{t("page.storyMaker.attribution.stageBadge")}</span>
-            </button>,
+                <button
+                    type="button"
+                    data-testid="moesekai-attribution-badge"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenNotices?.();
+                    }}
+                    aria-label={badgeLabel}
+                    className="sekai-attribution-badge"
+                >
+                    <MoeSekaiWordmarkSvg />
+                </button>
+            </Tooltip>,
         );
     }
     if (phase.kind === "loading" || phase.kind === "recovering" || loadingActors > 0) {
-        const statusKey = phase.kind === "recovering"
-            ? "page.storyMaker.engine.recovering"
+        const isActorBatch = phase.kind !== "loading" && phase.kind !== "recovering" && loadingActors > 0;
+        const labelText = phase.kind === "recovering"
+            ? t("page.storyMaker.engine.recovering")
             : phase.kind === "loading"
-                ? "page.storyMaker.engine.starting"
-                : "page.storyMaker.engine.loadingModels";
+                ? t("page.storyMaker.engine.starting")
+                : loadProgress && loadProgress.totalActors > 1
+                    ? t("page.storyMaker.engine.loadingModelsProgress", {
+                        completed: loadProgress.completedActors,
+                        total: loadProgress.totalActors,
+                    })
+                    : t("page.storyMaker.engine.loadingModels");
+        const percentText = isActorBatch && loadProgress && loadProgress.percent !== null
+            ? `${loadProgress.percent}%`
+            : null;
         notes.push(
-            <div key="loading" className={chip}>
-                <LoadingIndicator size={20} />
-                <span className="min-w-0 truncate">{t(statusKey)}</span>
+            <div key="loading" data-testid="stage-loading-indicator" className={chip}>
+                <LoadingIndicator size={18} className="shrink-0" />
+                <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="min-w-0 truncate">{labelText}</span>
+                        {percentText && (
+                            <span className="shrink-0 font-mono type-label-s tabular-nums text-on-surface-variant">
+                                {percentText}
+                            </span>
+                        )}
+                    </div>
+                    {isActorBatch && loadProgress && (
+                        <LinearProgress
+                            value={loadProgress.percent !== null ? loadProgress.percent / 100 : undefined}
+                            stop={false}
+                            aria-label={labelText}
+                            className="mt-1 h-1 min-w-28"
+                        />
+                    )}
+                </div>
             </div>,
         );
     } else if (phase.kind === "unavailable") {
@@ -197,7 +230,7 @@ function StageTopRightOverlay({
  * 1920x1080 `GameStageOverlay` scenario UI, and transient screen flashes.
  */
 export function StoryStageView({
-    doc, state, line, hostRef, phase, problems, loadingActors, onRetry,
+    doc, state, line, hostRef, phase, problems, loadingActors, loadProgress = null, onRetry,
     uiKit = null, uiHidden = false, dialogueText, autoPlay = false, showEndSign = false,
     choice = null, choiceInteractive = false, onChoose, onChoiceSound,
     showMenuButton = false, menuOpen = false, onMenuClick, animateCinemascope = false,
@@ -367,6 +400,7 @@ export function StoryStageView({
                 phase={phase}
                 problems={problems}
                 loadingActors={loadingActors}
+                loadProgress={loadProgress}
                 onRetry={onRetry}
                 doc={doc}
                 compact={compactStatus}

@@ -10,8 +10,14 @@ export interface MoesekaiCaptureHook {
     focusClimaxTalkBeat(): { nodeId: string; beatId: string } | null;
     /** Injects a realistic capture-only Agent thread fixture for visual UI verification. */
     injectAgentPreviewFixture(): boolean;
+    /** Clears Agent thread to show minimalist empty Usage Guide during capture/smoke runs. */
+    showAgentEmptyGuide(): boolean;
+    /** Opens or closes the Agent footer Model Picker popover during capture runs. */
+    setAgentModelPopoverOpen(open: boolean): boolean;
     /** Opens or closes the 2-tab Agent History Drawer during capture runs. */
     setAgentHistoryDrawerOpen(open: boolean, tab?: "conversations" | "snapshots"): boolean;
+    /** Switches to Player (Theater) view directly during capture/smoke runs. */
+    switchToTheaterPlayer(): void;
     /** Opens unified SettingsDialog on the requested tab during capture/smoke runs. */
     openSettingsDialog(tab?: "general" | "stage" | "agent"): void;
     /** Opens UpdateDialog with a deterministic CNB update-available fixture (capture-only). */

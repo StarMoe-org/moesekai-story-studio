@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readAutoPreloadPreference } from "../src/components/AssetPreloadPanel";
+import { MOESEKAI_WORDMARK_PATH, MOESEKAI_WORDMARK_VIEWBOX } from "../src/components/MoeSekaiWordmarkSvg";
 import { shouldShowStageAttribution } from "../src/components/StoryStageView";
 import { STORY_MAKER_MESSAGES_BY_LOCALE, type StoryStudioLocale } from "../src/messages";
 
@@ -83,6 +85,23 @@ describe("Non-intrusive MoeSekai Attribution & Notices (#175)", () => {
             expect(attribution!.licenseBody).toContain("MPL-2.0");
             expect(attribution!.licenseBody).toContain("Live2D Cubism Core");
             expect(attribution!.ipBody).toMatch(/SEGA|セガ/);
+
+            // Multi-actor aggregate loading progress key (#209)
+            const engine = messages.engine as Record<string, string> | undefined;
+            expect(typeof engine?.loadingModelsProgress).toBe("string");
+            expect(engine?.loadingModelsProgress).toContain("{completed}");
+            expect(engine?.loadingModelsProgress).toContain("{total}");
         }
+    });
+
+    test("exports official MoeSekai SVG wordmark path & viewBox verbatim from logo.svg (#207)", () => {
+        expect(MOESEKAI_WORDMARK_VIEWBOX).toBe("0 0 926 221");
+        expect(MOESEKAI_WORDMARK_PATH.startsWith("M453.000 10.138")).toBe(true);
+        expect(MOESEKAI_WORDMARK_PATH.length).toBeGreaterThan(8000);
+    });
+
+    test("readAutoPreloadPreference honors host default when localStorage is unavailable or unset (#210)", () => {
+        expect(readAutoPreloadPreference(false)).toBe(false);
+        expect(readAutoPreloadPreference(true)).toBe(true);
     });
 });

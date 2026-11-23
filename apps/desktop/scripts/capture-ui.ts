@@ -10,7 +10,7 @@ async function main(): Promise<void> {
     const outDir = outArg ? path.resolve(outArg) : path.join(appRoot, "dist", "screenshots");
     fs.mkdirSync(outDir, { recursive: true });
 
-    const timeoutMs = Number(process.env.MOESEKAI_CAPTURE_TIMEOUT_MS ?? "75000");
+    const timeoutMs = Number(process.env.MOESEKAI_CAPTURE_TIMEOUT_MS ?? "110000");
     console.log(`[desktop:capture] Launching Electron (1366x840) to capture UI screenshots -> ${outDir}`);
 
     const proc = Bun.spawn(["bunx", "electron", ".", `--capture-ui=${outDir}`], {

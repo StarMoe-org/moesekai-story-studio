@@ -101,6 +101,14 @@ export interface StoryPlayerViewProps {
     onOpenVoiceManifest?: () => void;
     /** Optional action rendered on the ending / error card (e.g. Back to editor). */
     endAction?: React.ReactNode;
+    /** Optional callback allowing a host top bar to open the player's `<AssetPreloadDialog>`. */
+    onRegisterPreloadTrigger?: (open: (() => void) | null) => void;
+    /** Optional status listener for live background preload state (running / ready / progress). */
+    onPreloadStatusChange?: (status: {
+        running: boolean;
+        ready: boolean;
+        progress: StoryPreloadProgress | null;
+    }) => void;
 }
 
 const CHAR_INTERVAL_MS = 28;
@@ -466,6 +474,8 @@ export function StoryPlayerView({
     voiceManifest = null,
     onOpenVoiceManifest,
     endAction,
+    onRegisterPreloadTrigger,
+    onPreloadStatusChange,
 }: StoryPlayerViewProps) {
     const { t, locale: uiLocale } = useI18n();
     const reduced = useReducedMotion();
@@ -553,13 +563,21 @@ export function StoryPlayerView({
     }, [models]);
 
     const { kit: uiKit } = useStoryUiKit(doc.region);
-    const { resolveLive2dSources, showAttribution, openNotices } = useStoryStudio();
+    const {
+        resolveLive2dSources,
+        sseWebScriptBase,
+        defaultAutoPreload,
+        showAttribution,
+        openNotices,
+    } = useStoryStudio();
+    const includeUiKit = Boolean(sseWebScriptBase);
     const library = useMemo(() => resolveLive2dSources(doc.region).library, [doc.region, resolveLive2dSources]);
     const {
         hostRef: stageHostRef,
         phase: stagePhase,
         problems: stageProblems,
         loadingActors,
+        loadProgress: stageLoadProgress,
         apply: applyStage,
         setTalking: setStageTalking,
         shake: shakeStage,
@@ -586,8 +604,14 @@ export function StoryPlayerView({
     }, [unlockAudio]);
 
     const assetManifest = useMemo(
-        () => collectStoryAssets(doc, { assetSource: preloadSource, models, voiceManifest }),
-        [doc, preloadSource, models, voiceManifest],
+        () => collectStoryAssets(doc, {
+            assetSource: preloadSource,
+            models,
+            voiceManifest,
+            libraryBaseUrl: library,
+            includeUiKit,
+        }),
+        [doc, includeUiKit, library, models, preloadSource, voiceManifest],
     );
 
     /** First SceneNode (and optional beat) referencing each asset, for click-to-jump in Media Bin. */
@@ -682,7 +706,7 @@ export function StoryPlayerView({
     const [drawerTab, setDrawerTab] = useState<LeftPaneTab>("phase");
     const [previewingAudioKey, setPreviewingAudioKey] = useState<string | null>(null);
     const [preloadOpen, setPreloadOpen] = useState(false);
-    const [autoPreload, setAutoPreload] = useState(false);
+    const [autoPreload, setAutoPreload] = useState(() => readAutoPreloadPreference(defaultAutoPreload));
     const [preloadRunning, setPreloadRunning] = useState(false);
     const [preloadProgress, setPreloadProgress] = useState<StoryPreloadProgress | null>(null);
     const [cacheReady, setCacheReady] = useState(false);
@@ -695,13 +719,41 @@ export function StoryPlayerView({
 
     const flashKeyRef = useRef(0);
     const playGenRef = useRef(0);
+    const runningRef = useRef(false);
     const voiceTokenRef = useRef(0);
     const binPreviewTokenRef = useRef(0);
     const preloadAbortRef = useRef<AbortController | null>(null);
+    const onRegisterPreloadTriggerRef = useRef(onRegisterPreloadTrigger);
+    const onPreloadStatusChangeRef = useRef(onPreloadStatusChange);
     const skipWaitRef = useRef<(() => void) | null>(null);
     const stageStateRef = useRef(stageState);
     const liveVariablesRef = useRef(liveVariables);
     const historyRef = useRef(history);
+
+    useEffect(() => {
+        onRegisterPreloadTriggerRef.current = onRegisterPreloadTrigger;
+        onPreloadStatusChangeRef.current = onPreloadStatusChange;
+    }, [onPreloadStatusChange, onRegisterPreloadTrigger]);
+
+    useEffect(() => {
+        const trigger = () => setPreloadOpen(true);
+        onRegisterPreloadTriggerRef.current?.(trigger);
+        return () => {
+            onRegisterPreloadTriggerRef.current?.(null);
+        };
+    }, []);
+
+    useEffect(() => {
+        onPreloadStatusChangeRef.current?.({
+            running: preloadRunning,
+            ready: cacheReady || Boolean(preloadProgress?.done && preloadProgress.failed === 0),
+            progress: preloadProgress,
+        });
+    }, [cacheReady, preloadProgress, preloadRunning]);
+
+    useEffect(() => {
+        runningRef.current = running;
+    }, [running]);
 
     useEffect(() => {
         stageStateRef.current = stageState;
@@ -814,11 +866,19 @@ export function StoryPlayerView({
         }
     }, []);
 
-    /** Inspect browser caches on mount and honor saved auto-preload preference without blocking playback. */
+    /** Inspect local caches once `models.json` resolves and honor auto-preload preference without blocking playback. */
     useEffect(() => {
-        const enabled = readAutoPreloadPreference();
+        if (modelList.status === "loading") return;
+        const enabled = readAutoPreloadPreference(defaultAutoPreload);
         let cancelled = false;
-        void inspectStoryCacheStatus(doc, { assetSource: preloadSource, models: modelsRef.current, voiceManifest }).then((status) => {
+        const preloadOptions = {
+            assetSource: preloadSource,
+            models: stageModels ?? undefined,
+            voiceManifest,
+            libraryBaseUrl: library,
+            includeUiKit,
+        };
+        void inspectStoryCacheStatus(doc, preloadOptions).then((status) => {
             if (cancelled) return;
             setAutoPreload(enabled);
             setCacheReady(status.hasLocalCache);
@@ -832,9 +892,7 @@ export function StoryPlayerView({
             if (cancelled || controller.signal.aborted || preloadAbortRef.current !== controller) return;
             setPreloadRunning(true);
             void preloadStoryAssets(doc, {
-                assetSource: preloadSource,
-                models: modelsRef.current,
-                voiceManifest,
+                ...preloadOptions,
                 signal: controller.signal,
                 onProgress: (next) => {
                     if (cancelled || preloadAbortRef.current !== controller) return;
@@ -862,7 +920,7 @@ export function StoryPlayerView({
                 preloadAbortRef.current = null;
             }
         };
-    }, [doc, preloadSource, voiceManifest]);
+    }, [defaultAutoPreload, doc, includeUiKit, library, modelList.status, preloadSource, stageModels, voiceManifest]);
 
     const latestItem = history[history.length - 1] ?? null;
     const activeFrame = latestItem?.frame ?? null;
@@ -913,6 +971,7 @@ export function StoryPlayerView({
             setStageState(finalFrame.stage);
             setLiveVariables(finalFrame.variables);
             setTypedCount(finalFrame.stage.dialogue?.body.length ?? 0);
+            runningRef.current = false;
             setRunning(false);
             syncBgm(
                 finalFrame.stage.bgm.name ? storyBgmUrl(finalFrame.stage.bgm.name, doc.region, line) : null,
@@ -923,6 +982,7 @@ export function StoryPlayerView({
             return;
         }
 
+        runningRef.current = true;
         setRunning(true);
         let stage = baseStage;
         let vars = baseVars;
@@ -1068,6 +1128,7 @@ export function StoryPlayerView({
             finalFrame.stage.bgm.volume,
         );
         setEffectActive(false);
+        runningRef.current = false;
         setRunning(false);
         if (finalFrame.stoppedReason !== "blocking") setAutoPlay(false);
     }, [applyStage, doc.region, line, playSe, reduced, setStageTalking, shakeStage, startVoice, stopActiveVoice, syncBgm, waitMs]);
@@ -1150,9 +1211,9 @@ export function StoryPlayerView({
         }
     }, [localizedDoc]);
 
-    /** Re-sync actors when the Live2D stage becomes ready or the model list finishes loading. */
+    /** Re-sync actors when the Live2D stage becomes ready or the model list finishes loading (without interrupting active frame playback). */
     useEffect(() => {
-        if (stagePhase.kind !== "ready" || !models) return;
+        if (stagePhase.kind !== "ready" || !models || runningRef.current) return;
         void applyStage(stageStateRef.current, { instant: true });
     }, [applyStage, stagePhase.kind, models]);
 
@@ -1232,6 +1293,7 @@ export function StoryPlayerView({
         setLiveVariables(finalFrame.variables);
         setTypedCount(finalFrame.stage.dialogue?.body.length ?? 0);
         setEffectActive(false);
+        runningRef.current = false;
         setRunning(false);
         syncBgm(
             finalFrame.stage.bgm.name ? storyBgmUrl(finalFrame.stage.bgm.name, doc.region, line) : null,
@@ -2320,6 +2382,7 @@ export function StoryPlayerView({
                                     phase={stagePhase}
                                     problems={stageProblems}
                                     loadingActors={loadingActors}
+                                    loadProgress={stageLoadProgress}
                                     onRetry={retryStage}
                                     uiKit={uiKit}
                                     uiHidden={uiHidden}
@@ -2738,13 +2801,16 @@ export function StoryPlayerView({
                             )}
                         >
                             {(!emptyStory || preloadRunning) && (
-                                <div className={cn("flex min-w-0 flex-wrap items-center justify-between gap-1.5 px-1", isNleWorkspace && "xl:hidden")}>
+                                <div className={cn("flex min-w-0 flex-wrap items-center justify-between gap-1.5 px-1", isNleWorkspace && !preloadRunning && "xl:hidden")}>
                                     {!emptyStory && (
                                         <button
                                             type="button"
                                             onClick={handlePhaseButtonClick}
                                             aria-expanded={showStackedDrawer}
-                                            className="state-layer focus-ring inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full bg-surface-container px-2.5 py-1 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
+                                            className={cn(
+                                                "state-layer focus-ring inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full bg-surface-container px-2.5 py-1 type-label-s text-on-surface-variant transition-colors hover:text-on-surface",
+                                                isNleWorkspace && "xl:hidden",
+                                            )}
                                         >
                                             <span
                                                 aria-hidden

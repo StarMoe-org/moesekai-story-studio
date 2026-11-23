@@ -7,7 +7,7 @@ import {
     mdCheckCircle, mdCloudDone, mdDownload, mdErrorFill, mdFace, mdImage,
     mdLayers, mdMusicNote, mdRefresh,
 } from "../md3/icons";
-import { useStoryI18n as useI18n } from "../context/StoryStudioContext";
+import { useStoryI18n as useI18n, useStoryStudio } from "../context/StoryStudioContext";
 import type { AssetSourceType } from "@moesekai/story-core";
 import type { AssetLine } from "@moesekai/story-core";
 import type { Live2DModel } from "@moesekai/story-core";
@@ -43,13 +43,14 @@ function subscribeAutoPreload(listener: () => void): () => void {
     };
 }
 
-export function readAutoPreloadPreference(): boolean {
-    if (typeof window === "undefined") return false;
+export function readAutoPreloadPreference(defaultEnabled = false): boolean {
+    if (typeof window === "undefined") return defaultEnabled;
     try {
         const raw = window.localStorage.getItem(STORY_AUTO_PRELOAD_STORAGE_KEY);
+        if (raw === null) return defaultEnabled;
         return raw === "1" || raw === "true";
     } catch {
-        return false;
+        return defaultEnabled;
     }
 }
 
@@ -124,16 +125,26 @@ export function AssetPreloadDialog({
     onCancelExternal,
 }: AssetPreloadDialogProps) {
     const { t } = useI18n();
+    const { resolveLive2dSources, sseWebScriptBase, defaultAutoPreload } = useStoryStudio();
+    const libraryBaseUrl = useMemo(
+        () => resolveLive2dSources(doc.region).library,
+        [doc.region, resolveLive2dSources],
+    );
+    const includeUiKit = Boolean(sseWebScriptBase);
+    const readStoredAuto = useCallback(
+        () => readAutoPreloadPreference(defaultAutoPreload),
+        [defaultAutoPreload],
+    );
     const storedAuto = useSyncExternalStore(
         subscribeAutoPreload,
-        readAutoPreloadPreference,
-        () => false,
+        readStoredAuto,
+        () => defaultAutoPreload,
     );
     const effectiveAutoPreload = autoPreload ?? storedAuto;
 
     const manifest = useMemo(
-        () => collectStoryAssets(doc, { assetSource, models, voiceManifest }),
-        [doc, assetSource, models, voiceManifest],
+        () => collectStoryAssets(doc, { assetSource, models, voiceManifest, libraryBaseUrl, includeUiKit }),
+        [doc, assetSource, models, voiceManifest, libraryBaseUrl, includeUiKit],
     );
 
     const [scopedCache, setScopedCache] = useState<ScopedCacheState | null>(null);
@@ -156,13 +167,13 @@ export function AssetPreloadDialog({
 
     const refreshCacheStatus = useCallback(() => {
         let cancelled = false;
-        void inspectStoryCacheStatus(doc, { assetSource, models, voiceManifest }).then((status) => {
+        void inspectStoryCacheStatus(doc, { assetSource, models, voiceManifest, libraryBaseUrl, includeUiKit }).then((status) => {
             if (!cancelled && mountedRef.current) {
                 setScopedCache({ doc, assetSource, voiceManifest, status });
             }
         });
         return () => { cancelled = true; };
-    }, [doc, assetSource, models, voiceManifest]);
+    }, [doc, assetSource, models, voiceManifest, libraryBaseUrl, includeUiKit]);
 
     useEffect(() => {
         if (!open) return;
@@ -213,6 +224,8 @@ export function AssetPreloadDialog({
                 assetSource,
                 models,
                 voiceManifest,
+                libraryBaseUrl,
+                includeUiKit,
                 signal: controller.signal,
                 onProgress: (next) => {
                     if (!mountedRef.current || runIdRef.current !== runId || abortRef.current !== controller) return;
@@ -223,7 +236,13 @@ export function AssetPreloadDialog({
             abortRef.current = null;
             setScopedProgress({ doc, assetSource, voiceManifest, progress: finalProgress });
             setLocalRunning(false);
-            const nextStatus = await inspectStoryCacheStatus(doc, { assetSource, models, voiceManifest }).catch(() => null);
+            const nextStatus = await inspectStoryCacheStatus(doc, {
+                assetSource,
+                models,
+                voiceManifest,
+                libraryBaseUrl,
+                includeUiKit,
+            }).catch(() => null);
             if (!mountedRef.current || runIdRef.current !== runId) return;
             if (nextStatus) {
                 setScopedCache({ doc, assetSource, voiceManifest, status: nextStatus });
@@ -236,7 +255,7 @@ export function AssetPreloadDialog({
             abortRef.current = null;
             setLocalRunning(false);
         }
-    }, [assetSource, doc, externalRunning, localRunning, models, onCancelExternal, onComplete, voiceManifest]);
+    }, [assetSource, doc, externalRunning, includeUiKit, libraryBaseUrl, localRunning, models, onCancelExternal, onComplete, voiceManifest]);
 
     const handleAutoPreloadToggle = useCallback((checked: boolean) => {
         writeAutoPreloadPreference(checked);

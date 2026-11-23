@@ -351,6 +351,43 @@ async function bootstrap(): Promise<void> {
                 console.log(`[desktop:capture] Saved ${outPath}`);
             };
 
+            // Install Worker probe before any Live2D stage boots so we verify exact mounted actors & alpha!
+            await win.webContents.executeJavaScript(`(() => {
+                if (window.__stageProbeInstalled) return;
+                window.__stageProbeInstalled = true;
+                window.__stageProbe = { actors: [], alpha: {}, errors: [] };
+                const OrigWorker = window.Worker;
+                window.Worker = function(url, opts) {
+                    const w = new OrigWorker(url, opts);
+                    const origPost = w.postMessage.bind(w);
+                    w.postMessage = function(msg, transfer) {
+                        if (msg && typeof msg === "object") {
+                            if (msg.type === "add" && msg.actor) {
+                                window.__stageProbe.alpha[msg.actor] = msg.placement?.alpha ?? 1;
+                            } else if (msg.type === "set" && msg.actor && msg.placement?.alpha !== undefined) {
+                                window.__stageProbe.alpha[msg.actor] = msg.placement.alpha;
+                            } else if (msg.type === "remove" && msg.actor) {
+                                delete window.__stageProbe.alpha[msg.actor];
+                            } else if (msg.type === "init") {
+                                window.__stageProbe.actors = [];
+                                window.__stageProbe.alpha = {};
+                            }
+                        }
+                        return origPost(msg, transfer);
+                    };
+                    w.addEventListener("message", ev => {
+                        const d = ev.data;
+                        if (!d || typeof d !== "object") return;
+                        if (d.type === "actors" && Array.isArray(d.ids)) {
+                            window.__stageProbe.actors = d.ids.slice();
+                        } else if (d.type === "error") {
+                            window.__stageProbe.errors.push(d);
+                        }
+                    });
+                    return w;
+                };
+            })()`);
+
             await sleep(700);
             // 1. Welcome Light (flat MD3, zero gradient)
             await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.setTheme("light")`);
@@ -364,7 +401,7 @@ async function bootstrap(): Promise<void> {
             await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.setTheme("light"); window.__moesekaiCaptureHook?.openCreateDialog();`);
             await snap("03-create-project-dialog.png");
 
-            // 4. Editor workspace with Nightcord climax talk beat -> REAL Live2D characters on stage + enabled 浏览 + upgraded MoeSekai Agent (340px default)
+            // 4. Open Nightcord starter -> Capture clean minimalist Agent Empty Usage Guide + open Model Picker with <ProviderIcon /> (#211)
             await win.webContents.executeJavaScript(
                 `(async () => {
                     window.__moesekaiCaptureHook?.closeCreateDialog();
@@ -375,7 +412,8 @@ async function bootstrap(): Promise<void> {
                     }
                     window.__moesekaiCaptureHook?.focusClimaxTalkBeat();
                     window.__moesekaiCaptureHook?.setAgentPanelWidth(340);
-                    window.__moesekaiCaptureHook?.injectAgentPreviewFixture();
+                    window.__moesekaiCaptureHook?.showAgentEmptyGuide();
+                    window.__moesekaiCaptureHook?.setAgentModelPopoverOpen(true);
                 })()`,
             );
             // Wait for live CDN Live2D actors (all 4 Nightcord cast) to finish loading & scroll enabled `浏览` buttons into view
@@ -387,7 +425,6 @@ async function bootstrap(): Promise<void> {
                     if (firstBrowse) {
                         firstBrowse.scrollIntoView({ block: "center", behavior: "instant" });
                     }
-                    // Give stage initial startup time before polling for loading pill disappearance
                     await new Promise(r => setTimeout(r, 2500));
                     for (let i = 0; i < 80; i++) {
                         const text = document.body.innerText || "";
@@ -397,15 +434,36 @@ async function bootstrap(): Promise<void> {
                     }
                 })()`,
             );
-            await sleep(700);
+            await sleep(500);
+            const emptyGuideCheck = await win.webContents.executeJavaScript(`(() => {
+                const guide = document.querySelector('[data-testid="agent-empty-guide"]');
+                const pillIcon = document.querySelector('[data-testid="agent-model-pill"] [data-provider-brand]');
+                const popover = document.querySelector('[data-testid="agent-model-popover"]');
+                const popoverIcons = popover ? popover.querySelectorAll('[data-provider-brand]').length : 0;
+                return {
+                    hasEmptyGuide: Boolean(guide),
+                    hasModelPillIcon: Boolean(pillIcon),
+                    pillBrand: pillIcon?.getAttribute("data-provider-brand") ?? null,
+                    hasModelPopover: Boolean(popover),
+                    popoverIconCount: popoverIcons,
+                    stageActors: window.__stageProbe?.actors ?? [],
+                };
+            })()`);
+            console.log("[desktop:capture] emptyGuideAndModelPickerCheck(1366x840):", JSON.stringify(emptyGuideCheck));
+            await snap("04-agent-empty-guide-and-model-picker.png");
+
+            // 5. Close model popover & inject Agent thread fixture (default 340px)
+            await win.webContents.executeJavaScript(`
+                window.__moesekaiCaptureHook?.setAgentModelPopoverOpen(false);
+                window.__moesekaiCaptureHook?.injectAgentPreviewFixture();
+            `);
+            await sleep(500);
 
             const editorCheck = await win.webContents.executeJavaScript(`(() => {
                 const header = document.querySelector('[data-desktop-topbar="editor"]');
                 const spacer = document.querySelector('[data-drag-spacer="left"]');
                 const agentBtn = document.querySelector('[data-testid="agent-toggle-btn"]');
                 const resizeHandle = document.querySelector('[data-testid="agent-resize-handle"]');
-                const newChatBtn = document.querySelector('[data-testid="agent-new-chat-btn"]');
-                const historyBtn = document.querySelector('[data-testid="agent-history-btn"]');
                 const agentContainer = document.querySelector('[data-testid="agent-panel-container"]');
                 const thinkingBlock = document.querySelector('[data-testid="agent-thinking-block"]');
                 const retryPill = document.querySelector('[data-testid="agent-retry-recovered-pill"]');
@@ -432,22 +490,7 @@ async function bootstrap(): Promise<void> {
                 };
             })()`);
             console.log("[desktop:capture] editorCheck(1366x840 default 340px):", JSON.stringify(editorCheck));
-            await snap("04-editor-agent-thread-default.png");
-
-            // 5. Resized wider MoeSekai Agent panel (460px at 1366x840) -> crisp spacious Markdown/table & zero overflow
-            await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.setAgentPanelWidth(460);`);
-            await sleep(500);
-            const resizedCheck = await win.webContents.executeJavaScript(`(() => {
-                const agentContainer = document.querySelector('[data-testid="agent-panel-container"]');
-                const aside = document.querySelector("aside");
-                return {
-                    innerWidth: window.innerWidth,
-                    agentWidth: agentContainer ? Math.round(agentContainer.getBoundingClientRect().width) : 0,
-                    asideRight: aside ? Math.round(aside.getBoundingClientRect().right) : 0,
-                };
-            })()`);
-            console.log("[desktop:capture] resizedCheck(1366x840 width 460px):", JSON.stringify(resizedCheck));
-            await snap("05-editor-agent-resized-460.png");
+            await snap("05-editor-agent-thread-default.png");
 
             // 6. 2-tab Agent Conversation History & Snapshots Drawer (380px at 1366x840)
             await win.webContents.executeJavaScript(`
@@ -502,14 +545,14 @@ async function bootstrap(): Promise<void> {
             await sleep(700);
             await snap("08-export-msk-dialog.png");
 
-            // 9. Unified Settings Dialog: Appearance & Language tab (5 locales w/ crisp inline SVG flags incl. HK flag for zh-TW + 26 character seeds)
+            // 9. Unified Settings Dialog: Appearance & Language tab (5 locales w/ HK flag + 繁體中文 + 26 seeds)
             await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.openSettingsDialog("general");`);
             await sleep(450);
             const settingsGeneralCheck = await win.webContents.executeJavaScript(`(() => {
                 const dialogEl = document.querySelector('[data-testid="settings-dialog"]');
                 const generalTab = document.querySelector('[data-testid="settings-tab-general"]');
                 const localeBtns = Array.from(document.querySelectorAll('button[data-testid^="settings-locale-"]'))
-                    .map(el => el.getAttribute("data-testid"));
+                    .map(el => ({ id: el.getAttribute("data-testid"), text: el.textContent?.trim() }));
                 const settingsBtn = document.querySelector('[data-testid="topbar-settings-btn"]');
                 const aboutBtn = document.querySelector('[data-testid="topbar-about-btn"]');
                 const updatePill = document.querySelector('[data-testid="topbar-update-pill"]');
@@ -525,15 +568,17 @@ async function bootstrap(): Promise<void> {
             console.log("[desktop:capture] settingsGeneralCheck(1366x840):", JSON.stringify(settingsGeneralCheck));
             await snap("09-settings-general.png");
 
-            // 10. Unified Settings Dialog: MoeSekai Agent tab
+            // 10. Unified Settings Dialog: MoeSekai Agent tab (with mainstream <ProviderIcon /> pills + model icons)
             await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.openSettingsDialog("agent");`);
             await sleep(450);
             const settingsAgentCheck = await win.webContents.executeJavaScript(`(() => {
                 const agentTab = document.querySelector('[data-testid="settings-tab-agent"]');
                 const saveBtn = document.querySelector('[data-testid="settings-save-agent-btn"]');
+                const providerIcons = agentTab ? agentTab.querySelectorAll('[data-provider-brand]').length : 0;
                 return {
                     hasAgentTab: Boolean(agentTab),
                     hasSaveAgentBtn: Boolean(saveBtn),
+                    providerIconCount: providerIcons,
                 };
             })()`);
             console.log("[desktop:capture] settingsAgentCheck(1366x840):", JSON.stringify(settingsAgentCheck));
@@ -596,21 +641,131 @@ async function bootstrap(): Promise<void> {
             console.log("[desktop:capture] noticesDialogCheck(1366x840):", JSON.stringify(noticesDialogCheck));
             await snap("13-about-notices-dialog.png");
 
-            // 14. Playtest Stage with non-intrusive MoeSekai attribution badge & SSAA
-            await win.webContents.executeJavaScript(`window.__moesekaiCaptureHook?.switchToPlaytestMode();`);
-            await sleep(1400);
-            const playtestCheck = await win.webContents.executeJavaScript(`(() => {
+            // 14 & 15. Theater Player: step rapidly through scene_01 -> scene_02 (ALL 4 actors!) -> choice -> scene_03b -> scene_04 (BOTH kanade & mafuyu!) + new translucent MoeSekai SVG watermark!
+            const theaterStep1 = await win.webContents.executeJavaScript(`(async () => {
+                window.__moesekaiCaptureHook?.switchToTheaterPlayer();
+                for (let i = 0; i < 40; i++) {
+                    if (document.querySelector('[data-desktop-view="player"]')) break;
+                    await new Promise(r => setTimeout(r, 100));
+                }
+                const theaterBtn = Array.from(document.querySelectorAll('[data-desktop-topbar="player"] button')).find(
+                    b => b.textContent?.trim() === "剧场",
+                );
+                if (theaterBtn) theaterBtn.click();
+                await new Promise(r => setTimeout(r, 1800));
+
+                const clickNext = () => {
+                    const btn = Array.from(document.querySelectorAll("button")).find(b => b.textContent?.trim() === "下一句");
+                    if (btn) btn.click();
+                };
+                const getLiveStageText = () => {
+                    const badge = document.querySelector('[data-testid="moesekai-attribution-badge"], .sekai-attribution-badge');
+                    const stageBox = badge?.closest("div.relative");
+                    return stageBox?.textContent || "";
+                };
+
+                // Wait for Theater mode to actually hide ReactFlow (layout switched from workspace -> theater)
+                for (let i = 0; i < 20; i++) {
+                    if (!document.querySelector(".react-flow")) break;
+                    await new Promise(r => setTimeout(r, 80));
+                }
+
+                // Advance rapidly until the LIVE STAGE shows scene_02_call ("Nightcord·语音通话中")
+                for (let s = 0; s < 75; s++) {
+                    if (getLiveStageText().includes("Nightcord·语音通话中")) break;
+                    clickNext();
+                    await new Promise(r => setTimeout(r, 85));
+                }
+                // Click rapidly while scene_02 is entering to test mid-load supersede recovery!
+                clickNext();
+                await new Promise(r => setTimeout(r, 90));
+                clickNext();
+
+                // Wait for all 4 Nightcord actors to finish loading cleanly
+                for (let w = 0; w < 90; w++) {
+                    const actors = window.__stageProbe?.actors ?? [];
+                    const loading = getLiveStageText().includes("正在加载角色模型");
+                    if (actors.length >= 4 && !loading) break;
+                    await new Promise(r => setTimeout(r, 200));
+                }
+                await new Promise(r => setTimeout(r, 500));
+
                 const badge = document.querySelector('[data-testid="moesekai-attribution-badge"], .sekai-attribution-badge');
                 const canvas = document.querySelector("canvas");
                 return {
+                    placeOk: getLiveStageText().includes("Nightcord·语音通话中"),
+                    actors: (window.__stageProbe?.actors ?? []).slice().sort(),
+                    alpha: { ...(window.__stageProbe?.alpha ?? {}) },
                     hasAttributionBadge: Boolean(badge),
-                    badgeText: badge?.textContent?.trim() ?? null,
+                    hasAttributionSvg: Boolean(badge?.querySelector("svg")),
+                    hasPlayerPreloadBtn: Boolean(document.querySelector('[data-testid="player-topbar-preload-btn"]')),
                     canvasW: canvas?.width ?? 0,
                     canvasH: canvas?.height ?? 0,
                 };
             })()`);
-            console.log("[desktop:capture] playtestCheck(1366x840):", JSON.stringify(playtestCheck));
-            await snap("14-playtest-attribution.png");
+            console.log("[desktop:capture] theaterScene02Check(4 actors):", JSON.stringify(theaterStep1));
+            await snap("14-player-4actors-svg-watermark.png");
+
+            const theaterStep2 = await win.webContents.executeJavaScript(`(async () => {
+                const clickNext = () => {
+                    const btn = Array.from(document.querySelectorAll("button")).find(b => b.textContent?.trim() === "下一句");
+                    if (btn) btn.click();
+                };
+                const getLiveStageText = () => {
+                    const badge = document.querySelector('[data-testid="moesekai-attribution-badge"], .sekai-attribution-badge');
+                    const stageBox = badge?.closest("div.relative");
+                    return stageBox?.textContent || "";
+                };
+                const clickChoice = () => {
+                    const mainEl = document.querySelector('[data-desktop-view="player"] main');
+                    if (!mainEl) return false;
+                    const btn = Array.from(mainEl.querySelectorAll("button")).find(
+                        b => !b.closest(".react-flow") && b.textContent?.includes("先看绘名刚画完的草图"),
+                    );
+                    if (btn) {
+                        btn.click();
+                        return true;
+                    }
+                    return false;
+                };
+
+                // Advance through scene_02 -> choice -> scene_03b -> scene_04 ("奏的房间·凌晨02:30") -> Mafuyu's line!
+                for (let s = 0; s < 110; s++) {
+                    const txt = getLiveStageText();
+                    if (txt.includes("奏的房间·凌晨02:30") && txt.includes("手机在发光")) break;
+                    const nextBtn = Array.from(document.querySelectorAll("button")).find(b => b.textContent?.trim() === "下一句");
+                    if (nextBtn && nextBtn.disabled) {
+                        clickChoice();
+                    } else {
+                        nextBtn?.click();
+                    }
+                    await new Promise(r => setTimeout(r, 85));
+                }
+
+                // Wait for BOTH kanade & mafuyu to replace ena & mizuki and finish loading!
+                for (let w = 0; w < 90; w++) {
+                    const actors = window.__stageProbe?.actors ?? [];
+                    const loading = getLiveStageText().includes("正在加载角色模型");
+                    if (actors.length === 2 && actors.includes("kanade") && actors.includes("mafuyu") && !loading) break;
+                    await new Promise(r => setTimeout(r, 200));
+                }
+                await new Promise(r => setTimeout(r, 500));
+
+                const badge = document.querySelector('[data-testid="moesekai-attribution-badge"], .sekai-attribution-badge');
+                const canvas = document.querySelector("canvas");
+                return {
+                    placeOk: getLiveStageText().includes("奏的房间·凌晨02:30"),
+                    actors: (window.__stageProbe?.actors ?? []).slice().sort(),
+                    alpha: { ...(window.__stageProbe?.alpha ?? {}) },
+                    hasAttributionBadge: Boolean(badge),
+                    hasAttributionSvg: Boolean(badge?.querySelector("svg")),
+                    canvasW: canvas?.width ?? 0,
+                    canvasH: canvas?.height ?? 0,
+                    workerErrors: window.__stageProbe?.errors ?? [],
+                };
+            })()`);
+            console.log("[desktop:capture] theaterScene04Check(2 actors):", JSON.stringify(theaterStep2));
+            await snap("15-player-2actors-svg-watermark.png");
 
             console.log("MOESEKAI_CAPTURE_OK");
             updater.dispose();
@@ -630,6 +785,39 @@ async function bootstrap(): Promise<void> {
             await new Promise(resolve => setTimeout(resolve, 500));
 
             const bridgeCheck = await win.webContents.executeJavaScript(`(async () => {
+                // Install Worker probe before any Live2D stage boots so we verify exact mounted actors & alpha!
+                window.__stageProbe = { actors: [], alpha: {}, errors: [] };
+                const OrigWorker = window.Worker;
+                window.Worker = function(url, opts) {
+                    const w = new OrigWorker(url, opts);
+                    const origPost = w.postMessage.bind(w);
+                    w.postMessage = function(msg, transfer) {
+                        if (msg && typeof msg === "object") {
+                            if (msg.type === "add" && msg.actor) {
+                                window.__stageProbe.alpha[msg.actor] = msg.placement?.alpha ?? 1;
+                            } else if (msg.type === "set" && msg.actor && msg.placement?.alpha !== undefined) {
+                                window.__stageProbe.alpha[msg.actor] = msg.placement.alpha;
+                            } else if (msg.type === "remove" && msg.actor) {
+                                delete window.__stageProbe.alpha[msg.actor];
+                            } else if (msg.type === "init") {
+                                window.__stageProbe.actors = [];
+                                window.__stageProbe.alpha = {};
+                            }
+                        }
+                        return origPost(msg, transfer);
+                    };
+                    w.addEventListener("message", ev => {
+                        const d = ev.data;
+                        if (!d || typeof d !== "object") return;
+                        if (d.type === "actors" && Array.isArray(d.ids)) {
+                            window.__stageProbe.actors = d.ids.slice();
+                        } else if (d.type === "error") {
+                            window.__stageProbe.errors.push(d);
+                        }
+                    });
+                    return w;
+                };
+
                 const api = window.moesekaiDesktop;
                 const root = document.getElementById("root");
                 const wasmRes = await fetch("moesekai-app://app/live2d-viewer/pkg/sekai_live2d_viewer_bg.wasm");
@@ -637,18 +825,29 @@ async function bootstrap(): Promise<void> {
                 const cfg = await api.agent.getConfig();
                 const anthropic = Array.isArray(providers) ? providers.find(p => p.id === "anthropic") : null;
 
-                // Open Nightcord starter in Edit mode and focus climax talk beat to verify Live2D + ClipPicker + drag-region + disk cache + SSAA
+                // Open Nightcord starter in Edit mode and focus climax talk beat to verify Live2D + ClipPicker + drag-region + disk cache + SSAA + Agent Guide + ProviderIcon
                 await window.__moesekaiCaptureHook?.openStarterDemo();
                 for (let i = 0; i < 60; i++) {
                     if (document.querySelector('[data-desktop-view="editor"] textarea')) break;
                     await new Promise(r => setTimeout(r, 100));
                 }
                 const focusedBeat = window.__moesekaiCaptureHook?.focusClimaxTalkBeat();
+                window.__moesekaiCaptureHook?.showAgentEmptyGuide();
+                window.__moesekaiCaptureHook?.setAgentModelPopoverOpen(true);
                 await new Promise(r => setTimeout(r, 3500));
+
+                const hasEmptyGuide = Boolean(document.querySelector('[data-testid="agent-empty-guide"]'));
+                const hasModelPillIcon = Boolean(document.querySelector('[data-testid="agent-model-pill"] [data-provider-brand]'));
+                const modelPopoverIconCount = document.querySelectorAll('[data-testid="agent-model-popover"] [data-provider-brand]').length;
+                window.__moesekaiCaptureHook?.setAgentModelPopoverOpen(false);
 
                 const header = document.querySelector('[data-desktop-topbar="editor"]');
                 const spacer = document.querySelector('[data-drag-spacer="left"]');
                 const agentBtn = document.querySelector('[data-testid="agent-toggle-btn"]');
+                const headerDrag = header ? getComputedStyle(header).webkitAppRegion : null;
+                const spacerDrag = spacer ? getComputedStyle(spacer).webkitAppRegion : null;
+                const spacerWidth = spacer ? Math.round(spacer.getBoundingClientRect().width) : 0;
+                const agentBtnFitsWindow = agentBtn ? agentBtn.getBoundingClientRect().right <= window.innerWidth - 136 : false;
                 const aboutBtn = document.querySelector('[data-testid="topbar-about-btn"]');
                 const settingsBtn = document.querySelector('[data-testid="topbar-settings-btn"]');
                 const updatePill = document.querySelector('[data-testid="topbar-update-pill"]');
@@ -668,19 +867,117 @@ async function bootstrap(): Promise<void> {
                     .map(b => ({ text: b.textContent?.trim(), disabled: b.disabled }));
                 const cacheStats = await api.cache.getStats();
 
-                // Verify SettingsDialog (5 locales), AssetCacheDialog, AboutNoticesDialog (4 official links)
+                // Verify zero-network HEAD cache probe returns 200 HIT for a guaranteed-cached asset (Cubism Core!)
+                const probeRes = await fetch(
+                    "moesekai-cache://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js",
+                    { method: "HEAD", headers: { "X-MoeSekai-Cache-Probe": "1" } },
+                );
+                const cacheProbeStatus = probeRes.status;
+                const cacheProbeHeader = probeRes.headers.get("X-MoeSekai-Cache");
+
+                // Verify SettingsDialog (5 locales + Agent tab ProviderIcon pills), AboutNoticesDialog (4 official links)
                 window.__moesekaiCaptureHook?.openSettingsDialog("general");
                 await new Promise(r => setTimeout(r, 180));
                 const settingsLocaleCount = document.querySelectorAll('button[data-testid^="settings-locale-"]').length;
+                window.__moesekaiCaptureHook?.openSettingsDialog("agent");
+                await new Promise(r => setTimeout(r, 180));
+                const settingsProviderIconCount = document.querySelectorAll('[data-testid="settings-tab-agent"] [data-provider-brand]').length;
                 window.__moesekaiCaptureHook?.openNoticesDialog();
                 await new Promise(r => setTimeout(r, 180));
                 const communityLinkCount = document.querySelectorAll('[data-testid="about-community-links"] button').length;
                 window.__moesekaiCaptureHook?.closeAllDialogs();
 
-                // Switch to Playtest briefly to verify non-intrusive MoeSekai attribution badge
-                window.__moesekaiCaptureHook?.switchToPlaytestMode();
-                await new Promise(r => setTimeout(r, 900));
+                // Switch to Theater Player and step rapidly through scene_01 -> scene_02 (4 actors) -> choice -> scene_03b -> scene_04 (2 actors)!
+                window.__moesekaiCaptureHook?.switchToTheaterPlayer();
+                for (let i = 0; i < 40; i++) {
+                    if (document.querySelector('[data-desktop-view="player"]')) break;
+                    await new Promise(r => setTimeout(r, 100));
+                }
+                const hasPlayerPreloadBtn = Boolean(document.querySelector('[data-testid="player-topbar-preload-btn"]'));
+                const theaterTabBtn = Array.from(document.querySelectorAll('[data-desktop-topbar="player"] button')).find(
+                    b => b.textContent?.trim() === "剧场",
+                );
+                if (theaterTabBtn) theaterTabBtn.click();
+                for (let i = 0; i < 25; i++) {
+                    if (!document.querySelector(".react-flow")) break;
+                    await new Promise(r => setTimeout(r, 80));
+                }
+                await new Promise(r => setTimeout(r, 1200));
+
+                const clickNext = () => {
+                    const btn = Array.from(document.querySelectorAll("button")).find(b => b.textContent?.trim() === "下一句");
+                    if (btn) btn.click();
+                };
+                const getLiveStageText = () => {
+                    const badge = document.querySelector('[data-testid="moesekai-attribution-badge"], .sekai-attribution-badge');
+                    const stageBox = badge?.closest("div.relative");
+                    return stageBox?.textContent || "";
+                };
+                const clickChoice = () => {
+                    const mainEl = document.querySelector('[data-desktop-view="player"] main');
+                    if (!mainEl) return false;
+                    const btn = Array.from(mainEl.querySelectorAll("button")).find(
+                        b => !b.closest(".react-flow") && b.textContent?.includes("先看绘名刚画完的草图"),
+                    );
+                    if (btn) {
+                        btn.click();
+                        return true;
+                    }
+                    return false;
+                };
+
+                // Reach scene_02_call (4 actors: kanade, mafuyu, ena, mizuki) with rapid mid-load clicks!
+                for (let s = 0; s < 75; s++) {
+                    if (getLiveStageText().includes("Nightcord·语音通话中")) break;
+                    clickNext();
+                    await new Promise(r => setTimeout(r, 85));
+                }
+                clickNext();
+                await new Promise(r => setTimeout(r, 90));
+                clickNext();
+                for (let w = 0; w < 90; w++) {
+                    const actors = window.__stageProbe?.actors ?? [];
+                    const loading = getLiveStageText().includes("正在加载角色模型");
+                    if (actors.length >= 4 && !loading) break;
+                    await new Promise(r => setTimeout(r, 200));
+                }
+                await new Promise(r => setTimeout(r, 350));
+                const scene02Actors = (window.__stageProbe?.actors ?? []).slice().sort();
+                const scene02Alpha = { ...(window.__stageProbe?.alpha ?? {}) };
+                const scene02AllVisible =
+                    scene02Actors.length === 4 &&
+                    scene02Actors.every(id => (scene02Alpha[id] ?? 1) === 1);
+
+                // Continue rapidly through choice -> scene_03b -> scene_04_pause (2 actors: kanade, mafuyu)!
+                for (let s = 0; s < 110; s++) {
+                    const txt = getLiveStageText();
+                    if (txt.includes("奏的房间·凌晨02:30") && txt.includes("手机在发光")) break;
+                    const nextBtn = Array.from(document.querySelectorAll("button")).find(b => b.textContent?.trim() === "下一句");
+                    if (nextBtn && nextBtn.disabled) {
+                        clickChoice();
+                    } else {
+                        nextBtn?.click();
+                    }
+                    await new Promise(r => setTimeout(r, 85));
+                }
+                for (let w = 0; w < 90; w++) {
+                    const actors = window.__stageProbe?.actors ?? [];
+                    const loading = getLiveStageText().includes("正在加载角色模型");
+                    if (actors.length === 2 && actors.includes("kanade") && actors.includes("mafuyu") && !loading) break;
+                    await new Promise(r => setTimeout(r, 200));
+                }
+                await new Promise(r => setTimeout(r, 350));
+                const scene04Actors = (window.__stageProbe?.actors ?? []).slice().sort();
+                const scene04Alpha = { ...(window.__stageProbe?.alpha ?? {}) };
+                const scene04AllVisible =
+                    scene04Actors.length === 2 &&
+                    scene04Actors.includes("kanade") &&
+                    scene04Actors.includes("mafuyu") &&
+                    scene04Actors.every(id => (scene04Alpha[id] ?? 1) === 1);
+
                 const attrBadge = document.querySelector('[data-testid="moesekai-attribution-badge"], .sekai-attribution-badge');
+                const hasAttributionSvg = Boolean(attrBadge?.querySelector("svg"));
+                const workerErrorCount = (window.__stageProbe?.errors ?? []).length;
 
                 return {
                     hasBridge: Boolean(api),
@@ -722,13 +1019,26 @@ async function bootstrap(): Promise<void> {
                     anthropicDefaultModel: anthropic?.defaultModel ?? null,
                     activeModel: cfg?.model ?? null,
                     focusedBeat,
+                    hasEmptyGuide,
+                    hasModelPillIcon,
+                    modelPopoverIconCount,
+                    settingsProviderIconCount,
                     canvasReady: Boolean(canvasWidth > 0 && canvasHeight > 0),
                     canvasWidth,
                     canvasHeight,
                     ssaaActive: canvasWidth >= 1000,
                     cacheEntries: cacheStats?.entries ?? 0,
                     cacheTotalBytes: cacheStats?.totalBytes ?? 0,
+                    cacheProbeStatus,
+                    cacheProbeHeader,
+                    hasPlayerPreloadBtn,
+                    scene02Actors,
+                    scene02AllVisible,
+                    scene04Actors,
+                    scene04AllVisible,
+                    workerErrorCount,
                     hasAttributionBadge: Boolean(attrBadge),
+                    hasAttributionSvg,
                     hasAboutBtn: Boolean(aboutBtn),
                     hasSettingsBtn: Boolean(settingsBtn),
                     hasNoUpdatePill: !updatePill,
@@ -736,10 +1046,10 @@ async function bootstrap(): Promise<void> {
                     communityLinkCount,
                     browseButtonsCount: browseBtns.length,
                     allBrowseEnabled: browseBtns.length >= 2 && browseBtns.every(b => !b.disabled),
-                    headerDrag: header ? getComputedStyle(header).webkitAppRegion : null,
-                    spacerDrag: spacer ? getComputedStyle(spacer).webkitAppRegion : null,
-                    spacerWidth: spacer ? Math.round(spacer.getBoundingClientRect().width) : 0,
-                    agentBtnFitsWindow: agentBtn ? agentBtn.getBoundingClientRect().right <= window.innerWidth - 136 : false,
+                    headerDrag,
+                    spacerDrag,
+                    spacerWidth,
+                    agentBtnFitsWindow,
                     hasResizeHandle: Boolean(resizeHandle),
                     hasNewChatBtn: Boolean(newChatBtn),
                     hasHistoryBtn: Boolean(historyBtn),
@@ -779,7 +1089,18 @@ async function bootstrap(): Promise<void> {
                 !bridgeCheck?.ssaaActive ||
                 !(bridgeCheck?.cacheEntries > 0) ||
                 !(bridgeCheck?.cacheTotalBytes > 0) ||
+                bridgeCheck?.cacheProbeStatus !== 200 ||
+                bridgeCheck?.cacheProbeHeader !== "HIT" ||
+                !bridgeCheck?.hasPlayerPreloadBtn ||
+                !bridgeCheck?.hasEmptyGuide ||
+                !bridgeCheck?.hasModelPillIcon ||
+                !(bridgeCheck?.modelPopoverIconCount > 0) ||
+                !(bridgeCheck?.settingsProviderIconCount >= 4) ||
+                !bridgeCheck?.scene02AllVisible ||
+                !bridgeCheck?.scene04AllVisible ||
+                bridgeCheck?.workerErrorCount !== 0 ||
                 !bridgeCheck?.hasAttributionBadge ||
+                !bridgeCheck?.hasAttributionSvg ||
                 !bridgeCheck?.hasAboutBtn ||
                 !bridgeCheck?.hasSettingsBtn ||
                 !bridgeCheck?.hasNoUpdatePill ||

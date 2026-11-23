@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { StoryDocument, StoryRegion, StoryVoiceManifest } from "@moesekai/story-core";
+import type { StoryDocument, StoryPreloadProgress, StoryRegion, StoryVoiceManifest } from "@moesekai/story-core";
 import type { VoiceManifestUploadTabConfig } from "../components/StoryVoiceManifestDialog";
 import type { EditorLayoutState } from "../components/useEditorLayout";
 import type { MenuItemDef } from "../md3";
@@ -74,6 +74,10 @@ export interface EditorTopBarSlotContext extends EditorSlotContext {
     openIssuesDialog: () => void;
     openPreloadDialog: () => void;
     openImportDialog: () => void;
+    /** Background asset preload status (useful for displaying live preload state in custom host top bars). */
+    preloadRunning?: boolean;
+    preloadProgress?: StoryPreloadProgress | null;
+    preloadReady?: boolean;
     /** Current pane layout state and toggle helpers. */
     layout: EditorLayoutState;
     toggleLeft: () => void;

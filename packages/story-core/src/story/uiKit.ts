@@ -734,6 +734,27 @@ function hasKitWorkerScript(base: string): Promise<boolean> {
     return probe;
 }
 
+/**
+ * Returns `true` when the current host runtime can spawn `sse-web`'s `kit-worker.js`
+ * (browser with Worker + Blob URLs and a `manifest.json` containing `kit-worker.js`).
+ */
+export async function isStoryUiKitSupported(scriptBaseOverride?: string | null): Promise<boolean> {
+    if (
+        typeof window === "undefined"
+        || typeof Worker === "undefined"
+        || typeof URL === "undefined"
+        || typeof URL.createObjectURL !== "function"
+    ) {
+        return false;
+    }
+    return hasKitWorkerScript(scriptBaseUrl(scriptBaseOverride));
+}
+
+/** Clears cached `manifest.json` `kit-worker.js` probes (primarily for tests). */
+export function clearStoryUiKitSupportCache(): void {
+    kitWorkerSupportCache.clear();
+}
+
 function scriptBaseUrl(override?: string | null): string {
     const base = override ?? getStoryCoreConfig().sseWebScriptBase;
     if (base) {

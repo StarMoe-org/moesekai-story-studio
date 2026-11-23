@@ -10,6 +10,7 @@ import {
     type StoryActorProblem,
     type StoryClipPreviewRequest,
     type StoryStageApplyOptions,
+    type StoryStageLoadProgress,
     type StoryStagePhase,
     type StoryStageRenderQuality,
 } from "../live2d/stageController";
@@ -18,6 +19,7 @@ export type {
     StoryActorProblem,
     StoryClipPreviewRequest,
     StoryStageApplyOptions,
+    StoryStageLoadProgress,
     StoryStagePhase,
     StoryStageRenderQuality,
 };
@@ -28,6 +30,7 @@ export interface StoryStageHandle {
     modelInfo: Record<string, Live2DActorInfo>;
     problems: Record<string, StoryActorProblem>;
     loadingActors: number;
+    loadProgress: StoryStageLoadProgress | null;
     apply: (target: StoryStageState, options: StoryStageApplyOptions) => Promise<void>;
     previewClip: (cast: StoryCastMember, clip?: StoryClipPreviewRequest) => Promise<void>;
     clearClipPreview: () => void;
@@ -166,6 +169,7 @@ export function useStoryStage({ library, cast, models, scriptBase, coreUrl, rend
         modelInfo: snapshot.modelInfo,
         problems: snapshot.problems,
         loadingActors: snapshot.loadingActors,
+        loadProgress: snapshot.loadProgress,
         apply,
         previewClip,
         clearClipPreview,

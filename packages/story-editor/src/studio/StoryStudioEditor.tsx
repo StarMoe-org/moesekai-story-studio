@@ -42,11 +42,13 @@ import {
     getOutgoingEdge,
     inferStorySourceLocale,
     initVariables,
+    inspectStoryCacheStatus,
     interpolateStoryText,
     localizeRuntimeFrame,
     moveBeat,
     moveNode,
     parseStoryScript,
+    preloadStoryAssets,
     removeBeat,
     removeNode,
     resolveVoiceManifestLineUrl,
@@ -66,6 +68,7 @@ import {
     type StoryEffectColor,
     type StoryNode,
     type StoryNodePos,
+    type StoryPreloadProgress,
     type StoryRuntimeFrame,
     type StoryStageState,
     type StoryTranslationOrigin,
@@ -73,7 +76,11 @@ import {
     type StoryVoiceManifest,
     type UiLocale,
 } from "@moesekai/story-core";
-import { AssetPreloadDialog } from "../components/AssetPreloadPanel";
+import {
+    AssetPreloadDialog,
+    readAutoPreloadPreference,
+    writeAutoPreloadPreference,
+} from "../components/AssetPreloadPanel";
 import type { GameStageChoiceProp } from "../components/GameStageOverlay";
 import {
     LivePhasePanel,
@@ -111,7 +118,7 @@ import { useStoryStage } from "../components/useStoryStage";
 import { useStoryUiKit } from "../components/useStoryUiKit";
 import { useStoryI18n, useStoryStudio } from "../context/StoryStudioContext";
 import {
-    Banner, Button, Card, Dialog, EmptyState, Icon, IconButton, LoadingState, Menu, PageContainer,
+    Banner, Button, Card, Dialog, EmptyState, Icon, IconButton, LoadingIndicator, LoadingState, Menu, PageContainer,
     SegmentedButton, Slider, Snackbar, StudioLink, Surface, cn, type MenuItemDef,
 } from "../md3";
 import {
@@ -306,12 +313,15 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             assetSource,
             brandLogoUrl,
             resolveLive2dSources,
+            sseWebScriptBase,
+            defaultAutoPreload,
             storage,
             exporter,
             navigate,
             showAttribution,
             openNotices,
         } = useStoryStudio();
+        const includeUiKit = Boolean(sseWebScriptBase);
         const reduced = useReducedMotion();
         const buildStarter = useStarterStory();
         const layout = useEditorLayout();
@@ -357,6 +367,10 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         const [issuesOpen, setIssuesOpen] = useState(false);
         const [importOpen, setImportOpen] = useState(false);
         const [preloadOpen, setPreloadOpen] = useState(false);
+        const [editorAutoPreload, setEditorAutoPreload] = useState(() => readAutoPreloadPreference(defaultAutoPreload));
+        const [editorPreloadRunning, setEditorPreloadRunning] = useState(false);
+        const [editorPreloadProgress, setEditorPreloadProgress] = useState<StoryPreloadProgress | null>(null);
+        const [editorCacheReady, setEditorCacheReady] = useState(false);
         const [playSelectedLocale, setPlaySelectedLocale] = useState<UiLocale | null>(null);
         const [playVoiceManifest, setPlayVoiceManifest] = useState<StoryVoiceManifest | null>(initialVoiceManifest);
         const [snack, setSnack] = useState<string | null>(null);
@@ -388,6 +402,8 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         const flowViewportRef = useRef<StoryFlowViewportActions | null>(null);
         const splitDragRef = useRef<{ axis: SplitDragAxis; pointerId: number } | null>(null);
         const playGenRef = useRef(0);
+        const playRunningRef = useRef(false);
+        const editorPreloadAbortRef = useRef<AbortController | null>(null);
         const voiceTokenRef = useRef(0);
         const skipWaitRef = useRef<(() => void) | null>(null);
         const playStageStateRef = useRef(playStageState);
@@ -503,6 +519,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             setStageWebFullscreen(false);
             setPlayHistory([]);
             setPlayAuto(false);
+            playRunningRef.current = false;
             setPlayRunning(false);
             setPlayEffectActive(false);
             setPlayVoicePending(false);
@@ -885,12 +902,17 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             () => (stageDoc ? resolveLive2dSources(stageDoc.region).library : null),
             [resolveLive2dSources, stageDoc],
         );
+        useEffect(() => {
+            playRunningRef.current = playRunning;
+        }, [playRunning]);
+
         const {
             hostRef: stageHostRef,
             phase: stagePhase,
             modelInfo,
             problems: stageProblems,
             loadingActors,
+            loadProgress: stageLoadProgress,
             apply: applyStage,
             previewClip,
             clearClipPreview,
@@ -902,6 +924,92 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             finish: finishStage,
             retry: retryStage,
         } = useStoryStage({ library, cast: stageDoc?.cast ?? [], models: stageModels });
+
+        const cancelEditorPreload = useCallback(() => {
+            editorPreloadAbortRef.current?.abort();
+            editorPreloadAbortRef.current = null;
+            setEditorPreloadRunning(false);
+        }, []);
+
+        const handleEditorAutoPreloadChange = useCallback((enabled: boolean) => {
+            setEditorAutoPreload(enabled);
+            writeAutoPreloadPreference(enabled);
+        }, []);
+
+        const handleEditorPreloadComplete = useCallback((progress: StoryPreloadProgress) => {
+            setEditorPreloadProgress(progress);
+            if (progress.done && progress.failed === 0) {
+                setEditorCacheReady(true);
+            }
+        }, []);
+
+        // Stable key so dialogue/node keystroke edits never restart background preloading,
+        // while opening a new project or adding/recasting a model warms local cache cleanly.
+        const editorPreloadKey = useMemo(() => {
+            if (!doc) return null;
+            const castSig = [...new Set(doc.cast.map(m => m.modelId).filter(Boolean))].sort().join(",");
+            const voiceSig = playVoiceManifest ? Object.keys(playVoiceManifest.lines).length : 0;
+            return `${doc.id}|${doc.region}|${assetSource}|${castSig}|v:${voiceSig}`;
+        }, [assetSource, doc, playVoiceManifest]);
+
+        useEffect(() => {
+            if (!editorPreloadKey || modelList.status === "loading" || !library) return;
+            const currentDoc = docRef.current;
+            if (!currentDoc) return;
+            const enabled = readAutoPreloadPreference(defaultAutoPreload);
+            let cancelled = false;
+            const preloadOptions = {
+                assetSource,
+                models: stageModels ?? undefined,
+                voiceManifest: playVoiceManifestRef.current,
+                libraryBaseUrl: library,
+                includeUiKit,
+            };
+            void inspectStoryCacheStatus(currentDoc, preloadOptions).then((status) => {
+                if (cancelled) return;
+                setEditorAutoPreload(enabled);
+                setEditorCacheReady(status.hasLocalCache);
+            });
+            if (!enabled) {
+                return () => { cancelled = true; };
+            }
+            const controller = new AbortController();
+            editorPreloadAbortRef.current = controller;
+            const timer = window.setTimeout(() => {
+                if (cancelled || controller.signal.aborted || editorPreloadAbortRef.current !== controller) return;
+                const latestDoc = docRef.current;
+                if (!latestDoc) return;
+                setEditorPreloadRunning(true);
+                void preloadStoryAssets(latestDoc, {
+                    ...preloadOptions,
+                    signal: controller.signal,
+                    onProgress: (next) => {
+                        if (cancelled || editorPreloadAbortRef.current !== controller) return;
+                        setEditorPreloadProgress(next);
+                    },
+                }).then((finalProgress) => {
+                    if (cancelled || editorPreloadAbortRef.current !== controller) return;
+                    editorPreloadAbortRef.current = null;
+                    setEditorPreloadProgress(finalProgress);
+                    setEditorPreloadRunning(false);
+                    if (finalProgress.done && finalProgress.failed === 0) {
+                        setEditorCacheReady(true);
+                    }
+                }).catch(() => {
+                    if (cancelled || editorPreloadAbortRef.current !== controller) return;
+                    editorPreloadAbortRef.current = null;
+                    setEditorPreloadRunning(false);
+                });
+            }, 0);
+            return () => {
+                cancelled = true;
+                window.clearTimeout(timer);
+                controller.abort();
+                if (editorPreloadAbortRef.current === controller) {
+                    editorPreloadAbortRef.current = null;
+                }
+            };
+        }, [assetSource, defaultAutoPreload, editorPreloadKey, includeUiKit, library, modelList.status, stageModels]);
 
         const previewTargetNodeId = workspaceMode === "code" ? effectiveCodeNodeId : activeNodeId;
         const previewTargetBeatId = workspaceMode === "code" ? effectiveCodeBeatId : activeBeatId;
@@ -923,7 +1031,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         }, [workspaceMode, stageDoc, applyStage, editStageState]);
 
         useEffect(() => {
-            if (workspaceModeRef.current !== "playtest" || stagePhase.kind !== "ready" || !models) return;
+            if (workspaceModeRef.current !== "playtest" || stagePhase.kind !== "ready" || !models || playRunningRef.current) return;
             void applyStage(playStageStateRef.current, { instant: true });
         }, [applyStage, stagePhase.kind, models]);
 
@@ -1017,6 +1125,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 setPlayStageState(finalFrame.stage);
                 setPlayLiveVariables(finalFrame.variables);
                 setPlayTypedCount(finalFrame.stage.dialogue?.body.length ?? 0);
+                playRunningRef.current = false;
                 setPlayRunning(false);
                 syncBgm(
                     finalFrame.stage.bgm.name ? storyBgmUrl(finalFrame.stage.bgm.name, targetDoc.region, line) : null,
@@ -1027,6 +1136,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 return;
             }
 
+            playRunningRef.current = true;
             setPlayRunning(true);
             let stage = baseStage;
             let vars = baseVars;
@@ -1169,6 +1279,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 finalFrame.stage.bgm.volume,
             );
             setPlayEffectActive(false);
+            playRunningRef.current = false;
             setPlayRunning(false);
             if (finalFrame.stoppedReason !== "blocking") setPlayAuto(false);
         }, [applyStage, finishStage, line, playSe, reduced, setStageTalking, shakeStage, startPlayVoice, stopActivePlayVoice, syncBgm, waitPlayMs]);
@@ -1214,6 +1325,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             finishStage();
             setFlash(null);
             setPlayAuto(false);
+            playRunningRef.current = false;
             setPlayRunning(false);
             setPlayEffectActive(false);
             setPlayVoicePending(false);
@@ -1619,6 +1731,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             setPlayLiveVariables(finalFrame.variables);
             setPlayTypedCount(finalFrame.stage.dialogue?.body.length ?? 0);
             setPlayEffectActive(false);
+            playRunningRef.current = false;
             setPlayRunning(false);
             syncBgm(
                 finalFrame.stage.bgm.name ? storyBgmUrl(finalFrame.stage.bgm.name, doc.region, line) : null,
@@ -2656,6 +2769,9 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             openIssuesDialog: () => setIssuesOpen(true),
             openPreloadDialog: () => setPreloadOpen(true),
             openImportDialog: () => setImportOpen(true),
+            preloadRunning: editorPreloadRunning,
+            preloadProgress: editorPreloadProgress,
+            preloadReady: editorCacheReady || Boolean(editorPreloadProgress?.done && editorPreloadProgress.failed === 0),
             layout,
             toggleLeft: () => updateEditorLayout(prev => ({ ...prev, showLeftPane: !prev.showLeftPane })),
             toggleRight: () => updateEditorLayout(prev => ({ ...prev, showRightPane: !prev.showRightPane })),
@@ -3137,6 +3253,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                             phase={stagePhase}
                                             problems={stageProblems}
                                             loadingActors={loadingActors}
+                                            loadProgress={stageLoadProgress}
                                             onRetry={retryStage}
                                             uiKit={uiKit}
                                             uiHidden={isPlaytest && playUiHidden}
@@ -3420,6 +3537,29 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                                         icon={mdVolumeUp}
                                                         label={t("page.storyMaker.player.tapToEnableAudio")}
                                                         onClick={() => unlockAudio()}
+                                                    />
+                                                )}
+                                                {editorPreloadRunning ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setPreloadOpen(true)}
+                                                        title={t("page.storyMaker.preload.buttonLabel")}
+                                                        className="state-layer focus-ring mr-0.5 inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md3-full bg-secondary-container/75 px-2 py-0.5 type-label-s text-on-secondary-container"
+                                                    >
+                                                        <LoadingIndicator size={12} className="shrink-0" />
+                                                        <span className="font-mono tabular-nums">
+                                                            {editorPreloadProgress
+                                                                ? `${editorPreloadProgress.completed}/${editorPreloadProgress.total}`
+                                                                : "…"}
+                                                        </span>
+                                                    </button>
+                                                ) : (
+                                                    <IconButton
+                                                        size="xs"
+                                                        variant={editorCacheReady || Boolean(editorPreloadProgress?.done && editorPreloadProgress.failed === 0) ? "tonal" : "standard"}
+                                                        icon={editorCacheReady || Boolean(editorPreloadProgress?.done && editorPreloadProgress.failed === 0) ? mdCloudDone : mdDownload}
+                                                        label={t("page.storyMaker.preload.buttonLabel")}
+                                                        onClick={() => setPreloadOpen(true)}
                                                     />
                                                 )}
                                                 <IconButton
@@ -3913,6 +4053,12 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     assetSource={assetSource}
                     models={models ?? undefined}
                     voiceManifest={playVoiceManifest}
+                    autoPreload={editorAutoPreload}
+                    onAutoPreloadChange={handleEditorAutoPreloadChange}
+                    onComplete={handleEditorPreloadComplete}
+                    externalProgress={editorPreloadProgress}
+                    externalRunning={editorPreloadRunning}
+                    onCancelExternal={cancelEditorPreload}
                 />
 
                 <Dialog

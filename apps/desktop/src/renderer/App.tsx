@@ -511,10 +511,24 @@ export const App: React.FC = () => {
                 agentPanelRef.current.loadPreviewFixture(climax);
                 return true;
             },
+            showAgentEmptyGuide: () => {
+                if (!agentPanelRef.current) return false;
+                agentPanelRef.current.showEmptyGuide();
+                return true;
+            },
+            setAgentModelPopoverOpen: (open: boolean) => {
+                if (!agentPanelRef.current) return false;
+                agentPanelRef.current.setModelPopoverOpen(open);
+                return true;
+            },
             setAgentHistoryDrawerOpen: (open: boolean, tab?: "conversations" | "snapshots") => {
                 if (!agentPanelRef.current) return false;
                 agentPanelRef.current.setHistoryDrawerOpen(open, tab);
                 return true;
+            },
+            switchToTheaterPlayer: () => {
+                closeAllDialogs();
+                setViewMode("player");
             },
             openSettingsDialog: (tab: SettingsDialogTab = "general") => {
                 closeAllDialogs();

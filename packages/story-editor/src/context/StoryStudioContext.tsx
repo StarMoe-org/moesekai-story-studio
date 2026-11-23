@@ -57,6 +57,8 @@ export interface StoryStudioContextValue {
     hasCustomNoticesHandler: boolean;
     /** Live2D stage supersampling antialiasing preset (`"standard"` | `"high"` | `"ultra"`). */
     stageRenderQuality: StoryStageRenderQuality;
+    /** Default auto-preload preference when the user has not explicitly saved a toggle (`true` on Desktop, `false` on Web). */
+    defaultAutoPreload: boolean;
 }
 
 export interface StoryStudioProviderProps {
@@ -106,6 +108,8 @@ export interface StoryStudioProviderProps {
     showAttribution?: boolean;
     /** Live2D stage SSAA render quality preset (`"standard"` | `"high"` | `"ultra"`). Default: `"high"`. */
     stageRenderQuality?: StoryStageRenderQuality;
+    /** Default auto-preload preference when user has not explicitly toggled it. Defaults to `true` for desktop hosts, `false` for web. */
+    defaultAutoPreload?: boolean;
     children: React.ReactNode;
 }
 
@@ -145,6 +149,7 @@ const StoryStudioContext = createContext<StoryStudioContextValue>({
     openNotices: noopOpenNotices,
     hasCustomNoticesHandler: false,
     stageRenderQuality: DEFAULT_STAGE_RENDER_QUALITY,
+    defaultAutoPreload: false,
 });
 
 export function StoryStudioProvider({
@@ -171,11 +176,13 @@ export function StoryStudioProvider({
     onOpenNotices,
     showAttribution = true,
     stageRenderQuality = DEFAULT_STAGE_RENDER_QUALITY,
+    defaultAutoPreload,
     children,
 }: StoryStudioProviderProps) {
     const normalizedLocale = normalizeStudioLocale(locale) as UiLocale;
     const resolvedAssetSource: AssetSourceType = assetSource ?? assetLine ?? "main";
     const resolvedAssetLine: AssetLine = assetLine ?? getAssetLine(resolvedAssetSource);
+    const resolvedDefaultAutoPreload = defaultAutoPreload ?? (capabilities.host === "desktop");
     const [builtinNoticesOpen, setBuiltinNoticesOpen] = useState(false);
     const onOpenNoticesRef = useRef(onOpenNotices);
     onOpenNoticesRef.current = onOpenNotices;
@@ -239,6 +246,7 @@ export function StoryStudioProvider({
             openNotices,
             hasCustomNoticesHandler,
             stageRenderQuality,
+            defaultAutoPreload: resolvedDefaultAutoPreload,
         }),
         [
             brandLogoUrl,
@@ -256,6 +264,7 @@ export function StoryStudioProvider({
             pathname,
             resolvedAssetLine,
             resolvedAssetSource,
+            resolvedDefaultAutoPreload,
             showAttribution,
             sseWebScriptBase,
             stageRenderQuality,

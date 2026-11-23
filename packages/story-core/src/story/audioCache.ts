@@ -2,6 +2,7 @@
  * Shared Web Audio API context, bounded LRU decoded `AudioBuffer` cache, concurrent fetch
  * deduplication, and waveform peak extraction for Story Maker voice trimming & SE playback.
  */
+import { getCoreFetch } from "../config";
 
 const MAX_CACHED_BUFFERS = 32;
 
@@ -148,7 +149,7 @@ export async function decodeStoryAudio(
                 for (const candidate of candidates) {
                     if (controller.signal.aborted) return null;
                     try {
-                        const response = await fetch(candidate, {
+                        const response = await getCoreFetch()(candidate, {
                             mode: "cors",
                             credentials: "omit",
                             signal: controller.signal,

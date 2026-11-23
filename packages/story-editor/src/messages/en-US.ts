@@ -338,6 +338,7 @@ export const storyMakerMessages = {
         "starting": "Starting Live2D stage…",
         "recovering": "Recovering Live2D stage…",
         "loadingModels": "Loading Live2D models…",
+        "loadingModelsProgress": "Loading Live2D models ({completed}/{total})",
         "unavailable": "Live2D multi-actor stage unavailable",
         "unavailableDescription": "Live2D stage runtime (stage.js) is unavailable in this build; using portrait preview.",
         "unavailableBanner": "Live2D stage runtime (stage.js) is not bundled; using portrait preview. Editing, playback, audio, and .msk export still work.",

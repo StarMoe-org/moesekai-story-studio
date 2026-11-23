@@ -12,7 +12,6 @@ import { createPortal } from "react-dom";
 import {
     Banner,
     Button,
-    Chip,
     Icon,
     IconButton,
     LinearProgress,
@@ -22,10 +21,8 @@ import {
 import {
     mdAdd,
     mdAutoStories,
-    mdBuild,
     mdCheck,
     mdCheckCircle,
-    mdChevronRight,
     mdCode,
     mdContentCopy,
     mdDelete,
@@ -35,13 +32,11 @@ import {
     mdKeyboardArrowDown,
     mdKeyboardArrowUp,
     mdMyLocation,
-    mdRecordVoiceOver,
     mdRefresh,
     mdRightPanelClose,
     mdSend,
     mdSettings,
     mdStop,
-    mdTranslate,
     mdUndo,
     mdWandShine,
     mdWandStars,
@@ -81,10 +76,15 @@ import type {
 } from "../../shared/ipc";
 import { formatDesktopMessage, type DesktopMessageTable } from "../i18n/desktopMessages";
 import { AgentMarkdown } from "./AgentMarkdown";
+import { ProviderIcon } from "./ProviderIcon";
 
 export interface PiAgentPanelHandle {
     /** Capture-only deterministic thread preview fixture for automated UI screenshots. */
     loadPreviewFixture(targetNodeId?: string | null): void;
+    /** Capture-only helper to clear the thread and show the minimalist empty Usage Guide. */
+    showEmptyGuide(): void;
+    /** Capture-only helper to open or close the footer Model Picker popover. */
+    setModelPopoverOpen(open: boolean): void;
     /** Capture-only helper to toggle the 2-tab History Drawer for visual verification. */
     setHistoryDrawerOpen(open: boolean, tab?: "conversations" | "snapshots"): void;
 }
@@ -457,6 +457,18 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
                 setActiveSessionId("preview_sess_1");
                 isNearBottomRef.current = true;
                 setShowScrollToBottom(false);
+            },
+            showEmptyGuide() {
+                didMutateTurnsRef.current = true;
+                activeTurnIdRef.current = null;
+                setTurns([]);
+                setShowHistoryDrawer(false);
+                setThinkingPopoverOpen(false);
+                setShowScrollToBottom(false);
+            },
+            setModelPopoverOpen(open: boolean) {
+                setThinkingPopoverOpen(false);
+                setModelPopoverOpen(open);
             },
             setHistoryDrawerOpen(open: boolean, tab?: "conversations" | "snapshots") {
                 if (tab) setHistoryTab(tab);
@@ -1126,27 +1138,10 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
         );
     };
 
-    const presets: Array<{ id: AgentPresetId; title: string; icon: string }> = [
-        {
-            id: "author_story",
-            title: t("agentPresetAuthorTitle"),
-            icon: mdAutoStories,
-        },
-        {
-            id: "fix_validation_issues",
-            title: t("agentPresetFixTitle"),
-            icon: mdBuild,
-        },
-        {
-            id: "translate_story",
-            title: t("agentPresetTranslateTitle"),
-            icon: mdTranslate,
-        },
-        {
-            id: "prepare_tts_manifest",
-            title: t("agentPresetVoiceTitle"),
-            icon: mdRecordVoiceOver,
-        },
+    const guideSteps = [
+        t("agentGuideStep1"),
+        t("agentGuideStep2"),
+        t("agentGuideStep3"),
     ];
 
     const activeWorkflowStages = stageMode === "create" ? CREATE_STAGES : EDIT_STAGES;
@@ -1489,42 +1484,35 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
                         </div>
                     ) : null}
 
-                    {/* Clean Action Presets */}
+                    {/* Minimalist Usage Guide when thread is empty (no cluttered starter prompt cards) */}
                     {turns.length === 0 ? (
-                        <div className="flex flex-col gap-1.5">
-                            {presets.map(preset => (
-                                <button
-                                    key={preset.id}
-                                    type="button"
-                                    disabled={!hasActiveProject || isStreaming}
-                                    onClick={() => void handleRunPreset(preset.id, preset.title, composer.trim() || undefined)}
-                                    className="state-layer focus-ring flex items-center gap-2.5 rounded-md3-lg border border-outline-variant/70 bg-surface-card px-3 py-2.5 text-left transition-colors hover:bg-surface-container disabled:opacity-50"
-                                >
-                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md3-md bg-secondary-container text-on-secondary-container">
-                                        <Icon path={preset.icon} size={16} />
-                                    </span>
-                                    <span className="type-label-l min-w-0 flex-1 truncate text-on-surface">
-                                        {preset.title}
-                                    </span>
-                                    <Icon path={mdChevronRight} size={17} className="shrink-0 text-on-surface-variant" />
-                                </button>
-                            ))}
+                        <div
+                            data-testid="agent-empty-guide"
+                            className="flex flex-1 flex-col justify-center gap-3.5 px-2 py-6"
+                        >
+                            <div className="flex items-center gap-2">
+                                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md3-md bg-secondary-container text-on-secondary-container">
+                                    <Icon path={mdWandStars} size={14} />
+                                </span>
+                                <span className="type-title-s font-semibold text-on-surface">
+                                    {t("agentGuideTitle")}
+                                </span>
+                            </div>
+                            <ol className="flex flex-col gap-2.5">
+                                {guideSteps.map((stepText, idx) => (
+                                    <li
+                                        key={idx}
+                                        className="flex items-start gap-2.5 type-body-s leading-relaxed text-on-surface-variant"
+                                    >
+                                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md3-full bg-surface-container-high font-mono type-label-s font-medium text-on-surface-variant">
+                                            {idx + 1}
+                                        </span>
+                                        <span className="min-w-0 flex-1">{stepText}</span>
+                                    </li>
+                                ))}
+                            </ol>
                         </div>
-                    ) : (
-                        <div className="flex flex-wrap gap-1.5">
-                            {presets.map(preset => (
-                                <Chip
-                                    key={preset.id}
-                                    variant="assist"
-                                    icon={preset.icon}
-                                    disabled={!hasActiveProject || isStreaming}
-                                    onClick={() => void handleRunPreset(preset.id, preset.title)}
-                                >
-                                    {preset.title}
-                                </Chip>
-                            ))}
-                        </div>
-                    )}
+                    ) : null}
 
                     {/* Conversation Thread */}
                     {turns.map((turn, turnIndex) => {
@@ -2150,6 +2138,12 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
                                     : "border-outline-variant/80 bg-surface-card text-on-surface hover:bg-surface-container-high",
                             )}
                         >
+                            <ProviderIcon
+                                provider={activeProvider}
+                                model={activeModel}
+                                size={14}
+                                className={modelPopoverOpen ? "text-on-secondary-container" : "text-primary"}
+                            />
                             <span className="truncate font-mono">{compactModelLabel(activeModel)}</span>
                             <Icon path={mdKeyboardArrowDown} size={14} className="shrink-0 text-on-surface-variant" />
                         </button>
@@ -2210,6 +2204,7 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
                     <div
                         ref={modelPopoverRef}
                         role="dialog"
+                        data-testid="agent-model-popover"
                         aria-label={t("agentModelLabel")}
                         style={{
                             bottom: `${modelPopoverPos.bottom}px`,
@@ -2254,13 +2249,21 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
                                                 : "text-on-surface hover:bg-surface-container",
                                         )}
                                     >
-                                        <div className="flex min-w-0 flex-col">
-                                            <span className="type-label-m truncate font-medium">
-                                                {opt.name || opt.id}
-                                            </span>
-                                            <span className="type-label-s truncate font-mono opacity-75">
-                                                {opt.id}
-                                            </span>
+                                        <div className="flex min-w-0 items-center gap-2">
+                                            <ProviderIcon
+                                                provider={activeProvider}
+                                                model={opt.id}
+                                                size={15}
+                                                className={selected ? "text-on-primary-container" : "text-on-surface-variant"}
+                                            />
+                                            <div className="flex min-w-0 flex-col">
+                                                <span className="type-label-m truncate font-medium">
+                                                    {opt.name || opt.id}
+                                                </span>
+                                                <span className="type-label-s truncate font-mono opacity-75">
+                                                    {opt.id}
+                                                </span>
+                                            </div>
                                         </div>
                                         {selected ? (
                                             <Icon path={mdCheck} size={15} className="shrink-0" />

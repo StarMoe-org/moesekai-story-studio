@@ -3,6 +3,8 @@ import { describe, test } from "bun:test";
 import {
     DESKTOP_STORY_WORKSPACE_CAPABILITIES,
     WEB_STORY_WORKSPACE_CAPABILITIES,
+    addCastMember,
+    clearPreloaderSessionCache,
     configureStoryCore,
     createBrowserStoryExportAdapter,
     createIndexedDbDraftStorage,
@@ -13,14 +15,20 @@ import {
     getAssetBaseUrl,
     getStoryCoreConfig,
     hasExplicitLive2DIndexBase,
+    inspectStoryCacheStatus,
     live2dCoreUrl,
     live2dListingUrl,
+    live2dModelsFromListings,
     live2dSources,
     parseStoryScript,
+    preloadStoryAssets,
     prepareMskExport,
     resetStoryCoreConfig,
     resolveStoryUiKitSources,
     serializeStoryScript,
+    setSceneBackground,
+    setSceneBgm,
+    setSceneStageCast,
     sseWebFonts,
     sseWebSources,
     storyBackgroundUrl,
@@ -211,6 +219,128 @@ describe("host contracts & .msk export preflight", () => {
             assert.throws(() => live2dSources("jp"), /live2d_viewer_config_invalid/);
         } finally {
             resetStoryCoreConfig();
+        }
+    });
+
+    test("preloadStoryAssets and inspectStoryCacheStatus support moesekai-cache:// disk cache and omit unsupported UI Kit cleanly", async () => {
+        const prevCaches = globalThis.caches;
+        let cacheOpenCalls = 0;
+        const headProbes: Array<{ url: string; probeHeader: string | null }> = [];
+
+        // Simulate Chromium Cache Storage rejecting non-http(s) URLs
+        (globalThis as Record<string, unknown>).caches = {
+            has: async () => false,
+            open: async () => {
+                cacheOpenCalls += 1;
+                return {
+                    match: async (k: string) => {
+                        if (!/^https?:\/\//i.test(k)) throw new TypeError("Request scheme 'moesekai-cache' is unsupported");
+                        return undefined;
+                    },
+                    put: async (k: string) => {
+                        if (!/^https?:\/\//i.test(k)) throw new TypeError("Request scheme 'moesekai-cache' is unsupported");
+                    },
+                    keys: async () => [],
+                };
+            },
+        };
+
+        const mockFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+            const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            if (init?.method === "HEAD") {
+                const hdrs = new Headers(init.headers);
+                headProbes.push({ url, probeHeader: hdrs.get("X-MoeSekai-Cache-Probe") });
+                const isKanade = url.includes("v2_17kanade_casual");
+                return new Response(null, {
+                    status: isKanade ? 200 : 204,
+                    headers: { "X-MoeSekai-Cache": isKanade ? "HIT" : "MISS" },
+                });
+            }
+            if (url.endsWith("/v2_17kanade_casual/_ripper.json")) {
+                return new Response(
+                    JSON.stringify({ crc: 111, files: [{ path: "model.moc3", kind: "model" }, { path: "tex.png", kind: "texture" }] }),
+                    { status: 200, headers: { "Content-Type": "application/json", "X-MoeSekai-Cache": "HIT" } },
+                );
+            }
+            if (url.endsWith("/v2_18mafuyu_casual/_ripper.json")) {
+                return new Response(
+                    JSON.stringify({ crc: 222, files: [{ path: "model.moc3", kind: "model" }] }),
+                    { status: 200, headers: { "Content-Type": "application/json", "X-MoeSekai-Cache": "MISS" } },
+                );
+            }
+            const hit = url.includes("v2_17kanade_casual") || url.includes("bgm00020");
+            return new Response(new Uint8Array([1, 2, 3]), {
+                status: 200,
+                headers: { "X-MoeSekai-Cache": hit ? "HIT" : "MISS" },
+            });
+        }) as typeof fetch;
+
+        try {
+            clearPreloaderSessionCache();
+            configureStoryCore({
+                assetDomainMain: "moesekai-cache://storage.pjsk.moe",
+                live2dLibraryBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/",
+                fetchImpl: mockFetch,
+            });
+
+            let doc = createStoryDocument("jp", "Desktop Cache Preload");
+            doc = addCastMember(doc, { key: "kanade", modelId: "v2_17kanade_casual", name: "Kanade" });
+            doc = addCastMember(doc, { key: "mafuyu", modelId: "v2_18mafuyu_casual", name: "Mafuyu" });
+            doc = createNode(doc, "scene", { x: 200, y: 100 }, { id: "s1" }).doc;
+            doc = setSceneBackground(doc, "s1", { mode: "set", asset: "bg_a000401" });
+            doc = setSceneBgm(doc, "s1", { mode: "play", name: "bgm00020", volume: 1 });
+            doc = setSceneStageCast(doc, "s1", {
+                mode: "set",
+                actors: [
+                    { castKey: "kanade", slot: "left" },
+                    { castKey: "mafuyu", slot: "right" },
+                ],
+            });
+
+            const models = live2dModelsFromListings(["v2_17kanade_casual", "v2_18mafuyu_casual"], []);
+
+            // 1. Cold-start inspectStoryCacheStatus probes `moesekai-cache://` via zero-network HEAD
+            const before = await inspectStoryCacheStatus(doc, { models, includeUiKit: true });
+            assert.equal(headProbes.length, 2);
+            assert.ok(headProbes.every(p => p.probeHeader === "1"));
+            assert.equal(before.live2dCachedModels, 1);
+            assert.equal(before.live2dTotalModels, 2);
+            assert.equal(before.hasLocalCache, false);
+
+            // 2. preloadStoryAssets skips Cache Storage API, classifies X-MoeSekai-Cache: HIT as cached,
+            //    and omits unsupported UI Kit without counting it as failed (failed === 0!)
+            const progress = await preloadStoryAssets(doc, { models, includeUiKit: true, decodeAudio: false });
+            assert.equal(cacheOpenCalls, 0);
+            assert.equal(progress.done, true);
+            assert.equal(progress.failed, 0);
+            assert.equal(progress.byCategory.uikit.total, 0);
+            assert.equal(progress.byCategory.live2d.total, 3);
+            assert.equal(progress.byCategory.live2d.cached, 2);
+            assert.equal(progress.byCategory.audio.total, 1);
+            assert.equal(progress.byCategory.audio.cached, 1);
+
+            // 3. Post-preload inspectStoryCacheStatus sees all 2 models warmed & hasLocalCache = true
+            const after = await inspectStoryCacheStatus(doc, { models, includeUiKit: true });
+            assert.equal(after.live2dCachedModels, 2);
+            assert.equal(after.hasLocalCache, true);
+
+            // 4. Custom checkCachedUrlPrefixes hook overrides HEAD probe when configured by host
+            clearPreloaderSessionCache();
+            let prefixCalls = 0;
+            configureStoryCore({
+                checkCachedUrlPrefixes: (prefixes) => {
+                    prefixCalls += 1;
+                    return prefixes.map(() => true);
+                },
+            });
+            const viaHook = await inspectStoryCacheStatus(doc, { models, includeUiKit: true });
+            assert.equal(prefixCalls, 1);
+            assert.equal(viaHook.live2dCachedModels, 2);
+            assert.equal(viaHook.hasLocalCache, true);
+        } finally {
+            clearPreloaderSessionCache();
+            resetStoryCoreConfig();
+            (globalThis as Record<string, unknown>).caches = prevCaches;
         }
     });
 
