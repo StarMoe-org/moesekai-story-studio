@@ -23,6 +23,10 @@ extraResources:
     to: skills/moesekai-story-script
     filter:
       - "**/*"
+  - from: build/icon.png
+    to: icon.png
+  - from: build/icon.ico
+    to: icon.ico
 
 fileAssociations:
   - ext: msk
@@ -34,6 +38,7 @@ fileAssociations:
 asar: true
 
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch:
@@ -43,6 +48,9 @@ win:
         - x64
 
 nsis:
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
@@ -50,6 +58,7 @@ nsis:
   createStartMenuShortcut: true
 
 mac:
+  icon: build/icon.icns
   category: public.app-category.developer-tools
   target:
     - target: dmg
@@ -58,6 +67,7 @@ mac:
         - x64
 
 linux:
+  icon: build/icon.png
   category: Development
   target:
     - target: AppImage

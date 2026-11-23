@@ -53,6 +53,13 @@ function copyStaticEditorAssets(): void {
         copyDirRecursive(source, pair.target);
         console.log(`[desktop:build] Copied ${pair.label} assets from ${path.relative(appRoot, source)}`);
     }
+
+    for (const iconFile of ["icon.png", "icon.ico"]) {
+        const srcIcon = path.join(appRoot, "build", iconFile);
+        if (fs.existsSync(srcIcon)) {
+            fs.copyFileSync(srcIcon, path.join(distDir, iconFile));
+        }
+    }
 }
 
 async function bundleNodeTarget(options: {

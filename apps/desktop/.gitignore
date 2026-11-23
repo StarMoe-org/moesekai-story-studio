@@ -1,0 +1,3 @@
+# Track electron-builder packaging resources (app icons in build/)
+!build/
+!build/**

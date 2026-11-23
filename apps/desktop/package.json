@@ -11,6 +11,7 @@
     "build": "bun run scripts/build.ts",
     "build:main": "bun run scripts/build.ts --main-only",
     "build:renderer": "bunx vite build",
+    "generate:icons": "bun run scripts/generate-icons.ts",
     "start": "bunx electron .",
     "smoke": "bun run scripts/smoke.ts",
     "capture-ui": "bun run scripts/capture-ui.ts",

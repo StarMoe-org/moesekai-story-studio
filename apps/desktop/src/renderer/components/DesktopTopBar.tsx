@@ -19,7 +19,6 @@ import {
 import {
     mdAdd,
     mdArrowBack,
-    mdAutoStories,
     mdCode,
     mdDashboard,
     mdDownload,
@@ -51,6 +50,7 @@ import type {
 import { resolvePlatformChromeLayout } from "../../shared/window-chrome";
 import { formatDesktopMessage } from "../i18n/desktopMessages";
 import { AppearancePopover } from "./AppearancePopover";
+import { StudioLogo } from "./StudioLogo";
 
 function TopBarMenuTrigger({
     label,
@@ -173,9 +173,7 @@ export const DesktopWelcomeTopBar: React.FC<DesktopWelcomeTopBarProps> = ({
             )}
         >
             <div className="flex min-w-0 shrink-0 items-center gap-1.5">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md3-sm bg-primary-container text-on-primary-container">
-                    <Icon path={mdAutoStories} size={15} />
-                </span>
+                <StudioLogo size={24} className="shrink-0" />
                 <span className="type-title-s truncate pr-1 font-semibold tracking-tight text-on-surface">
                     {t("appName")}
                 </span>
@@ -470,12 +468,7 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                     </Tooltip>
                 </div>
 
-                <span
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md3-sm bg-primary-container text-on-primary-container"
-                    aria-hidden
-                >
-                    <Icon path={mdAutoStories} size={14} />
-                </span>
+                <StudioLogo size={24} className="shrink-0" />
 
                 <nav aria-label={t("appName")} className="flex shrink-0 items-center gap-0.5">
                     <TopBarMenuTrigger label={t("studioFileMenu")} items={unifiedFileMenuItems} />

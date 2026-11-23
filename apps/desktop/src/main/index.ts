@@ -76,6 +76,19 @@ function resolveSkillPath(): string {
     return candidates.find(dir => fs.existsSync(dir)) ?? path.resolve(appRoot, "../../skills/moesekai-story-script");
 }
 
+function resolveAppIconPath(): string | undefined {
+    const preferredNames = process.platform === "win32" ? ["icon.ico", "icon.png"] : ["icon.png"];
+    const candidates: string[] = [];
+    for (const name of preferredNames) {
+        if (app.isPackaged) {
+            candidates.push(path.join(process.resourcesPath, name));
+        }
+        candidates.push(path.join(distRoot, name));
+        candidates.push(path.join(appRoot, "build", name));
+    }
+    return candidates.find(filePath => fs.existsSync(filePath));
+}
+
 function extractMskArg(argv: string[]): string | null {
     for (const arg of argv.slice(1)) {
         if (!arg || arg.startsWith("-")) continue;
@@ -234,6 +247,7 @@ async function bootstrap(): Promise<void> {
         const initialDark = settingsStore.getAppSettings().themeMode === "dark";
         const isMac = process.platform === "darwin";
         const chrome = resolvePlatformChromeLayout(process.platform, false);
+        const appIconPath = resolveAppIconPath();
 
         const win = new BrowserWindow({
             width: captureUiDir ? 1366 : 1480,
@@ -242,6 +256,7 @@ async function bootstrap(): Promise<void> {
             minHeight: 680,
             show: !isSmokeTest,
             title: "MoeSekai Story Studio",
+            ...(appIconPath ? { icon: appIconPath } : {}),
             backgroundColor: initialDark ? "#101417" : "#f7f9fc",
             autoHideMenuBar: !isMac,
             ...(chrome.useTitleBarOverlay

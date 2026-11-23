@@ -11,7 +11,6 @@ import {
 } from "@moesekai/story-editor/md3";
 import {
     mdAdd,
-    mdAutoStories,
     mdChevronRight,
     mdDelete,
     mdDescription,
@@ -28,6 +27,7 @@ import type {
 } from "../../shared/ipc";
 import type { NewProjectTemplate } from "../../shared/new-project";
 import { formatDesktopMessage } from "../i18n/desktopMessages";
+import { StudioLogo } from "./StudioLogo";
 
 const REGION_OPTIONS_ZH: Array<{ value: DesktopStoryRegion; label: string }> = [
     { value: "jp", label: "JP — 日服" },
@@ -142,9 +142,7 @@ export const WorkspaceWelcome: React.FC<WorkspaceWelcomeProps> = ({
                 {/* Clean Flat Brand + Primary Actions Header (zero gradients) */}
                 <section className="flex flex-col gap-5 border-b border-outline-variant/50 pb-7">
                     <div className="flex items-center gap-3.5">
-                        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md3-lg bg-primary-container text-on-primary-container">
-                            <Icon path={mdAutoStories} size={24} />
-                        </span>
+                        <StudioLogo size={44} className="shrink-0" />
                         <h1 className="type-headline-l font-semibold tracking-tight text-on-surface">
                             {t("appName")}
                         </h1>
