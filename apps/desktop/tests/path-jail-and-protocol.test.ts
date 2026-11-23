@@ -116,6 +116,7 @@ describe("moesekai-app:// custom protocol handler", () => {
         fs.mkdirSync(path.join(workspaceDir, "voices"), { recursive: true });
 
         fs.writeFileSync(path.join(rendererDir, "index.html"), "<!doctype html><html></html>");
+        fs.writeFileSync(path.join(live2dDir, "stage.js"), "export class SekaiLive2DStage {}");
         fs.writeFileSync(path.join(live2dDir, "stage-worker.js"), "console.log('worker');");
         fs.writeFileSync(path.join(live2dDir, "pkg", "sekai_live2d_viewer_bg.wasm"), Buffer.from([0x00, 0x61, 0x73, 0x6d]));
         fs.writeFileSync(path.join(workspaceDir, "voices", "line1.mp3"), Buffer.from("0123456789ABCDEF"));
@@ -128,11 +129,18 @@ describe("moesekai-app:// custom protocol handler", () => {
             getWorkspaceRoot: () => activeWorkspace,
         });
 
-        // 1. Same-origin Live2D WASM under moesekai-app://app/live2d-viewer/
+        // 1. Same-origin Live2D WASM & version-queried stage.js under moesekai-app://app/live2d-viewer/
         const wasmRes = handler(new Request("moesekai-app://app/live2d-viewer/pkg/sekai_live2d_viewer_bg.wasm"));
         expect(wasmRes.status).toBe(200);
         expect(wasmRes.headers.get("content-type")).toBe("application/wasm");
+        expect(wasmRes.headers.get("cache-control")).toBe("no-cache");
         expect(Buffer.from(await wasmRes.arrayBuffer())).toEqual(Buffer.from([0x00, 0x61, 0x73, 0x6d]));
+
+        const stageRes = handler(new Request("moesekai-app://app/live2d-viewer/stage.js?v=0.3.0-8f0235c97ec5"));
+        expect(stageRes.status).toBe(200);
+        expect(stageRes.headers.get("content-type")).toBe("application/javascript; charset=utf-8");
+        expect(stageRes.headers.get("cache-control")).toBe("no-cache");
+        expect(await stageRes.text()).toContain("SekaiLive2DStage");
 
         // 2. Direct Live2D worker under moesekai-app://live2d-viewer/
         const workerRes = handler(new Request("moesekai-app://live2d-viewer/stage-worker.js"));

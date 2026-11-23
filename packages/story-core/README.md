@@ -16,7 +16,7 @@ Pure, zero-React, host-agnostic engine for **MoeSekai Story Maker (`moesekai-sto
 
 ## Asset Attribution
 
-Default public game assets and masterdata endpoints point to **Moesekai (`pjsk.moe`)** (`storage.pjsk.moe`, `assets.pjsk.moe`, `metadata.pjsk.moe`). Please include attribution to **Moesekai (pjsk.moe)** when embedding.
+Default public game assets and masterdata endpoints point to **Moesekai (`pjsk.moe`)** (`storage.pjsk.moe`, `metadata.pjsk.moe`). Please include attribution to **Moesekai (pjsk.moe)** when embedding.
 
 ## License
 

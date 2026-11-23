@@ -58,7 +58,7 @@ export function resolveProtocolRequest(urlString: string, ctx: ProtocolContext):
         const filePath = resolveJailedPath(ctx.live2dDir, sub, { allowRoot: false, mustExist: true });
         return {
             filePath,
-            cacheControl: "public, max-age=3600",
+            cacheControl: "no-cache",
             allowCors: true,
         };
     }

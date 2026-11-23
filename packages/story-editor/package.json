@@ -56,7 +56,6 @@
     "./styles/md3-tokens.css": "./dist/styles/md3-tokens.css",
     "./styles/md3-schemes.css": "./dist/styles/md3-schemes.css",
     "./styles/md3-loading.css": "./dist/styles/md3-loading.css",
-    "./live2d-viewer/*": "./dist/live2d-viewer/*",
     "./unit-icons/*": "./dist/unit-icons/*"
   },
   "files": [

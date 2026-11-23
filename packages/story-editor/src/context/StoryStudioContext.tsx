@@ -5,8 +5,10 @@ import {
     createBrowserStoryExportAdapter,
     createIndexedDbStoryDraftStorageAdapter,
     getAssetLine,
+    hasExplicitLive2DSite,
     live2dSources as defaultLive2dSources,
     MOE_LOGO_URL,
+    normalizeLive2DSiteUrl,
     WEB_STORY_WORKSPACE_CAPABILITIES,
     type AssetLine,
     type AssetSourceType,
@@ -39,6 +41,7 @@ export interface StoryStudioContextValue {
     navigate: (href: string) => void;
     pathname?: string;
     live2dScriptBase: string | null;
+    live2dScriptVersion: string | null;
     live2dCoreUrl: string | null;
     resolveLive2dSources: (region: Live2DRegion) => Live2DSources;
     sseWebScriptBase: string | null;
@@ -78,11 +81,13 @@ export interface StoryStudioProviderProps {
     navigate?: (href: string) => void;
     /** Optional current pathname to close portaled MD3 Menus on route transitions. */
     pathname?: string;
-    /** Base URL serving Live2D viewer scripts (`stage.js`, `viewer.js`, workers, wasm). */
+    /** Host-served base URL for Live2D viewer scripts (`stage.js`, `viewer.js`, workers, wasm). Defaults to `LIVE2D_VIEWER_PATH` (`"/live2d-viewer/"`). */
     live2dScriptBase?: string | null;
+    /** Optional cache-busting query token (`?v=...`) appended when loading host-served `viewer.js` / `stage.js`. Omitted when null/unset. */
+    live2dScriptVersion?: string | null;
     /** Optional override for Cubism Core for Web script URL. */
     live2dCoreUrl?: string | null;
-    /** Optional custom resolver for Live2D library/index URLs per region. */
+    /** Optional custom resolver for canonical Live2D asset-site sources (`{ site, region, version?, proxy? }`) per region. */
     live2dSources?: (region: Live2DRegion) => Live2DSources;
     /** Optional base URL serving `sse-web` UI kit worker scripts. */
     sseWebScriptBase?: string | null;
@@ -137,6 +142,7 @@ const StoryStudioContext = createContext<StoryStudioContextValue>({
     navigate: defaultNavigate,
     pathname: undefined,
     live2dScriptBase: null,
+    live2dScriptVersion: null,
     live2dCoreUrl: null,
     resolveLive2dSources: defaultLive2dSources,
     sseWebScriptBase: null,
@@ -162,6 +168,7 @@ export function StoryStudioProvider({
     navigate = defaultNavigate,
     pathname,
     live2dScriptBase = null,
+    live2dScriptVersion = null,
     live2dCoreUrl = null,
     live2dSources: customLive2dSources,
     sseWebScriptBase = null,
@@ -221,6 +228,27 @@ export function StoryStudioProvider({
         configureStoryCore(patch);
     }, [coreConfig, defaultRegion, live2dCoreUrl, resolvedAssetLine, sseWebScriptBase]);
 
+    const resolveLive2dSources = useCallback(
+        (region: Live2DRegion): Live2DSources => {
+            if (customLive2dSources) return customLive2dSources(region);
+            const base = defaultLive2dSources(region, resolvedAssetLine);
+            const explicitSite = coreConfig?.live2dSite?.trim();
+            const domainOverride = !explicitSite && !hasExplicitLive2DSite()
+                ? (resolvedAssetLine === "backup" ? coreConfig?.assetDomainBackup : coreConfig?.assetDomainMain)?.trim()
+                : undefined;
+            const rawSiteOverride = explicitSite || domainOverride;
+            const rawProxyOverride = coreConfig?.live2dAssetProxy?.trim() || coreConfig?.sseWebAssetProxy?.trim();
+            return {
+                ...base,
+                ...(rawSiteOverride ? { site: normalizeLive2DSiteUrl(rawSiteOverride) } : {}),
+                ...(rawProxyOverride
+                    ? { proxy: rawProxyOverride.endsWith("/") ? rawProxyOverride : `${rawProxyOverride}/` }
+                    : {}),
+            };
+        },
+        [coreConfig, customLive2dSources, resolvedAssetLine],
+    );
+
     const value = useMemo<StoryStudioContextValue>(
         () => ({
             locale: normalizedLocale,
@@ -232,8 +260,9 @@ export function StoryStudioProvider({
             navigate,
             pathname,
             live2dScriptBase,
+            live2dScriptVersion,
             live2dCoreUrl,
-            resolveLive2dSources: customLive2dSources ?? defaultLive2dSources,
+            resolveLive2dSources,
             sseWebScriptBase,
             brandLogoUrl,
             unitIconBaseUrl: unitIconBaseUrl.endsWith("/") ? unitIconBaseUrl : `${unitIconBaseUrl}/`,
@@ -251,13 +280,13 @@ export function StoryStudioProvider({
         [
             brandLogoUrl,
             capabilities,
-            customLive2dSources,
             defaultRegion,
             exporter,
             hasCustomNoticesHandler,
             LinkComponent,
             live2dCoreUrl,
             live2dScriptBase,
+            live2dScriptVersion,
             navigate,
             normalizedLocale,
             openNotices,
@@ -265,6 +294,7 @@ export function StoryStudioProvider({
             resolvedAssetLine,
             resolvedAssetSource,
             resolvedDefaultAutoPreload,
+            resolveLive2dSources,
             showAttribution,
             sseWebScriptBase,
             stageRenderQuality,

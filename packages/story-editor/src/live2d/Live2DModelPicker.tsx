@@ -42,10 +42,6 @@ function ownerInitial(label: string): string {
     return Array.from(label.trim())[0] ?? "?";
 }
 
-function formatModelSize(bytes: number): string {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 export function Live2DModelPicker({ models, current, group, onGroupChange, onSelect }: Live2DModelPickerProps) {
     const { t, locale, unitIconBaseUrl, assetSource } = useStoryStudio();
     const [query, setQuery] = useState("");
@@ -158,11 +154,6 @@ export function Live2DModelPicker({ models, current, group, onGroupChange, onSel
                                             {model.generation === 2 && (
                                                 <span className="shrink-0 rounded-md3-xs bg-tertiary-container px-1.5 py-0.5 type-label-s text-on-tertiary-container">
                                                     v2
-                                                </span>
-                                            )}
-                                            {model.bytes > 0 && (
-                                                <span className="w-14 shrink-0 text-right font-mono type-label-s opacity-70">
-                                                    {formatModelSize(model.bytes)}
                                                 </span>
                                             )}
                                         </button>
@@ -297,11 +288,6 @@ export function Live2DModelPicker({ models, current, group, onGroupChange, onSel
                                                         v2
                                                     </span>
                                                 )}
-                                                {model.bytes > 0 && (
-                                                    <span className="w-14 shrink-0 text-right font-mono type-label-s opacity-70">
-                                                        {formatModelSize(model.bytes)}
-                                                    </span>
-                                                )}
                                             </button>
                                         </li>
                                     );
@@ -363,11 +349,6 @@ export function Live2DModelPicker({ models, current, group, onGroupChange, onSel
                                                             v2
                                                         </span>
                                                     )}
-                                                    {model.bytes > 0 && (
-                                                        <span className="w-14 shrink-0 text-right font-mono type-label-s opacity-70">
-                                                            {formatModelSize(model.bytes)}
-                                                        </span>
-                                                    )}
                                                 </button>
                                             </li>
                                         );
@@ -425,11 +406,6 @@ export function Live2DModelPicker({ models, current, group, onGroupChange, onSel
                                                                 {model.generation === 2 && (
                                                                     <span className="shrink-0 rounded-md3-xs bg-tertiary-container px-1.5 py-0.5 type-label-s text-on-tertiary-container">
                                                                         v2
-                                                                    </span>
-                                                                )}
-                                                                {model.bytes > 0 && (
-                                                                    <span className="w-14 shrink-0 text-right font-mono type-label-s opacity-70">
-                                                                        {formatModelSize(model.bytes)}
                                                                     </span>
                                                                 )}
                                                             </button>

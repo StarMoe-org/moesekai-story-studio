@@ -13,18 +13,24 @@ import {
 } from "../live2d/clipCatalog";
 import { useStoryI18n as useI18n } from "../context/StoryStudioContext";
 import {
-    groupLive2DFacials, groupLive2DMotions, live2dMotionStyle, type Live2DClipRow, type Live2DMotionGroup,
+    groupLive2DFacials,
+    groupLive2DMotions,
+    live2dMotionStyle,
+    type Live2DClipRow,
+    type Live2DMotionGroup,
+    type Live2DSources,
 } from "@moesekai/story-core";
 import type { Live2DActorInfo } from "../live2d/stage";
+import { live2dSourcesKey } from "../live2d/viewer";
 
 export interface ClipPickerFieldProps {
     kind: "motion" | "facial";
     value: string | undefined;
     info: Live2DActorInfo | undefined;
-    /** Story library root + model id / motion bundle, used to load `_ripper.json` without WebGPU or stage mounting. */
-    library?: string | null;
+    /** Canonical Live2D asset-site sources + model id / motion asset, used to load `live2d-motions` `.asset.json` without WebGPU or stage mounting. */
+    sources?: Live2DSources | null;
     modelId?: string | null;
-    motionBundle?: string | null;
+    motionAsset?: string | null;
     disabled?: boolean;
     onChange: (value: string | undefined) => void;
     /** Optional live preview callback: plays/applies a clip on the Live2D Preview Monitor. */
@@ -36,21 +42,21 @@ export interface ClipPickerFieldProps {
 /**
  * Determines whether the `Browse` clip picker trigger should be enabled.
  * Never requires the actor to be mounted on the WebGPU stage (`info`) — any valid `modelId`
- * or `motionBundle` with a story `library` can load and browse clips directly from `_ripper.json`.
+ * or `motionAsset` with canonical Live2D `sources` can load and browse clips directly from `.asset.json`.
  */
 export function canBrowseClipPicker(params: {
     disabled?: boolean;
     info?: Live2DActorInfo;
-    library?: string | null;
+    sources?: Live2DSources | null;
     modelId?: string | null;
-    motionBundle?: string | null;
+    motionAsset?: string | null;
 }): boolean {
     if (params.disabled) return false;
     if (params.info) return true;
-    return Boolean(params.library && (params.motionBundle?.trim() || params.modelId?.trim()));
+    return Boolean(live2dSourcesKey(params.sources) && (params.motionAsset?.trim() || params.modelId?.trim()));
 }
 
-type BundleLoadState =
+type ClipCatalogLoadState =
     | { key: string; status: "ready"; clips: Live2DModelClipCatalog }
     | { key: string; status: "error" };
 
@@ -71,7 +77,7 @@ function notifyDrawerOpened(openedId: string): void {
  * visible and unobstructed during live auditioning.
  */
 export function ClipPickerField({
-    kind, value, info, library, modelId, motionBundle, disabled, onChange, onPreviewClip, fetchModelClips,
+    kind, value, info, sources, modelId, motionAsset, disabled, onChange, onPreviewClip, fetchModelClips,
 }: ClipPickerFieldProps) {
     const { t } = useI18n();
     const drawerId = useId();
@@ -82,7 +88,7 @@ export function ClipPickerField({
     const [drawerSearch, setDrawerSearch] = useState("");
     const [auditioning, setAuditioning] = useState<string | null>(null);
     const [selectedStyle, setSelectedStyle] = useState<string | null>(null);
-    const [loaded, setLoaded] = useState<BundleLoadState | null>(null);
+    const [loaded, setLoaded] = useState<ClipCatalogLoadState | null>(null);
     const [retryTick, setRetryTick] = useState(0);
 
     const fetchModelClipsRef = useRef(fetchModelClips);
@@ -90,38 +96,43 @@ export function ClipPickerField({
         fetchModelClipsRef.current = fetchModelClips;
     }, [fetchModelClips]);
 
+    const stableSources = useMemo<Live2DSources | null>(
+        () => (sources ? { ...sources } : null),
+        [sources?.site, sources?.region, sources?.version, sources?.proxy],
+    );
+    const sourcesKey = live2dSourcesKey(stableSources);
     const cleanModelId = modelId?.trim() || null;
-    const cleanMotionBundle = motionBundle?.trim() || null;
+    const cleanMotionAsset = motionAsset?.trim() || null;
     const canBrowse = canBrowseClipPicker({
         disabled,
         info,
-        library,
+        sources: stableSources,
         modelId: cleanModelId,
-        motionBundle: cleanMotionBundle,
+        motionAsset: cleanMotionAsset,
     });
-    const bundleKey = !disabled && !info && library && (cleanMotionBundle || cleanModelId)
-        ? `${library}|${cleanModelId ?? ""}|${cleanMotionBundle ?? ""}|${retryTick}`
+    const catalogKey = !disabled && !info && sourcesKey && (cleanMotionAsset || cleanModelId)
+        ? `${sourcesKey}|${cleanModelId ?? ""}|${cleanMotionAsset ?? ""}|${retryTick}`
         : null;
 
     useEffect(() => {
-        if (!bundleKey || !library || (!cleanMotionBundle && !cleanModelId)) return;
+        if (!catalogKey || !stableSources || (!cleanMotionAsset && !cleanModelId)) return;
         const controller = new AbortController();
         const loader = fetchModelClipsRef.current ?? fetchLive2DModelClips;
         loader({
-            library,
+            sources: stableSources,
             modelId: cleanModelId,
-            motionBundle: cleanMotionBundle,
+            motionAsset: cleanMotionAsset,
             signal: controller.signal,
         }).then(
             clips => {
-                if (!controller.signal.aborted) setLoaded({ key: bundleKey, status: "ready", clips });
+                if (!controller.signal.aborted) setLoaded({ key: catalogKey, status: "ready", clips });
             },
             () => {
-                if (!controller.signal.aborted) setLoaded({ key: bundleKey, status: "error" });
+                if (!controller.signal.aborted) setLoaded({ key: catalogKey, status: "error" });
             },
         );
         return () => controller.abort();
-    }, [bundleKey, library, cleanModelId, cleanMotionBundle]);
+    }, [catalogKey, stableSources, cleanModelId, cleanMotionAsset]);
 
     useEffect(() => {
         const onOtherOpened = (openedId: string) => {
@@ -157,9 +168,9 @@ export function ClipPickerField({
         };
     }, [dropdownOpen]);
 
-    const manifestClips = bundleKey && loaded?.key === bundleKey && loaded.status === "ready" ? loaded.clips : null;
-    const manifestLoading = Boolean(bundleKey && loaded?.key !== bundleKey);
-    const manifestFailed = Boolean(bundleKey && loaded?.key === bundleKey && loaded.status === "error");
+    const manifestClips = catalogKey && loaded?.key === catalogKey && loaded.status === "ready" ? loaded.clips : null;
+    const manifestLoading = Boolean(catalogKey && loaded?.key !== catalogKey);
+    const manifestFailed = Boolean(catalogKey && loaded?.key === catalogKey && loaded.status === "error");
 
     const clips = useMemo(() => {
         if (info) return kind === "motion" ? info.motions : info.facials;

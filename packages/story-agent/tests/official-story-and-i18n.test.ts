@@ -70,8 +70,10 @@ describe("official story miner (offline mock fetch)", () => {
         ].join("\n");
         const compressedCorpus = brotliCompressSync(Buffer.from(corpusJsonl, "utf8"));
 
+        const requestedUrls: string[] = [];
         const mockFetch = (async (input: string | URL | Request) => {
             const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            requestedUrls.push(url);
             if (url.endsWith("/master/events.json")) {
                 return new Response(JSON.stringify([{ id: 203, name: "Midnight Chord" }]), { status: 200 });
             }
@@ -164,36 +166,93 @@ describe("official story miner (offline mock fetch)", () => {
                     { status: 200 },
                 );
             }
-            if (url.endsWith("/models.json")) {
+            if (url === "https://storage.pjsk.moe/jp/") {
                 return new Response(
                     JSON.stringify({
-                        format: 2,
-                        models: [
-                            { id: "v2_17kanade_casual", kind: "character", characterId: 17, name: "宵崎奏", episodeCount: 12 },
-                            { id: "v2_sub_kanadefather", kind: "sub", ownerKey: "kanadefather", name: "奏の父", episodeCount: 4 },
-                        ],
+                        format: "directory-listing",
+                        version: 1,
+                        view: "canonical",
+                        published_version: "7.1.0-test",
+                        directories: ["live2d"],
+                        files: [],
                     }),
                     { status: 200 },
                 );
             }
-            if (url.includes("v2_17kanade_motion_base/_ripper.json")) {
+            if (url === "https://storage.pjsk.moe/jp/live2d/model/") {
                 return new Response(
                     JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        view: "canonical",
+                        published_version: "7.1.0-test",
+                        directories: ["v2_17kanade_casual", "v2_sub_kanadefather"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp/live2d/motion/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        view: "canonical",
+                        published_version: "7.1.0-test",
+                        directories: ["v2_17kanade_motion_base"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-test/live2d/motion/v2_17kanade_motion_base/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        directories: ["v2"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-test/live2d/motion/v2_17kanade_motion_base/v2/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        directories: [],
                         files: [
-                            { path: "motion/w-normal01-nod.sse-motion.json" },
-                            { path: "facial/face_smile_01.sse-motion.json" },
+                            { name: "readme.asset.json" },
+                            { name: "buildmotiondata.asset.json" },
                         ],
                     }),
                     { status: 200 },
                 );
             }
-            if (url.endsWith("/manifest.json")) {
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-test/live2d/motion/v2_17kanade_motion_base/v2/buildmotiondata.asset.json") {
+                return new Response(
+                    JSON.stringify({
+                        format: "asset",
+                        version: 1,
+                        name: "live2d/motion/v2_17kanade_motion_base/v2/buildmotiondata",
+                        form: "live2d-motions",
+                        form_version: 2,
+                        members: [
+                            { role: "motion/w-normal01-nod", extension: "json" },
+                            { role: "facial/face_smile_01", extension: "json" },
+                        ],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://assets.pjsk.moe/sekai-extra-assets/sekai-story-search/manifest.json") {
                 return new Response(
                     JSON.stringify({ servers: { jp: { chunks: { path: "jp.jsonl.br", sha256: "abc" } } } }),
                     { status: 200 },
                 );
             }
-            if (url.endsWith("/jp.jsonl.br")) {
+            if (url === "https://assets.pjsk.moe/sekai-extra-assets/sekai-story-search/jp.jsonl.br") {
                 return new Response(compressedCorpus, { status: 200 });
             }
             return new Response("not found", { status: 404 });
@@ -218,7 +277,9 @@ describe("official story miner (offline mock fetch)", () => {
         );
         expect(modelsRes.action).toBe("catalog");
         if (modelsRes.action === "catalog" && modelsRes.data.kind === "models") {
+            expect(modelsRes.data.source).toBe("asset-site-listings");
             expect(modelsRes.data.items.map((m) => m.id)).toEqual(["v2_17kanade_casual"]);
+            expect(modelsRes.data.items[0].motion).toBe("live2d/motion/v2_17kanade_motion_base");
         }
 
         const clipsRes = await mineOfficialStory(
@@ -226,9 +287,13 @@ describe("official story miner (offline mock fetch)", () => {
             { fetchImpl: mockFetch, noCache: true },
         );
         if (clipsRes.action === "catalog" && clipsRes.data.kind === "clips") {
+            expect(clipsRes.data.motionBundle).toBe("live2d/motion/v2_17kanade_motion_base");
             expect(clipsRes.data.motions).toContain("w-normal01-nod");
             expect(clipsRes.data.facials).toContain("face_smile_01");
         }
+
+        // Live2D catalog calls must never hit assets.pjsk.moe
+        expect(requestedUrls.some((u) => u.includes("assets.pjsk.moe"))).toBe(false);
 
         const searchRes = await mineOfficialStory(
             { action: "search-text", query: "天台", char: "17,18", region: "jp" },
@@ -237,6 +302,52 @@ describe("official story miner (offline mock fetch)", () => {
         if (searchRes.action === "search-text") {
             expect(searchRes.data.hits).toHaveLength(1);
             expect(searchRes.data.hits[0].selector).toBe("event:203/1");
+        }
+        // sekai-story-search intentionally stays on assets.pjsk.moe
+        expect(
+            requestedUrls.some((u) => u.startsWith("https://assets.pjsk.moe/sekai-extra-assets/sekai-story-search/")),
+        ).toBe(true);
+    });
+
+    test("catalog models falls back to backup asset site when primary listing fails", async () => {
+        const mockFetch = (async (input: string | URL | Request) => {
+            const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            if (url === "https://storage.pjsk.moe/jp/live2d/model/") {
+                return new Response("upstream error", { status: 503 });
+            }
+            if (url === "https://storage.exmeaning.com/jp/live2d/model/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        directories: ["v2_17kanade_casual"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.exmeaning.com/jp/live2d/motion/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        directories: ["v2_17kanade_motion_base"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            return new Response("not found", { status: 404 });
+        }) as typeof fetch;
+
+        const modelsRes = await mineOfficialStory(
+            { action: "catalog", subkind: "models", char: "kanade", v2Only: true, region: "jp" },
+            { fetchImpl: mockFetch, noCache: true },
+        );
+        expect(modelsRes.action).toBe("catalog");
+        if (modelsRes.action === "catalog" && modelsRes.data.kind === "models") {
+            expect(modelsRes.data.source).toBe("asset-site-listings");
+            expect(modelsRes.data.items.map((m) => m.id)).toEqual(["v2_17kanade_casual"]);
         }
     });
 });

@@ -12,8 +12,7 @@ var DEFAULT_STORY_CORE_CONFIG = Object.freeze({
   moeStaticBaseUrl: "https://moe.exmeaning.com",
   defaultAssetLine: "main",
   defaultRegion: "jp",
-  live2dLibraryBase: "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/",
-  live2dIndexBase: "https://assets.pjsk.moe/sekai-extra-assets/sekai-live2d/",
+  live2dSite: "",
   live2dCoreUrl: null,
   live2dAssetProxy: null,
   sseWebSite: "https://storage.pjsk.moe/",
@@ -28,31 +27,75 @@ var currentConfig = { ...DEFAULT_STORY_CORE_CONFIG };
 function getStoryCoreConfig() {
   return currentConfig;
 }
-function readPublicEnv(name) {
-  if (typeof process === "undefined" || !process.env)
-    return;
-  return process.env[name];
+function configureStoryCore(patch) {
+  currentConfig = { ...currentConfig, ...patch };
+  return currentConfig;
 }
-
+function readPublicEnv(name) {
+  try {
+    switch (name) {
+      case "NEXT_PUBLIC_LIVE2D_SITE":
+        return process.env.NEXT_PUBLIC_LIVE2D_SITE;
+      case "NEXT_PUBLIC_LIVE2D_CORE_URL":
+        return process.env.NEXT_PUBLIC_LIVE2D_CORE_URL;
+      case "NEXT_PUBLIC_LIVE2D_ASSET_PROXY":
+        return process.env.NEXT_PUBLIC_LIVE2D_ASSET_PROXY;
+      case "NEXT_PUBLIC_SSE_WEB_SITE":
+        return process.env.NEXT_PUBLIC_SSE_WEB_SITE;
+      case "NEXT_PUBLIC_SSE_WEB_CORE_URL":
+        return process.env.NEXT_PUBLIC_SSE_WEB_CORE_URL;
+      case "NEXT_PUBLIC_SSE_WEB_ASSET_PROXY":
+        return process.env.NEXT_PUBLIC_SSE_WEB_ASSET_PROXY;
+      case "NEXT_PUBLIC_SSE_WEB_FONT_BASE":
+        return process.env.NEXT_PUBLIC_SSE_WEB_FONT_BASE;
+      case "NEXT_PUBLIC_SSE_WEB_CLIENT_FONTS":
+        return process.env.NEXT_PUBLIC_SSE_WEB_CLIENT_FONTS;
+      case "NEXT_PUBLIC_SSE_WEB_BUNDLED_FONTS":
+        return process.env.NEXT_PUBLIC_SSE_WEB_BUNDLED_FONTS;
+      default:
+        return typeof process !== "undefined" && process.env ? process.env[name] : undefined;
+    }
+  } catch {
+    return;
+  }
+}
+function getCoreFetch() {
+  return currentConfig.fetchImpl ?? globalThis.fetch;
+}
 // packages/story-core/src/live2d/config.ts
 var ALLOWED_CUSTOM_PROTOCOLS = new Set(["moesekai-cache:", "moesekai-app:"]);
-function isAllowedProtocol(parsed) {
+function hasPathTraversal(raw) {
+  if (/[\\]|%2e%2e/i.test(raw))
+    return true;
+  const withoutScheme = raw.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/]*/, "");
+  return withoutScheme.split("/").some((part) => part === "." || part === "..");
+}
+function isAllowedAbsoluteProtocol(parsed, allowAnyHttp) {
   if (parsed.protocol === "https:")
     return true;
   if (parsed.protocol === "http:") {
+    if (allowAnyHttp)
+      return true;
     return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
   }
   return ALLOWED_CUSTOM_PROTOCOLS.has(parsed.protocol);
 }
-function parse(raw, name) {
+function parseAbsolute(raw, name, allowAnyHttp = false) {
   const invalid = new Error(`live2d_viewer_config_invalid:${name}`);
+  if (/[?#\\\s]/.test(raw) || hasPathTraversal(raw))
+    throw invalid;
   let parsed;
   try {
     parsed = new URL(raw);
   } catch {
     throw invalid;
   }
-  if (/[?#\\\s]/.test(raw) || !isAllowedProtocol(parsed) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname.split("/").some((part) => part === "." || part === "..") || raw !== parsed.href)
+  if (!isAllowedAbsoluteProtocol(parsed, allowAnyHttp) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname.split("/").some((part) => part === "." || part === "..")) {
+    throw invalid;
+  }
+  const normalizedRaw = raw.replace(/\/+$/, "");
+  const normalizedHref = parsed.href.replace(/\/+$/, "");
+  if (normalizedRaw !== normalizedHref)
     throw invalid;
   return parsed;
 }
@@ -60,43 +103,1030 @@ function directory(raw, name) {
   const value = raw?.trim();
   if (!value)
     return null;
-  const parsed = parse(value, name);
-  if (!parsed.pathname.endsWith("/"))
+  const parsed = parseAbsolute(value, name, false);
+  if (!parsed.pathname.endsWith("/") || !value.endsWith("/")) {
     throw new Error(`live2d_viewer_config_invalid:${name}`);
+  }
   return parsed.href;
+}
+function normalizeLive2DSiteUrl(raw, name = "storyCore.live2dSite") {
+  const invalid = new Error(`live2d_viewer_config_invalid:${name}`);
+  const value = raw.trim();
+  if (!value || /[?#\\\s]/.test(value) || hasPathTraversal(value))
+    throw invalid;
+  if (value.startsWith("/")) {
+    if (value.startsWith("//"))
+      throw invalid;
+    const stripped = value.replace(/\/+$/, "");
+    return stripped || "/";
+  }
+  const parsed = parseAbsolute(value, name, true);
+  return parsed.href.replace(/\/+$/, "");
 }
 function proxy() {
   const cfg = getStoryCoreConfig();
   return directory(cfg.live2dAssetProxy, "storyCore.live2dAssetProxy") ?? directory(readPublicEnv("NEXT_PUBLIC_LIVE2D_ASSET_PROXY"), "NEXT_PUBLIC_LIVE2D_ASSET_PROXY") ?? directory(cfg.sseWebAssetProxy, "storyCore.sseWebAssetProxy") ?? directory(readPublicEnv("NEXT_PUBLIC_SSE_WEB_ASSET_PROXY"), "NEXT_PUBLIC_SSE_WEB_ASSET_PROXY");
 }
-function live2dFetchUrl(url) {
-  const relay = proxy();
-  return relay ? url.replace(/^https:\/\//, relay) : url;
+function live2dFetchUrl(url, proxyOverride) {
+  const relay = proxyOverride !== undefined ? proxyOverride : proxy();
+  if (!relay)
+    return url;
+  const cleanRelay = relay.endsWith("/") ? relay : `${relay}/`;
+  return url.replace(/^https:\/\//, cleanRelay);
 }
-function live2dSources(region) {
+function hasExplicitLive2DSite() {
   const cfg = getStoryCoreConfig();
-  const libraries = directory(readPublicEnv("NEXT_PUBLIC_LIVE2D_LIBRARY_BASE"), "NEXT_PUBLIC_LIVE2D_LIBRARY_BASE") ?? directory(cfg.live2dLibraryBase, "storyCore.live2dLibraryBase");
-  const indexes = directory(readPublicEnv("NEXT_PUBLIC_LIVE2D_INDEX_BASE"), "NEXT_PUBLIC_LIVE2D_INDEX_BASE") ?? directory(cfg.live2dIndexBase, "storyCore.live2dIndexBase");
+  return Boolean(cfg.live2dSite?.trim() || readPublicEnv("NEXT_PUBLIC_LIVE2D_SITE")?.trim() || readPublicEnv("NEXT_PUBLIC_SSE_WEB_SITE")?.trim());
+}
+function live2dSources(region, line) {
+  const cfg = getStoryCoreConfig();
+  const explicitConfigSite = cfg.live2dSite?.trim();
+  let site;
+  if (explicitConfigSite) {
+    site = normalizeLive2DSiteUrl(explicitConfigSite, "storyCore.live2dSite");
+  } else {
+    const envSite = directory(readPublicEnv("NEXT_PUBLIC_LIVE2D_SITE"), "NEXT_PUBLIC_LIVE2D_SITE") ?? directory(readPublicEnv("NEXT_PUBLIC_SSE_WEB_SITE"), "NEXT_PUBLIC_SSE_WEB_SITE");
+    if (envSite) {
+      site = envSite.replace(/\/+$/, "");
+    } else {
+      const resolvedLine = line ?? cfg.defaultAssetLine;
+      const domain = resolvedLine === "backup" ? cfg.assetDomainBackup : cfg.assetDomainMain;
+      const fieldName = resolvedLine === "backup" ? "storyCore.assetDomainBackup" : "storyCore.assetDomainMain";
+      site = normalizeLive2DSiteUrl(domain, fieldName);
+    }
+  }
+  const relay = proxy();
   return {
-    library: live2dFetchUrl(`${libraries}${region}/`),
-    index: live2dFetchUrl(`${indexes}${region}/models.json`)
+    site,
+    region,
+    ...relay ? { proxy: relay } : {}
   };
 }
-// packages/story-core/src/types/storyMaker.ts
-var STORY_SCHEMA_VERSION = "moesekai-story/2";
-var STORY_REGIONS = ["jp", "cn", "tw", "kr", "en"];
-var STORY_SLOTS = ["farLeft", "left", "center", "right", "farRight"];
-var VOICE_KINDS = ["story", "card", "area", "part"];
-var EFFECT_COLORS = ["black", "white"];
-var CONDITION_OPS = ["==", "!=", ">", ">=", "<", "<="];
-var TRANSITION_KINDS = ["none", "fadeBlack", "fadeWhite"];
-
-// packages/story-core/src/locales.ts
-var SUPPORTED_UI_LOCALES = ["zh-CN", "zh-TW", "en-US", "ja-JP", "ko-KR"];
-function isUiLocale(value) {
-  return typeof value === "string" && SUPPORTED_UI_LOCALES.includes(value);
+function live2dListingUrl(region, dir, line) {
+  const sources = live2dSources(region, line);
+  const cleanSite = sources.site.replace(/\/+$/, "");
+  const cleanDir = dir.trim().replace(/^\/+|\/+$/g, "");
+  const encodedDir = cleanDir ? cleanDir.split("/").map(encodeURIComponent).join("/") : "";
+  const url = encodedDir ? `${cleanSite}/${encodeURIComponent(region)}/${encodedDir}/` : `${cleanSite}/${encodeURIComponent(region)}/`;
+  return live2dFetchUrl(url, sources.proxy ?? null);
 }
 
+// packages/story-core/src/live2d/models.ts
+var LIVE2D_COSTUME_TOKENS = [
+  "normal",
+  "casual",
+  "school",
+  "unit",
+  "sports",
+  "pajamas",
+  "parttime",
+  "lesson",
+  "swim",
+  "jc",
+  "culture",
+  "yukata",
+  "christmas",
+  "wedding",
+  "tuxedo",
+  "priestess",
+  "archery",
+  "police",
+  "tenniswear",
+  "april",
+  "black",
+  "zoom",
+  "back",
+  "live",
+  "stage",
+  "rw",
+  "young",
+  "child",
+  "patient",
+  "side",
+  "sunset",
+  "fancostume",
+  "transform",
+  "princess",
+  "ponytail",
+  "vest",
+  "liondance",
+  "dark",
+  "long",
+  "still",
+  "mask",
+  "cheerful"
+];
+var UNIT_COSTUMES = {
+  band: "ln",
+  idol: "mmj",
+  street: "vbs",
+  wonder: "ws",
+  night: "25ji"
+};
+var KNOWN = new Set(LIVE2D_COSTUME_TOKENS);
+var MAIN_CHARACTER_PREFIX_RE = /^(?:v2_)?(?:clb\d+_)?(0[1-9]|1\d|2[0-6])[a-z]+/;
+var COLLAB_SUB_PREFIX_RE = /^(?:v2_)?sub_(?:sanrio|enst|egg)_/;
+var SUB_OWNER_VARIANT_SEGMENT_RE = /^(?:black\d*|zoom|side|stage|casual|lesson|rw|patient|sunset|cloth|jc|school|transform|live\d*)$/;
+var CHILD_PREFIX_SUBNAME_RE = /^child(\d+)?_[a-z]+(?:_(.+))?$/;
+var CHILD_SUFFIX_SUBNAME_RE = /^[a-z]+child(\d+)?(black\d*)?(?:_(.+))?$/;
+var MAIN_CHARACTER_SUBNAME_RE = /^(?:ichika|saki|honami|shiho|minori|haruka|airi|shizuku|kohane|an|akito|touya|toya|tsukasa|emu|nene|rui|kanade|mafuyu|ena|mizuki|miku|rin|len|luka|meiko|kaito)_(.+)$/;
+function blackTokenPart(digits, keepVariantOne = false) {
+  if (digits !== undefined) {
+    const number = Number(digits);
+    if (keepVariantOne || number > 1)
+      return { token: "black", variant: number };
+  }
+  return { token: "black" };
+}
+function costumeWords(word) {
+  if (!word)
+    return [];
+  const clothBlack = /^cloth(\d+)black(\d+)?$/.exec(word);
+  if (clothBlack) {
+    return [{ cloth: Number(clothBlack[1]) }, blackTokenPart(clothBlack[2])];
+  }
+  const darkCloth = /^darkcloth(\d+)$/.exec(word);
+  if (darkCloth) {
+    return [{ token: "dark" }, { cloth: Number(darkCloth[1]) }];
+  }
+  const darkUnit = /^darkunit(\d+)?$/.exec(word);
+  if (darkUnit) {
+    const num = darkUnit[1] !== undefined ? Number(darkUnit[1]) : undefined;
+    return [{ token: "dark" }, num !== undefined && num > 1 ? { token: "unit", variant: num } : { token: "unit" }];
+  }
+  const longCompound = /^long(normal|unit)(\d+)?$/.exec(word);
+  if (longCompound) {
+    const token = longCompound[1];
+    const num = longCompound[2] !== undefined ? Number(longCompound[2]) : undefined;
+    return [{ token: "long" }, num !== undefined && num > 1 ? { token, variant: num } : { token }];
+  }
+  const jcCloth = /^jccloth(\d+)?$/.exec(word);
+  if (jcCloth) {
+    if (jcCloth[1] !== undefined)
+      return [{ token: "jc" }, { cloth: Number(jcCloth[1]) }];
+    return [{ token: "jc" }, { token: "casual" }];
+  }
+  const maskCloth = /^maskcloth(\d+)?$/.exec(word);
+  if (maskCloth) {
+    if (maskCloth[1] !== undefined)
+      return [{ token: "mask" }, { cloth: Number(maskCloth[1]) }];
+    return [{ token: "mask" }, { token: "casual" }];
+  }
+  const suffixedBlack = /^([a-z]+?)black(\d+)?$/.exec(word);
+  if (suffixedBlack && suffixedBlack[1].length > 0 && suffixedBlack[1] !== "black") {
+    const prefix = suffixedBlack[1];
+    const unit2 = UNIT_COSTUMES[prefix];
+    if (unit2)
+      return [{ unit: unit2 }, blackTokenPart(suffixedBlack[2])];
+    if (KNOWN.has(prefix)) {
+      return [{ token: prefix }, blackTokenPart(suffixedBlack[2])];
+    }
+  }
+  const match = /^([a-z]+?)(\d+)?$/.exec(word);
+  const base = match?.[1] ?? word;
+  const number = match?.[2] !== undefined ? Number(match[2]) : undefined;
+  if (/^\d+$/.test(word))
+    return [{ variant: Number(word) }];
+  if (base === "cloth")
+    return [number !== undefined ? { cloth: number } : { token: "casual" }];
+  const unit = UNIT_COSTUMES[word];
+  if (unit)
+    return [{ unit }];
+  if (KNOWN.has(base)) {
+    const token = base;
+    return [number !== undefined && number > 1 ? { token, variant: number } : { token }];
+  }
+  return [{ text: word }];
+}
+function subVariantWord(word) {
+  if (!word)
+    return [];
+  if (/^\d+$/.test(word)) {
+    return [{ variant: Number(word) }];
+  }
+  const leadingNumber = /^(\d+)([a-z].*)$/.exec(word);
+  if (leadingNumber) {
+    return [{ variant: Number(leadingNumber[1]) }, ...subVariantWord(leadingNumber[2])];
+  }
+  const suffixedBlack = /^([a-z]+?)black(\d+)?$/.exec(word);
+  if (suffixedBlack && suffixedBlack[1].length > 0 && suffixedBlack[1] !== "black" && KNOWN.has(suffixedBlack[1])) {
+    return [
+      { token: suffixedBlack[1] },
+      blackTokenPart(suffixedBlack[2], true)
+    ];
+  }
+  const match = /^([a-z]+?)(\d+)?$/.exec(word);
+  const base = match?.[1] ?? word;
+  const number = match?.[2] !== undefined ? Number(match[2]) : undefined;
+  if (base === "cloth")
+    return [number !== undefined ? { cloth: number } : { token: "casual" }];
+  if (KNOWN.has(base)) {
+    const token = base;
+    return [number !== undefined ? { token, variant: number } : { token }];
+  }
+  return [{ text: word }];
+}
+function deriveSubOwnerKey(id) {
+  const rest = id.replace(/^v2_/, "").replace(/^sub_/, "");
+  if (!rest)
+    return null;
+  const segments = rest.split("_").filter(Boolean);
+  if (segments.length === 0)
+    return null;
+  while (segments.length > 1 && SUB_OWNER_VARIANT_SEGMENT_RE.test(segments[segments.length - 1])) {
+    segments.pop();
+  }
+  let last = segments[segments.length - 1];
+  while (true) {
+    const glued = /^(.*?)(?:black\d*|young)$/.exec(last);
+    if (!glued || glued[1].length < 3)
+      break;
+    last = glued[1];
+  }
+  segments[segments.length - 1] = last;
+  return segments.join("_");
+}
+function parseLive2DSubVariant(id, ownerKey) {
+  if (!ownerKey)
+    return [];
+  const rest = id.replace(/^v2_/, "").replace(/^sub_/, "");
+  if (!rest || rest === ownerKey || !rest.startsWith(ownerKey))
+    return [];
+  const suffix = rest.slice(ownerKey.length).replace(/^_+/, "");
+  if (!suffix)
+    return [];
+  return suffix.split("_").filter(Boolean).flatMap(subVariantWord);
+}
+function parseMainCharacterIdFromText(text) {
+  if (!text)
+    return null;
+  const match = MAIN_CHARACTER_PREFIX_RE.exec(text);
+  return match ? Number(match[1]) : null;
+}
+function parseCharacterSubCostume(subName) {
+  const childPrefix = CHILD_PREFIX_SUBNAME_RE.exec(subName);
+  if (childPrefix) {
+    const number = childPrefix[1] !== undefined ? Number(childPrefix[1]) : undefined;
+    const parts = [
+      number !== undefined && number > 1 ? { token: "child", variant: number } : { token: "child" }
+    ];
+    if (childPrefix[2]) {
+      parts.push(...childPrefix[2].split("_").filter(Boolean).flatMap(costumeWords));
+    }
+    return parts;
+  }
+  const childSuffix = CHILD_SUFFIX_SUBNAME_RE.exec(subName);
+  if (childSuffix) {
+    const number = childSuffix[1] !== undefined ? Number(childSuffix[1]) : undefined;
+    const parts = [
+      number !== undefined && number > 1 ? { token: "child", variant: number } : { token: "child" }
+    ];
+    if (childSuffix[2]) {
+      const digits = childSuffix[2].slice("black".length);
+      parts.push(blackTokenPart(digits.length > 0 ? digits : undefined));
+    }
+    if (childSuffix[3]) {
+      parts.push(...childSuffix[3].split("_").filter(Boolean).flatMap(costumeWords));
+    }
+    return parts;
+  }
+  const namedCostume = MAIN_CHARACTER_SUBNAME_RE.exec(subName);
+  if (namedCostume) {
+    return namedCostume[1].split("_").filter(Boolean).flatMap(costumeWords);
+  }
+  return [];
+}
+function parseLive2DModelId(id) {
+  let rest = id;
+  const generation = rest.startsWith("v2_") ? 2 : 1;
+  if (generation === 2)
+    rest = rest.slice(3);
+  const collab = /^clb\d+_/.exec(rest);
+  if (collab) {
+    rest = rest.slice(collab[0].length);
+    const character2 = /^(0[1-9]|1\d|2[0-6])[a-z]+/.exec(rest);
+    return { generation, collab: true, characterId: character2 ? Number(character2[1]) : null, subName: null, costume: [] };
+  }
+  if (rest.startsWith("sub_")) {
+    return { generation, collab: false, characterId: null, subName: rest.slice(4), costume: [] };
+  }
+  const character = /^(0[1-9]|1\d|2[0-6])[a-z]+_(.+)$/.exec(rest);
+  if (character) {
+    return {
+      generation,
+      collab: false,
+      characterId: Number(character[1]),
+      subName: null,
+      costume: character[2].split("_").filter(Boolean).flatMap(costumeWords)
+    };
+  }
+  const bareCharacter = /^(0[1-9]|1\d|2[0-6])[a-z]+$/.exec(rest);
+  if (bareCharacter) {
+    return { generation, collab: false, characterId: Number(bareCharacter[1]), subName: null, costume: [] };
+  }
+  return { generation, collab: false, characterId: null, subName: null, costume: [{ text: rest }] };
+}
+function motionAssets(entry) {
+  const listed = Array.isArray(entry.motions) ? entry.motions.map(trimmedString).filter((item) => item !== null) : [];
+  const primary = trimmedString(entry.motion);
+  if (!primary)
+    return [];
+  return [primary, ...listed.filter((item) => item !== primary)];
+}
+function trimmedString(value) {
+  if (typeof value !== "string")
+    return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+function parseStringList(value) {
+  if (!Array.isArray(value))
+    return [];
+  const seen = new Set;
+  const out = [];
+  for (const item of value) {
+    const text = trimmedString(item);
+    if (!text || seen.has(text))
+      continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+function parseNamesRecord(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return {};
+  const out = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const text = trimmedString(raw);
+    if (text)
+      out[key] = text;
+  }
+  return out;
+}
+function parseLive2DModel(entry) {
+  const spelled = parseLive2DModelId(entry.id);
+  const assetName = trimmedString(entry.assetName);
+  const iconBundle = trimmedString(entry.iconBundle);
+  const rawUnit = trimmedString(entry.unit);
+  const unit = rawUnit && rawUnit !== "none" ? rawUnit : null;
+  const name = trimmedString(entry.name);
+  const aliases = parseStringList(entry.aliases);
+  const names = parseNamesRecord(entry.names);
+  const episodes = parseStringList(entry.episodes);
+  const episodeCount = typeof entry.episodeCount === "number" && Number.isFinite(entry.episodeCount) && entry.episodeCount >= 0 ? Math.trunc(entry.episodeCount) : 0;
+  const subCharacterId = typeof entry.subCharacterId === "number" && Number.isFinite(entry.subCharacterId) ? entry.subCharacterId : null;
+  const entryCharacterId = typeof entry.characterId === "number" && Number.isInteger(entry.characterId) && entry.characterId >= 1 && entry.characterId <= 26 ? entry.characterId : null;
+  const resolvedCharacterId = entryCharacterId ?? spelled.characterId ?? parseMainCharacterIdFromText(assetName);
+  let kind;
+  if (resolvedCharacterId !== null) {
+    kind = "character";
+  } else if (entry.kind === "collab" || Boolean(iconBundle?.endsWith("_collabo")) || COLLAB_SUB_PREFIX_RE.test(entry.id) || assetName !== null && COLLAB_SUB_PREFIX_RE.test(assetName)) {
+    kind = "collab";
+  } else if (entry.kind === "sub" || subCharacterId !== null || spelled.subName !== null || assetName !== null && /^(?:v2_)?sub_/.test(assetName) || name !== null) {
+    kind = "sub";
+  } else if (entry.kind === "character") {
+    kind = "character";
+  } else {
+    kind = "mob";
+  }
+  const ownerKey = kind === "character" ? null : trimmedString(entry.ownerKey) ?? deriveSubOwnerKey(entry.id);
+  const subVariant = kind === "character" ? [] : parseLive2DSubVariant(entry.id, ownerKey);
+  const costume = kind === "character" && spelled.subName !== null && spelled.costume.length === 0 ? parseCharacterSubCostume(spelled.subName) : spelled.costume;
+  const resolvedMotions = motionAssets(entry);
+  return {
+    ...spelled,
+    id: entry.id,
+    asset: entry.asset,
+    motion: resolvedMotions[0] ?? null,
+    motions: resolvedMotions,
+    kind,
+    characterId: kind === "character" ? resolvedCharacterId : null,
+    subCharacterId,
+    assetName,
+    ownerKey,
+    iconBundle,
+    unit,
+    name,
+    aliases,
+    names,
+    episodeCount,
+    episodes,
+    subVariant,
+    costume
+  };
+}
+var KIND_ORDER = { character: 0, sub: 1, collab: 2, mob: 3 };
+var TOKEN_ORDER = new Map(LIVE2D_COSTUME_TOKENS.map((token, index) => [token, index]));
+var ORIGINAL_TOKEN_COUNT = 20;
+function hasPartToken(parts, token) {
+  return parts.some((part) => ("token" in part) && part.token === token);
+}
+function costumeRank(model) {
+  const first = model.costume[0];
+  if (!first)
+    return 0;
+  const secondaryPenalty = hasPartToken(model.costume, "black") || hasPartToken(model.costume, "zoom") ? 1e6 : 0;
+  if ("token" in first) {
+    const idx = TOKEN_ORDER.get(first.token) ?? 99;
+    const base = idx < ORIGINAL_TOKEN_COUNT ? idx * 1e4 : 400000 + (idx - ORIGINAL_TOKEN_COUNT) * 1e4;
+    return base + (first.variant ?? 1) + secondaryPenalty;
+  }
+  if ("unit" in first)
+    return 200000 + secondaryPenalty;
+  if ("cloth" in first)
+    return 300000 + first.cloth + secondaryPenalty;
+  if ("variant" in first)
+    return 350000 + first.variant + secondaryPenalty;
+  return 900000 + secondaryPenalty;
+}
+var SUB_OUTFIT_ORDER = {
+  live: 10,
+  stage: 20,
+  casual: 30,
+  lesson: 40,
+  school: 50,
+  rw: 60,
+  jc: 70,
+  sunset: 80,
+  transform: 90
+};
+function subVariantTier(parts) {
+  if (parts.length === 0)
+    return 0;
+  if (hasPartToken(parts, "black"))
+    return 4;
+  if (hasPartToken(parts, "zoom") || hasPartToken(parts, "side") || hasPartToken(parts, "back"))
+    return 3;
+  if (hasPartToken(parts, "young") || hasPartToken(parts, "child") || hasPartToken(parts, "patient"))
+    return 2;
+  const onlyBareVariant = parts.every((part) => ("variant" in part) && !("token" in part));
+  if (onlyBareVariant)
+    return 0;
+  return 1;
+}
+function subVariantSubRank(parts) {
+  if (parts.length === 0)
+    return 0;
+  let score = 0;
+  for (const part of parts) {
+    if ("token" in part) {
+      const explicit = SUB_OUTFIT_ORDER[part.token];
+      const tokenScore = explicit !== undefined ? explicit * 100 : (TOKEN_ORDER.get(part.token) ?? 99) * 100 + 1000;
+      score = Math.max(score, tokenScore + (part.variant ?? 0));
+    } else if ("cloth" in part) {
+      score = Math.max(score, 5000 + part.cloth);
+    } else if ("variant" in part) {
+      score += part.variant;
+    } else if ("text" in part) {
+      score = Math.max(score, 9000);
+    }
+  }
+  return score;
+}
+function compareLive2DModels(a, b) {
+  const kindDiff = KIND_ORDER[a.kind] - KIND_ORDER[b.kind];
+  if (kindDiff !== 0)
+    return kindDiff;
+  if (a.kind === "character") {
+    return (a.characterId ?? 0) - (b.characterId ?? 0) || Number(a.collab) - Number(b.collab) || b.generation - a.generation || costumeRank(a) - costumeRank(b) || a.id.localeCompare(b.id);
+  }
+  const ownerA = a.ownerKey ?? a.subName ?? a.id;
+  const ownerB = b.ownerKey ?? b.subName ?? b.id;
+  return ownerA.localeCompare(ownerB) || subVariantTier(a.subVariant) - subVariantTier(b.subVariant) || b.generation - a.generation || subVariantSubRank(a.subVariant) - subVariantSubRank(b.subVariant) || a.id.localeCompare(b.id);
+}
+function finalizeLive2DModels(models) {
+  const ownerKeys = new Set;
+  for (const model of models) {
+    if (model.kind !== "character" && model.ownerKey) {
+      ownerKeys.add(model.ownerKey);
+    }
+  }
+  for (const model of models) {
+    if (model.kind === "character" || !model.ownerKey || !model.ownerKey.endsWith("02"))
+      continue;
+    const stem = model.ownerKey.slice(0, -2);
+    if (stem.length > 0 && ownerKeys.has(stem)) {
+      model.ownerKey = stem;
+      model.subVariant = parseLive2DSubVariant(model.id, stem);
+    }
+  }
+  return models.sort(compareLive2DModels);
+}
+function motionSetCandidateNames(id) {
+  if (!id)
+    return [];
+  const generation = id.startsWith("v2_") ? "v2_" : "";
+  const rest = id.slice(generation.length);
+  const prefixes = generation ? [generation, ""] : [""];
+  const trimmed = (stem) => stem.replace(/(?:black\d*|young|\d+)+$/, "");
+  const character = /^(?:clb\d+_)?(\d{2}[a-z]+)/.exec(rest);
+  const parts = rest.split("_");
+  const stems = character ? [character[1], trimmed(character[1])] : parts.flatMap((_, index) => {
+    const stem = parts.slice(0, parts.length - index).join("_");
+    const stripped = trimmed(stem);
+    return stripped && stripped !== stem ? [stem, stripped] : [stem];
+  });
+  const out = [];
+  const seen = new Set;
+  for (const stem of stems) {
+    if (!stem || stem === "sub")
+      continue;
+    for (const prefix of prefixes) {
+      const name = `${prefix}${stem}_motion_base`;
+      if (!seen.has(name)) {
+        seen.add(name);
+        out.push(name);
+      }
+    }
+  }
+  return out;
+}
+function inferLive2DMotionBundleCandidates(modelId) {
+  return motionSetCandidateNames(modelId.trim()).map((name) => `live2d/motion/${name}`);
+}
+function live2dMotionSet(id, motionSets) {
+  for (const name of motionSetCandidateNames(id)) {
+    if (motionSets.has(name))
+      return name;
+  }
+  return null;
+}
+function live2dModelsFromListings(modelDirectories, motionDirectories) {
+  const motionSets = new Set(motionDirectories);
+  const seen = new Set;
+  const models = [];
+  for (const id of modelDirectories) {
+    if (!/^[a-z0-9_]+$/.test(id) || seen.has(id))
+      continue;
+    seen.add(id);
+    const motionSet = live2dMotionSet(id, motionSets);
+    models.push(parseLive2DModel({
+      id,
+      asset: `live2d/model/${id}`,
+      motion: motionSet ? `live2d/motion/${motionSet}` : null
+    }));
+  }
+  return finalizeLive2DModels(models);
+}
+
+// packages/story-core/src/live2d/site.ts
+var PUBLISHED_VERSION_TTL_MS = 60000;
+var MAX_ASSET_WALK_DEPTH = 12;
+var MAX_ASSET_WALK_DIRS = 64;
+var versionCache = new Map;
+var versionInflight = new Map;
+var assetDocCache = new Map;
+var assetDocInflight = new Map;
+function createAbortError() {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("The operation was aborted.", "AbortError");
+  }
+  const err = new Error("The operation was aborted.");
+  err.name = "AbortError";
+  return err;
+}
+function withAbortSignal(promise, signal) {
+  if (!signal)
+    return promise;
+  if (signal.aborted)
+    return Promise.reject(createAbortError());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(createAbortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    }, (error) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+  });
+}
+function compareStrings(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+function encodePathSegments(path) {
+  const clean = path.trim().replace(/^\/+|\/+$/g, "");
+  if (!clean)
+    return "";
+  return clean.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+}
+function cleanSiteRoot(site) {
+  return site.trim().replace(/\/+$/, "");
+}
+function applyProxy(url, proxy2) {
+  return proxy2 ? live2dFetchUrl(url, proxy2) : url;
+}
+function live2dVersionedBaseUrl(site, region, version) {
+  const root = cleanSiteRoot(site);
+  return `${root}/${encodeURIComponent(region)}@${encodeURIComponent(version.trim())}`;
+}
+function live2dSiteListingUrl(sources, dirPath) {
+  const base = sources.version?.trim() ? live2dVersionedBaseUrl(sources.site, sources.region, sources.version) : `${cleanSiteRoot(sources.site)}/${encodeURIComponent(sources.region)}`;
+  const encodedDir = dirPath ? encodePathSegments(dirPath) : "";
+  const url = encodedDir ? `${base}/${encodedDir}/` : `${base}/`;
+  return applyProxy(url, sources.proxy);
+}
+function live2dMemberUrl(base, docName, member, proxy2) {
+  const cleanBase = base.trim().replace(/\/+$/, "");
+  const encodedDoc = encodePathSegments(docName);
+  const encodedRole = encodePathSegments(member.role);
+  const ext = member.extension.trim().replace(/^\.+/, "");
+  const leaf = ext ? `${encodedRole}.${encodeURIComponent(ext)}` : encodedRole;
+  const url = encodedDoc ? `${cleanBase}/${encodedDoc}/${leaf}` : `${cleanBase}/${leaf}`;
+  return applyProxy(url, proxy2);
+}
+function parseDirectoryListing(url, raw) {
+  if (!raw || typeof raw !== "object") {
+    throw new Error(`${url}: invalid directory listing`);
+  }
+  const obj = raw;
+  if (obj.format !== "directory-listing" || obj.version !== 1 || obj.directories !== undefined && !Array.isArray(obj.directories)) {
+    throw new Error(`${url}: unsupported listing ${String(obj.format)} ${String(obj.version)}`);
+  }
+  const directories = Array.isArray(obj.directories) ? obj.directories.filter((entry) => typeof entry === "string") : [];
+  const files = [];
+  if (Array.isArray(obj.files)) {
+    for (const entry of obj.files) {
+      if (typeof entry === "string") {
+        files.push({ name: entry });
+      } else if (entry && typeof entry === "object" && typeof entry.name === "string") {
+        const fileObj = entry;
+        files.push({
+          name: fileObj.name,
+          ...typeof fileObj.sha256 === "string" ? { sha256: fileObj.sha256 } : {},
+          ...typeof fileObj.extension === "string" ? { extension: fileObj.extension } : {},
+          ...typeof fileObj.size === "number" ? { size: fileObj.size } : {},
+          ...typeof fileObj.media_type === "string" ? { media_type: fileObj.media_type } : {}
+        });
+      }
+    }
+  }
+  return {
+    format: "directory-listing",
+    version: 1,
+    ...typeof obj.view === "string" ? { view: obj.view } : {},
+    ...typeof obj.published_version === "string" ? { published_version: obj.published_version } : {},
+    ...typeof obj.revision === "string" ? { revision: obj.revision } : {},
+    ...typeof obj.path === "string" ? { path: obj.path } : {},
+    directories,
+    files
+  };
+}
+async function fetchListingJson(url) {
+  const fetchFn = getCoreFetch();
+  const response = await fetchFn(url, {
+    credentials: "omit",
+    headers: { Accept: "application/json" }
+  });
+  if (response.status === 404)
+    return null;
+  if (!response.ok)
+    throw new Error(`${url}: HTTP ${response.status}`);
+  return parseDirectoryListing(url, await response.json());
+}
+function getBackupSiteForDefaultDomain(site) {
+  if (hasExplicitLive2DSite())
+    return null;
+  const cfg = getStoryCoreConfig();
+  const main = cleanSiteRoot(cfg.assetDomainMain);
+  const backup = cleanSiteRoot(cfg.assetDomainBackup);
+  if (!main || !backup || main === backup)
+    return null;
+  const current = cleanSiteRoot(site);
+  if (current === main)
+    return backup;
+  if (current === backup)
+    return main;
+  return null;
+}
+function versionCacheKey(sources) {
+  return `${cleanSiteRoot(sources.site)}|${sources.region}|${sources.proxy ?? ""}`;
+}
+async function resolveSiteVersionEntry(sources, signal) {
+  if (signal?.aborted)
+    throw createAbortError();
+  const explicitVersion = sources.version?.trim();
+  if (explicitVersion) {
+    return { version: explicitVersion, site: cleanSiteRoot(sources.site) || "/" };
+  }
+  const key = versionCacheKey(sources);
+  const cached = versionCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < PUBLISHED_VERSION_TTL_MS) {
+    return { version: cached.version, site: cached.site };
+  }
+  let pending = versionInflight.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const trySite = async (site) => {
+        const url = live2dSiteListingUrl({ site, region: sources.region, proxy: sources.proxy });
+        const listing = await fetchListingJson(url);
+        if (!listing) {
+          throw new Error(`${url}: HTTP 404`);
+        }
+        const version = listing.published_version?.trim();
+        if (!version) {
+          throw new Error(`${url}: missing published_version`);
+        }
+        return { version, site: cleanSiteRoot(site) || "/" };
+      };
+      let lastError;
+      try {
+        const primary = await trySite(sources.site);
+        versionCache.set(key, { ...primary, fetchedAt: Date.now() });
+        return primary;
+      } catch (err) {
+        lastError = err;
+      }
+      const backupSite = getBackupSiteForDefaultDomain(sources.site);
+      if (backupSite) {
+        try {
+          const fallback = await trySite(backupSite);
+          versionCache.set(key, { ...fallback, fetchedAt: Date.now() });
+          return fallback;
+        } catch (err) {
+          lastError ??= err;
+        }
+      }
+      throw lastError ?? new Error(`Failed to resolve published_version for ${sources.region}`);
+    })().finally(() => {
+      versionInflight.delete(key);
+    });
+    versionInflight.set(key, pending);
+  }
+  return withAbortSignal(pending, signal);
+}
+async function resolveLive2DPublishedVersion(sources, signal) {
+  const entry = await resolveSiteVersionEntry(sources, signal);
+  return entry.version;
+}
+async function resolveLive2DSiteBase(sources, signal) {
+  const entry = await resolveSiteVersionEntry(sources, signal);
+  return live2dVersionedBaseUrl(entry.site, sources.region, entry.version);
+}
+function parseAssetDocument(raw) {
+  if (!raw || typeof raw !== "object")
+    return null;
+  const obj = raw;
+  if (obj.format !== "asset" || obj.version !== 1)
+    return null;
+  if (typeof obj.name !== "string" || !obj.name.trim())
+    return null;
+  if (typeof obj.form !== "string" || !obj.form.trim())
+    return null;
+  if (!Array.isArray(obj.members))
+    return null;
+  const members = [];
+  for (const item of obj.members) {
+    if (!item || typeof item !== "object")
+      continue;
+    const m = item;
+    if (typeof m.role !== "string" || typeof m.extension !== "string")
+      continue;
+    members.push({
+      role: m.role,
+      extension: m.extension,
+      ...typeof m.sha256 === "string" ? { sha256: m.sha256 } : {},
+      ...typeof m.size === "number" ? { size: m.size } : {},
+      ...typeof m.media_type === "string" ? { media_type: m.media_type } : {}
+    });
+  }
+  return {
+    format: "asset",
+    version: 1,
+    name: obj.name,
+    form: obj.form,
+    ...typeof obj.form_version === "number" ? { form_version: obj.form_version } : {},
+    ...typeof obj.fingerprint === "string" ? { fingerprint: obj.fingerprint } : {},
+    ..."sources" in obj ? { sources: obj.sources } : {},
+    ..."resources" in obj ? { resources: obj.resources } : {},
+    members,
+    ..."references" in obj ? { references: obj.references } : {}
+  };
+}
+function assetDocCacheKey(baseUrl, proxy2, cleanPath, expectedForm) {
+  return `${baseUrl}|${proxy2 ?? ""}|${cleanPath}|${expectedForm}`;
+}
+function normalizeAssetLookupPath(assetPath) {
+  return assetPath.trim().replace(/^\/+|\/+$/g, "").replace(/\.asset\.json$/i, "");
+}
+function sortAssetCandidateStems(stems) {
+  return [...stems].sort((a, b) => {
+    const aBuild = /^build\w*data$/i.test(a) ? 0 : 1;
+    const bBuild = /^build\w*data$/i.test(b) ? 0 : 1;
+    return aBuild - bBuild || compareStrings(a, b);
+  });
+}
+async function resolveLive2DAssetDocument(sources, assetPath, expectedForm, signal) {
+  if (signal?.aborted)
+    throw createAbortError();
+  const cleanPath = normalizeAssetLookupPath(assetPath);
+  if (!cleanPath)
+    return null;
+  const entry = await resolveSiteVersionEntry(sources, signal);
+  if (signal?.aborted)
+    throw createAbortError();
+  const baseUrl = live2dVersionedBaseUrl(entry.site, sources.region, entry.version);
+  const proxy2 = sources.proxy;
+  const key = assetDocCacheKey(baseUrl, proxy2, cleanPath, expectedForm);
+  const cached = assetDocCache.get(key);
+  if (cached)
+    return cached;
+  let pending = assetDocInflight.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const fetchDocAt = async (relDocPath) => {
+        const encoded = encodePathSegments(relDocPath);
+        const url = applyProxy(`${baseUrl}/${encoded}.asset.json`, proxy2);
+        const res = await getCoreFetch()(url, {
+          credentials: "omit",
+          headers: { Accept: "application/json" }
+        });
+        if (res.status === 404)
+          return null;
+        if (!res.ok)
+          throw new Error(`${url}: HTTP ${res.status}`);
+        const parsed = parseAssetDocument(await res.json());
+        if (!parsed || parsed.form !== expectedForm)
+          return null;
+        return {
+          doc: parsed,
+          url,
+          baseUrl,
+          version: entry.version,
+          ...proxy2 ? { proxy: proxy2 } : {}
+        };
+      };
+      const direct = await fetchDocAt(cleanPath);
+      if (direct) {
+        assetDocCache.set(key, direct);
+        return direct;
+      }
+      const queue = [{ dir: cleanPath, depth: 0 }];
+      const visited = new Set([cleanPath]);
+      let inspectedDirs = 0;
+      while (queue.length > 0 && inspectedDirs < MAX_ASSET_WALK_DIRS) {
+        const current = queue.shift();
+        inspectedDirs += 1;
+        const listUrl = applyProxy(`${baseUrl}/${encodePathSegments(current.dir)}/`, proxy2);
+        const listing = await fetchListingJson(listUrl);
+        if (!listing)
+          continue;
+        const stems = [];
+        for (const file of listing.files) {
+          if (file.name.toLowerCase().endsWith(".asset.json")) {
+            const stem = file.name.slice(0, -".asset.json".length);
+            if (stem)
+              stems.push(stem);
+          }
+        }
+        for (const stem of sortAssetCandidateStems(stems)) {
+          const candidatePath = `${current.dir}/${stem}`;
+          const match = await fetchDocAt(candidatePath);
+          if (match) {
+            assetDocCache.set(key, match);
+            return match;
+          }
+        }
+        if (current.depth < MAX_ASSET_WALK_DEPTH) {
+          for (const sub of listing.directories) {
+            if (!sub || sub === "." || sub === ".." || sub.includes("/"))
+              continue;
+            const nextDir = `${current.dir}/${sub}`;
+            if (visited.has(nextDir))
+              continue;
+            visited.add(nextDir);
+            queue.push({ dir: nextDir, depth: current.depth + 1 });
+          }
+        }
+      }
+      return null;
+    })().finally(() => {
+      assetDocInflight.delete(key);
+    });
+    assetDocInflight.set(key, pending);
+  }
+  return withAbortSignal(pending, signal);
+}
+function extractLive2DMotionClips(doc) {
+  const motions = new Set;
+  const facials = new Set;
+  for (const member of doc.members ?? []) {
+    const role = typeof member?.role === "string" ? member.role : "";
+    if (role.startsWith("motion/")) {
+      const name = role.slice("motion/".length);
+      if (name)
+        motions.add(name);
+    } else if (role.startsWith("facial/")) {
+      const name = role.slice("facial/".length);
+      if (name)
+        facials.add(name);
+    }
+  }
+  return {
+    motions: [...motions].sort(compareStrings),
+    facials: [...facials].sort(compareStrings)
+  };
+}
+
+// packages/story-core/src/live2d/client.ts
+var modelIndexCache = new Map;
+var backgroundCache = new Map;
+function createAbortError2() {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("The operation was aborted.", "AbortError");
+  }
+  const err = new Error("The operation was aborted.");
+  err.name = "AbortError";
+  return err;
+}
+function withAbortSignal2(promise, signal) {
+  if (!signal)
+    return promise;
+  if (signal.aborted)
+    return Promise.reject(createAbortError2());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(createAbortError2());
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    }, (error) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+  });
+}
+async function fetchDirectorySubdirectories(url) {
+  const fetchFn = getCoreFetch();
+  const response = await fetchFn(url, { credentials: "omit", headers: { Accept: "application/json" } });
+  if (response.status === 404)
+    return null;
+  if (!response.ok)
+    throw new Error(`${url}: HTTP ${response.status}`);
+  const listing = await response.json();
+  if (listing.format !== "directory-listing" || listing.version !== 1 || listing.directories !== undefined && !Array.isArray(listing.directories)) {
+    throw new Error(`${url}: unsupported listing ${String(listing.format)} ${String(listing.version)}`);
+  }
+  return Array.isArray(listing.directories) ? listing.directories.filter((entry) => typeof entry === "string") : [];
+}
+async function fetchModelsFromListingsOnLine(region, line) {
+  const sources = live2dSources(region, line);
+  const [modelDirs, motionDirs] = await Promise.all([
+    fetchDirectorySubdirectories(live2dSiteListingUrl(sources, "live2d/model/")),
+    fetchDirectorySubdirectories(live2dSiteListingUrl(sources, "live2d/motion/"))
+  ]);
+  if (!modelDirs || modelDirs.length === 0)
+    return null;
+  return live2dModelsFromListings(modelDirs, motionDirs ?? []);
+}
+function fetchLive2DModels(region, signal) {
+  if (signal?.aborted)
+    return Promise.reject(createAbortError2());
+  const cfg = getStoryCoreConfig();
+  const primaryLine = cfg.defaultAssetLine;
+  const backupLine = primaryLine === "main" ? "backup" : "main";
+  const explicitSite = hasExplicitLive2DSite();
+  const primarySources = live2dSources(region, primaryLine);
+  const primaryModelListingUrl = live2dSiteListingUrl(primarySources, "live2d/model/");
+  const canFallback = !explicitSite && cfg.assetDomainMain !== cfg.assetDomainBackup;
+  const backupModelListingUrl = canFallback ? live2dSiteListingUrl(live2dSources(region, backupLine), "live2d/model/") : "";
+  const key = `${region}|${primaryModelListingUrl}|${backupModelListingUrl}`;
+  let cached = modelIndexCache.get(key);
+  if (!cached) {
+    const loading = (async () => {
+      let lastError = null;
+      try {
+        const listed = await fetchModelsFromListingsOnLine(region, primaryLine);
+        if (listed && listed.length > 0)
+          return listed;
+      } catch (err) {
+        lastError = err;
+      }
+      if (canFallback) {
+        try {
+          const backupListed = await fetchModelsFromListingsOnLine(region, backupLine);
+          if (backupListed && backupListed.length > 0)
+            return backupListed;
+        } catch (err) {
+          lastError ??= err;
+        }
+      }
+      if (lastError)
+        throw lastError;
+      return [];
+    })();
+    modelIndexCache.set(key, loading);
+    loading.catch(() => {
+      if (modelIndexCache.get(key) === loading) {
+        modelIndexCache.delete(key);
+      }
+    });
+    cached = loading;
+  }
+  return withAbortSignal2(cached, signal);
+}
 // packages/story-core/src/story/limits.ts
 var STORY_LIMITS = {
   nodes: 200,
@@ -291,6 +1321,116 @@ function detectStageActorOverlaps(actors) {
   return { duplicateSlots, overlaps };
 }
 
+// packages/story-core/src/story/assets.ts
+function normalizeAssetPath(value) {
+  return value.trim().replace(/^\/+|\/+$/g, "");
+}
+function createAbortError3() {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("The operation was aborted.", "AbortError");
+  }
+  const err = new Error("The operation was aborted.");
+  err.name = "AbortError";
+  return err;
+}
+var sePackIndex = new Map;
+var seCatalogs = new Map;
+var SKIP_SCENARIO_BGM_DIRS = new Set([
+  "bgm",
+  "bgm00000",
+  "bgm90001",
+  "bgm90002",
+  "bgm90003",
+  "bgm90004",
+  "bgm90005",
+  "bgm90006",
+  "bgm90007",
+  "bgm90008",
+  "bgm90009",
+  "bgm90010",
+  "bgm90011",
+  "bgm90012",
+  "bgm90013"
+]);
+var EXPAND_SCENARIO_BGM_DIRS = new Set([
+  "bgm00016_01",
+  "bgm00038_01",
+  "bgm00039_01",
+  "bgm10001",
+  "bgm10002",
+  "bgm10003",
+  "bgm10004",
+  "bgm10005"
+]);
+var bgmCatalogs = new Map;
+async function fetchMotionBundleClips(sources, motionAsset, signal) {
+  if (signal?.aborted)
+    throw createAbortError3();
+  const asset = normalizeAssetPath(motionAsset);
+  if (!asset)
+    return { motions: [], facials: [] };
+  const resolved = await resolveLive2DAssetDocument(sources, asset, "live2d-motions", signal);
+  if (!resolved) {
+    throw new Error(`Live2D motion asset not found: ${asset}`);
+  }
+  return extractLive2DMotionClips(resolved.doc);
+}
+async function fetchLive2DModelClips(sources, modelId, motionAsset, signal) {
+  if (signal?.aborted)
+    throw createAbortError3();
+  const candidates = [];
+  const seen = new Set;
+  const addCandidate = (asset) => {
+    const clean = asset ? normalizeAssetPath(asset) : "";
+    if (clean && !seen.has(clean)) {
+      seen.add(clean);
+      candidates.push(clean);
+    }
+  };
+  addCandidate(motionAsset);
+  for (const candidate of inferLive2DMotionBundleCandidates(modelId)) {
+    addCandidate(candidate);
+  }
+  if (candidates.length === 0) {
+    return { motions: [], facials: [], motionBundle: null };
+  }
+  const version = sources.version?.trim() || await resolveLive2DPublishedVersion(sources, signal);
+  const pinnedSources = { ...sources, version };
+  let lastError = null;
+  for (const candidate of candidates) {
+    if (signal?.aborted)
+      throw createAbortError3();
+    try {
+      const clips = await fetchMotionBundleClips(pinnedSources, candidate, signal);
+      return { ...clips, motionBundle: candidate };
+    } catch (err) {
+      if (signal?.aborted)
+        throw createAbortError3();
+      lastError = err;
+    }
+  }
+  if (lastError) {
+    throw lastError;
+  }
+  return { motions: [], facials: [], motionBundle: null };
+}
+var voiceScenariosCache = new Map;
+var voiceFilesCache = new Map;
+// packages/story-core/src/types/storyMaker.ts
+var STORY_SCHEMA_VERSION = "moesekai-story/2";
+var STORY_REGIONS = ["jp", "cn", "tw", "kr", "en"];
+var STORY_SLOTS = ["farLeft", "left", "center", "right", "farRight"];
+var VOICE_KINDS = ["story", "card", "area", "part"];
+var EFFECT_COLORS = ["black", "white"];
+var CONDITION_OPS = ["==", "!=", ">", ">=", "<", "<="];
+var TRANSITION_KINDS = ["none", "fadeBlack", "fadeWhite"];
+
+// packages/story-core/src/locales.ts
+var SUPPORTED_UI_LOCALES = ["zh-CN", "zh-TW", "en-US", "ja-JP", "ko-KR"];
+function isUiLocale(value) {
+  return typeof value === "string" && SUPPORTED_UI_LOCALES.includes(value);
+}
+
 // packages/story-core/src/story/document.ts
 var GRAPH_COL_GAP = 380;
 var GRAPH_ROW_GAP = 260;
@@ -468,7 +1608,7 @@ function autoLayoutGraph(doc, options) {
 
 // packages/story-core/src/story/compiler.ts
 var MAX_DIAGNOSTICS = 100;
-function compareStrings(a, b) {
+function compareStrings2(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 function isBlockingScene(node) {
@@ -1323,7 +2463,7 @@ function compileStoryGraph(doc) {
     if ((cycleState.get(nodeId) ?? 0) === 0)
       dfsCycle(nodeId);
   }
-  const unreachableOrdered = nodeEntries.map(([id]) => id).filter((id) => !reachableSet.has(id)).sort(compareStrings);
+  const unreachableOrdered = nodeEntries.map(([id]) => id).filter((id) => !reachableSet.has(id)).sort(compareStrings2);
   const orderedNodeIds = [...reachableNodeIds, ...unreachableOrdered];
   const instructions = [];
   const nodeEntryPc = {};
@@ -2247,7 +3387,7 @@ function escapeStr(value) {
 function fmtNum(value) {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)));
 }
-function compareStrings2(a, b) {
+function compareStrings3(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 function hash36(input) {
@@ -2453,7 +3593,7 @@ function serializeStoryScript(doc, options = {}) {
       }
     }
   }
-  const remaining = Object.keys(doc.nodes).filter((id) => !seen.has(id)).sort(compareStrings2);
+  const remaining = Object.keys(doc.nodes).filter((id) => !seen.has(id)).sort(compareStrings3);
   orderedIds.push(...remaining);
   for (const nodeId of orderedIds) {
     const node = doc.nodes[nodeId];
@@ -3914,11 +5054,26 @@ function parseStoryScript(source) {
 }
 export {
   serializeStoryScript,
+  resolveLive2DSiteBase,
+  resolveLive2DPublishedVersion,
+  resolveLive2DAssetDocument,
   parseStoryScript,
+  live2dVersionedBaseUrl,
   live2dSources,
+  live2dSiteListingUrl,
+  live2dMotionSet,
+  live2dModelsFromListings,
+  live2dMemberUrl,
+  live2dListingUrl,
   layoutStageActors,
+  inferLive2DMotionBundleCandidates,
+  fetchMotionBundleClips,
+  fetchLive2DModels,
+  fetchLive2DModelClips,
+  extractLive2DMotionClips,
   detectStageActorOverlaps,
   createInitialRuntime,
+  configureStoryCore,
   computeActorRenderOrders,
   compileStoryGraph,
   advanceRuntime,

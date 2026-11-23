@@ -4,6 +4,7 @@ import {
     DESKTOP_STORY_WORKSPACE_CAPABILITIES,
     WEB_STORY_WORKSPACE_CAPABILITIES,
     addCastMember,
+    clearLive2DSiteCache,
     clearPreloaderSessionCache,
     configureStoryCore,
     createBrowserStoryExportAdapter,
@@ -14,11 +15,12 @@ import {
     createStoryDocument,
     getAssetBaseUrl,
     getStoryCoreConfig,
-    hasExplicitLive2DIndexBase,
+    hasExplicitLive2DSite,
     inspectStoryCacheStatus,
     live2dCoreUrl,
     live2dListingUrl,
     live2dModelsFromListings,
+    live2dSiteListingUrl,
     live2dSources,
     parseStoryScript,
     preloadStoryAssets,
@@ -144,33 +146,31 @@ describe("host contracts & .msk export preflight", () => {
         }
     });
 
-    test("configureStoryCore supports moesekai-cache:// and moesekai-app:// protocols while rejecting untrusted schemes", () => {
+    test("configureStoryCore supports moesekai-cache://, moesekai-app://, and relative / sites while rejecting untrusted schemes", () => {
         try {
             configureStoryCore({
                 assetDomainMain: "moesekai-cache://storage.pjsk.moe",
                 assetDomainBackup: "moesekai-cache://storage.exmeaning.com",
                 masterDataDomainMain: "moesekai-cache://metadata.pjsk.moe",
                 masterDataDomainBackup: "moesekai-cache://metadata.exmeaning.com",
-                live2dLibraryBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/",
-                live2dIndexBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-live2d/",
                 live2dCoreUrl: "moesekai-app://app/live2d-viewer/live2dcubismcore.min.js",
                 live2dAssetProxy: "moesekai-cache://proxy.local/relay/",
                 sseWebSite: "moesekai-cache://storage.pjsk.moe/",
                 sseWebFontBase: "moesekai-app://app/story-fonts/",
             });
 
-            assert.equal(
-                live2dSources("jp").library,
-                "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/",
-            );
-            assert.equal(
-                live2dSources("jp").index,
-                "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-live2d/jp/models.json",
-            );
-            // Rewriting the default index base through moesekai-cache:// should not trigger redundant models.json probes
-            assert.equal(hasExplicitLive2DIndexBase(), false);
+            assert.deepEqual(live2dSources("jp"), {
+                site: "moesekai-cache://storage.pjsk.moe",
+                region: "jp",
+                proxy: "moesekai-cache://proxy.local/relay/",
+            });
+            assert.equal(hasExplicitLive2DSite(), false);
             assert.equal(
                 live2dListingUrl("jp", "live2d/model/"),
+                "moesekai-cache://storage.pjsk.moe/jp/live2d/model/",
+            );
+            assert.equal(
+                live2dSiteListingUrl(live2dSources("jp"), "live2d/model"),
                 "moesekai-cache://storage.pjsk.moe/jp/live2d/model/",
             );
             assert.equal(
@@ -181,6 +181,19 @@ describe("host contracts & .msk export preflight", () => {
                 storyBackgroundUrl("bg_a000401", "jp"),
                 "moesekai-cache://storage.pjsk.moe/sekai-jp-assets/scenario/background/bg_a000401/bg_a000401.webp",
             );
+
+            // Relative asset site paths (`/assets/` and `/`) are accepted cleanly
+            configureStoryCore({ live2dSite: "/assets/", live2dAssetProxy: null });
+            assert.equal(hasExplicitLive2DSite(), true);
+            assert.deepEqual(live2dSources("jp"), { site: "/assets", region: "jp" });
+            assert.equal(live2dSiteListingUrl(live2dSources("jp"), "live2d/model/"), "/assets/jp/live2d/model/");
+
+            configureStoryCore({ live2dSite: "/" });
+            assert.deepEqual(live2dSources("jp"), { site: "/", region: "jp" });
+            assert.equal(live2dSiteListingUrl(live2dSources("jp"), "live2d/model/"), "/jp/live2d/model/");
+
+            // Restore proxy for sseWeb/uiKit checks
+            configureStoryCore({ live2dSite: "", live2dAssetProxy: "moesekai-cache://proxy.local/relay/" });
 
             const sseSources = sseWebSources("jp");
             assert.ok(sseSources);
@@ -196,12 +209,15 @@ describe("host contracts & .msk export preflight", () => {
             assert.ok(fonts);
             assert.ok(fonts.body[0].url.startsWith("moesekai-app://app/story-fonts/"));
 
-            // Untrusted schemes and path traversals must still be rejected
-            configureStoryCore({ live2dLibraryBase: "javascript://evil.test/foo/" });
+            // Untrusted schemes, protocol-relative URLs, and path traversals must still be rejected
+            configureStoryCore({ live2dSite: "javascript://evil.test/foo/" });
+            assert.throws(() => live2dSources("jp"), /live2d_viewer_config_invalid/);
+
+            configureStoryCore({ live2dSite: "//evil.test/storage" });
             assert.throws(() => live2dSources("jp"), /live2d_viewer_config_invalid/);
 
             configureStoryCore({
-                live2dLibraryBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/",
+                live2dSite: "",
                 sseWebSite: "http://evil.example.com/",
             });
             assert.throws(() => sseWebSources("jp"), /sse_web_config_invalid/);
@@ -214,7 +230,7 @@ describe("host contracts & .msk export preflight", () => {
 
             configureStoryCore({
                 live2dAssetProxy: null,
-                live2dLibraryBase: "moesekai-cache://assets.pjsk.moe/sekai/../etc/",
+                live2dSite: "moesekai-cache://storage.pjsk.moe/sekai/../etc/",
             });
             assert.throws(() => live2dSources("jp"), /live2d_viewer_config_invalid/);
         } finally {
@@ -226,6 +242,7 @@ describe("host contracts & .msk export preflight", () => {
         const prevCaches = globalThis.caches;
         let cacheOpenCalls = 0;
         const headProbes: Array<{ url: string; probeHeader: string | null }> = [];
+        const VERSION = "7.1.0-desktop-test";
 
         // Simulate Chromium Cache Storage rejecting non-http(s) URLs
         (globalThis as Record<string, unknown>).caches = {
@@ -250,23 +267,70 @@ describe("host contracts & .msk export preflight", () => {
             if (init?.method === "HEAD") {
                 const hdrs = new Headers(init.headers);
                 headProbes.push({ url, probeHeader: hdrs.get("X-MoeSekai-Cache-Probe") });
-                const isKanade = url.includes("v2_17kanade_casual");
+                const isKanade = url.includes("v2_17kanade_casual") && url.endsWith("/moc.moc3");
                 return new Response(null, {
                     status: isKanade ? 200 : 204,
                     headers: { "X-MoeSekai-Cache": isKanade ? "HIT" : "MISS" },
                 });
             }
-            if (url.endsWith("/v2_17kanade_casual/_ripper.json")) {
+            if (url === "moesekai-cache://storage.pjsk.moe/jp/") {
                 return new Response(
-                    JSON.stringify({ crc: 111, files: [{ path: "model.moc3", kind: "model" }, { path: "tex.png", kind: "texture" }] }),
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        published_version: VERSION,
+                        directories: ["live2d"],
+                        files: [],
+                    }),
                     { status: 200, headers: { "Content-Type": "application/json", "X-MoeSekai-Cache": "HIT" } },
                 );
             }
-            if (url.endsWith("/v2_18mafuyu_casual/_ripper.json")) {
+            // Nested directory discovery for Kanade (with sibling form:"text" doc that must be ignored!)
+            if (url === `moesekai-cache://storage.pjsk.moe/jp@${VERSION}/live2d/model/v2_17kanade_casual/`) {
                 return new Response(
-                    JSON.stringify({ crc: 222, files: [{ path: "model.moc3", kind: "model" }] }),
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        directories: [],
+                        files: [
+                            { name: "kanade.moc3.asset.json", extension: "json" },
+                            { name: "buildmodeldata.asset.json", extension: "json" },
+                        ],
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json", "X-MoeSekai-Cache": "HIT" } },
+                );
+            }
+            if (url === `moesekai-cache://storage.pjsk.moe/jp@${VERSION}/live2d/model/v2_17kanade_casual/buildmodeldata.asset.json`) {
+                return new Response(
+                    JSON.stringify({
+                        format: "asset",
+                        version: 1,
+                        name: "live2d/model/v2_17kanade_casual/buildmodeldata",
+                        form: "live2d-model",
+                        members: [
+                            { role: "moc", extension: "moc3" },
+                            { role: "texture/0", extension: "png" },
+                            { role: "motion/model_owned_ignored", extension: "json" },
+                        ],
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json", "X-MoeSekai-Cache": "HIT" } },
+                );
+            }
+            // Direct `.asset.json` for Mafuyu
+            if (url === `moesekai-cache://storage.pjsk.moe/jp@${VERSION}/live2d/model/v2_18mafuyu_casual.asset.json`) {
+                return new Response(
+                    JSON.stringify({
+                        format: "asset",
+                        version: 1,
+                        name: "live2d/model/v2_18mafuyu_casual",
+                        form: "live2d-model",
+                        members: [{ role: "moc", extension: "moc3" }],
+                    }),
                     { status: 200, headers: { "Content-Type": "application/json", "X-MoeSekai-Cache": "MISS" } },
                 );
+            }
+            if (url.endsWith(".asset.json")) {
+                return new Response("Not Found", { status: 404 });
             }
             const hit = url.includes("v2_17kanade_casual") || url.includes("bgm00020");
             return new Response(new Uint8Array([1, 2, 3]), {
@@ -276,10 +340,10 @@ describe("host contracts & .msk export preflight", () => {
         }) as typeof fetch;
 
         try {
+            clearLive2DSiteCache();
             clearPreloaderSessionCache();
             configureStoryCore({
                 assetDomainMain: "moesekai-cache://storage.pjsk.moe",
-                live2dLibraryBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/",
                 fetchImpl: mockFetch,
             });
 
@@ -299,16 +363,18 @@ describe("host contracts & .msk export preflight", () => {
 
             const models = live2dModelsFromListings(["v2_17kanade_casual", "v2_18mafuyu_casual"], []);
 
-            // 1. Cold-start inspectStoryCacheStatus probes `moesekai-cache://` via zero-network HEAD
+            // 1. Cold-start inspectStoryCacheStatus probes resolved versioned moc URLs via HEAD
             const before = await inspectStoryCacheStatus(doc, { models, includeUiKit: true });
             assert.equal(headProbes.length, 2);
             assert.ok(headProbes.every(p => p.probeHeader === "1"));
+            assert.ok(headProbes.every(p => p.url.startsWith(`moesekai-cache://storage.pjsk.moe/jp@${VERSION}/`)));
+            assert.ok(headProbes.every(p => p.url.endsWith("/moc.moc3")));
             assert.equal(before.live2dCachedModels, 1);
             assert.equal(before.live2dTotalModels, 2);
             assert.equal(before.hasLocalCache, false);
 
-            // 2. preloadStoryAssets skips Cache Storage API, classifies X-MoeSekai-Cache: HIT as cached,
-            //    and omits unsupported UI Kit without counting it as failed (failed === 0!)
+            // 2. preloadStoryAssets skips Cache Storage API, ignores model-owned motion/*,
+            //    classifies X-MoeSekai-Cache: HIT as cached, and omits unsupported UI Kit cleanly
             const progress = await preloadStoryAssets(doc, { models, includeUiKit: true, decodeAudio: false });
             assert.equal(cacheOpenCalls, 0);
             assert.equal(progress.done, true);
@@ -330,6 +396,7 @@ describe("host contracts & .msk export preflight", () => {
             configureStoryCore({
                 checkCachedUrlPrefixes: (prefixes) => {
                     prefixCalls += 1;
+                    assert.ok(prefixes.every(p => p.startsWith(`moesekai-cache://storage.pjsk.moe/jp@${VERSION}/`)));
                     return prefixes.map(() => true);
                 },
             });
@@ -338,6 +405,7 @@ describe("host contracts & .msk export preflight", () => {
             assert.equal(viaHook.live2dCachedModels, 2);
             assert.equal(viaHook.hasLocalCache, true);
         } finally {
+            clearLive2DSiteCache();
             clearPreloaderSessionCache();
             resetStoryCoreConfig();
             (globalThis as Record<string, unknown>).caches = prevCaches;

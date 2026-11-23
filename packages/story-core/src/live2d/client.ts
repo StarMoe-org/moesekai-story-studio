@@ -1,7 +1,8 @@
 import { getCoreFetch, getStoryCoreConfig } from "../config";
 import { getAssetBaseUrl, type AssetLine } from "../pjskAssets";
-import { hasExplicitLive2DIndexBase, live2dListingUrl, live2dSources, type Live2DRegion } from "./config";
-import { live2dModelsFromListings, parseLive2DModelIndex, type Live2DModel } from "./models";
+import { hasExplicitLive2DSite, live2dSources, type Live2DRegion } from "./config";
+import { live2dModelsFromListings, type Live2DModel } from "./models";
+import { live2dSiteListingUrl } from "./site";
 
 /** Network loaders for a server's Live2D model catalog and story background listings. */
 
@@ -43,83 +44,64 @@ async function fetchDirectorySubdirectories(url: string): Promise<string[] | nul
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
     const listing = await response.json() as { format?: unknown; version?: unknown; directories?: unknown };
-    if (listing.format !== "directory-listing" || listing.version !== 1 || !Array.isArray(listing.directories)) {
+    if (listing.format !== "directory-listing" || listing.version !== 1
+        || (listing.directories !== undefined && !Array.isArray(listing.directories))) {
         throw new Error(`${url}: unsupported listing ${String(listing.format)} ${String(listing.version)}`);
     }
-    return listing.directories.filter((entry): entry is string => typeof entry === "string");
-}
-
-async function fetchModelsFromIndexJson(url: string): Promise<Live2DModel[] | null> {
-    const fetchFn = getCoreFetch();
-    const response = await fetchFn(url, { credentials: "omit", headers: { Accept: "application/json" } });
-    if (response.status === 404) return null;
-    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-    return parseLive2DModelIndex(await response.json());
+    return Array.isArray(listing.directories)
+        ? listing.directories.filter((entry): entry is string => typeof entry === "string")
+        : [];
 }
 
 async function fetchModelsFromListingsOnLine(region: Live2DRegion, line: AssetLine): Promise<Live2DModel[] | null> {
+    const sources = live2dSources(region, line);
     const [modelDirs, motionDirs] = await Promise.all([
-        fetchDirectorySubdirectories(live2dListingUrl(region, "live2d/model/", line)),
-        fetchDirectorySubdirectories(live2dListingUrl(region, "live2d/motion/", line)),
+        fetchDirectorySubdirectories(live2dSiteListingUrl(sources, "live2d/model/")),
+        fetchDirectorySubdirectories(live2dSiteListingUrl(sources, "live2d/motion/")),
     ]);
     if (!modelDirs || modelDirs.length === 0) return null;
     return live2dModelsFromListings(modelDirs, motionDirs ?? []);
 }
 
 /**
- * A server's Live2D models, resolved from `storage.pjsk.moe/<region>/live2d/{model,motion}/`
- * directory listings (with automatic backup-line fallback and optional `models.json` support
- * when `live2dIndexBase` / `NEXT_PUBLIC_LIVE2D_INDEX_BASE` is explicitly configured).
+ * A server's Live2D models, resolved from canonical asset-site directory listings
+ * (`/<region>/live2d/model/` and `/<region>/live2d/motion/`), with automatic backup-line fallback
+ * when using the default storage asset domains.
  *
- * Returns `[]` when neither directory listings nor `models.json` are published (404).
- * Cached per `${region}|${key}` (retries on rejection).
+ * Returns `[]` when directory listings are not published (404).
+ * Cached per `${region}|${primaryUrl}|${backupUrl}` (retries on rejection).
  */
 export function fetchLive2DModels(region: Live2DRegion, signal?: AbortSignal): Promise<Live2DModel[]> {
     if (signal?.aborted) return Promise.reject(createAbortError());
     const cfg = getStoryCoreConfig();
     const primaryLine: AssetLine = cfg.defaultAssetLine;
     const backupLine: AssetLine = primaryLine === "main" ? "backup" : "main";
-    const explicitIndex = hasExplicitLive2DIndexBase();
-    const indexUrl = live2dSources(region).index;
-    const primaryModelListingUrl = live2dListingUrl(region, "live2d/model/", primaryLine);
-    const key = `${region}|${explicitIndex ? indexUrl : primaryModelListingUrl}`;
+    const explicitSite = hasExplicitLive2DSite();
+    const primarySources = live2dSources(region, primaryLine);
+    const primaryModelListingUrl = live2dSiteListingUrl(primarySources, "live2d/model/");
+    const canFallback = !explicitSite && cfg.assetDomainMain !== cfg.assetDomainBackup;
+    const backupModelListingUrl = canFallback
+        ? live2dSiteListingUrl(live2dSources(region, backupLine), "live2d/model/")
+        : "";
+    const key = `${region}|${primaryModelListingUrl}|${backupModelListingUrl}`;
 
     let cached = modelIndexCache.get(key);
     if (!cached) {
         const loading = (async (): Promise<Live2DModel[]> => {
             let lastError: unknown = null;
-            if (explicitIndex) {
-                try {
-                    const indexed = await fetchModelsFromIndexJson(indexUrl);
-                    if (indexed) return indexed;
-                } catch (err) {
-                    lastError = err;
-                }
-            }
-
             try {
                 const listed = await fetchModelsFromListingsOnLine(region, primaryLine);
                 if (listed && listed.length > 0) return listed;
             } catch (err) {
-                lastError ??= err;
+                lastError = err;
             }
 
-            // Try backup storage domain if distinct from primary
-            if (cfg.assetDomainMain !== cfg.assetDomainBackup) {
+            if (canFallback) {
                 try {
                     const backupListed = await fetchModelsFromListingsOnLine(region, backupLine);
                     if (backupListed && backupListed.length > 0) return backupListed;
                 } catch (err) {
                     lastError ??= err;
-                }
-            }
-
-            if (!explicitIndex) {
-                try {
-                    const indexed = await fetchModelsFromIndexJson(indexUrl);
-                    if (indexed) return indexed;
-                } catch {
-                    // Ignore fallback 404/network errors when listings were 404
                 }
             }
 
@@ -181,7 +163,7 @@ export function fetchStoryBackgrounds(
     return withAbortSignal(cached, signal);
 }
 
-/** Clears cached Live2D model index & background directory promises (primarily for tests). */
+/** Clears cached Live2D model catalog & background directory promises (primarily for tests). */
 export function clearLive2DClientCaches(): void {
     modelIndexCache.clear();
     backgroundCache.clear();

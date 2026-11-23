@@ -1,8 +1,8 @@
 // SekaiLive2DStage: several Project SEKAI Live2D models on one canvas, placed as a story places
 // its characters (an ES module a page imports).
 //
-//   const stage = await SekaiLive2DStage.create({ canvas, library, width, height });
-//   await stage.addActor("ichika", { bundle, motion }, { x: -0.5 });
+//   const stage = await SekaiLive2DStage.create({ canvas, sources: { site, region }, width, height });
+//   await stage.addActor("ichika", { asset, motion }, { x: -0.5 });
 //   await stage.setActor("ichika", { x: 0, alpha: 0.5 }, { duration: 0.5, easing: "in-out" });
 //   await stage.playMotion("ichika", "w-normal-nod01"); stage.setTalking("ichika", true);
 //   await stage.setCamera({ zoom: 1.2, y: -0.1 }, { duration: 1 }); stage.finishTweens();
@@ -12,7 +12,11 @@
 // with SekaiStoryExporter's Live2D implementation compiled to wasm (pkg/, the viewer's): the
 // game's story camera, and motions, facials, blinking, breathing and physics as the game runs
 // them. The canvas is transparent around the models (premultiplied alpha); the page puts its
-// background under it.
+// background under it. The models are read from a site's published version.
+
+import { resolveBase } from "./viewer.js";
+
+export { resolveBase };
 
 // Cubism Core for Web where Live2D publishes it (SSE's ADR-0032): the address has no version
 // in it and serves whichever Core Live2D last put there.
@@ -94,7 +98,10 @@ export class SekaiLive2DStage extends EventTarget {
    *   this module's directory. The worker must be of the page's origin
    * @param {string} [o.pkg]   URL of the wasm, relative to `js`; default `pkg/`
    * @param {string} [o.core]  URL of live2dcubismcore.min.js; default: Live2D's address
-   * @param {string} o.library  URL of the story library's root (as the viewer's)
+   * @param {{site: string, region: string, version?: string, proxy?: string}} o.sources  the
+   *   site that publishes the data (e.g. `https://storage.pjsk.moe`), the region (jp, en, tw, kr
+   *   or cn) and, to pin it, the published version (default: the one the site publishes now);
+   *   `proxy`: see `resolveBase`
    * @param {number} o.width   drawing size in pixels (the CSS size × devicePixelRatio)
    * @param {number} o.height
    * @param {AbortSignal} [o.signal]  aborts starting: `create` rejects with an AbortError
@@ -138,15 +145,21 @@ export class SekaiLive2DStage extends EventTarget {
   #pendingRemovals = new Map();
   #removeTag = 0;
 
+  /** The resolved published-version base URL, ending in `/`. */
+  base = null;
+
   /** The actors on stage, in draw order (the first at the back). */
   get actors() { return [...this.#actors]; }
 
   async #load(o) {
     const js = withSlash(new URL(o.js ?? HERE, location.href).href);
+    const base = await resolveBase(o.sources, { signal: o.signal });
+    o.signal?.throwIfAborted();
+    this.base = base;
     const options = {
       pkg: withSlash(new URL(o.pkg ?? "pkg/", js).href),
       core: new URL(o.core ?? CORE, location.href).href,
-      library: withSlash(new URL(o.library, location.href).href),
+      base,
       width: Math.max(1, Math.round(o.width) || 1),
       height: Math.max(1, Math.round(o.height) || 1),
     };
@@ -245,14 +258,19 @@ export class SekaiLive2DStage extends EventTarget {
   }
 
   /**
-   * Loads a model (files fetched and cached as the viewer does; a bundle another actor uses is
-   * not fetched again) and puts it on stage as actor `id`, placed by `p` (x 0, y 0, scale 1,
-   * alpha 1, not mirrored, in front of the actors before it). It plays its default motion and
-   * facial unless `p.motion` / `p.facial` name others. An actor of that id is replaced (in its
-   * place in the draw order) once the new model is in. Commands for `id` made before this
-   * resolves wait for it.
-   * @returns {Promise<{motions: string[], facials: string[], defaultMotion: string|null,
-   *   defaultFacial: string|null, hasPhysics: boolean}>}
+   * Loads a model (`{ asset, motion? }`, each an asset name or directory holding it; files fetched
+   * and cached as the viewer does; an asset another actor uses is not fetched again) and puts it
+   * on stage as actor `id`, placed by `p` (x 0, y 0, scale 1, alpha 1, not mirrored, in front of
+   * the actors before it). A motion set the published version does not have leaves the actor
+   * without motions (`motionSet: null`). It plays its default motion and facial unless `p.motion`
+   * / `p.facial` name others. An actor of that id is replaced (in its place in the draw order)
+   * once the new model is in. Commands for `id` made before this resolves wait for it.
+   * @param {string} id
+   * @param {{asset: string, motion?: string|null}} model
+   * @param {object} [p]
+   * @param {(progress: {loaded: number, total: number}) => void} [onProgress]
+   * @returns {Promise<{model: string, motionSet: string|null, motions: string[], facials: string[],
+   *   defaultMotion: string|null, defaultFacial: string|null, hasPhysics: boolean}>}
    */
   addActor(id, model, p, onProgress) {
     id = String(id);
@@ -261,7 +279,7 @@ export class SekaiLive2DStage extends EventTarget {
     const m = {
       type: "add",
       actor: id,
-      model: { bundle: model.bundle, motion: model.motion ?? null },
+      model: { asset: model.asset, motion: model.motion ?? null },
       placement: placement(p),
       motion: p.motion ?? null,
       facial: p.facial ?? null,

@@ -54,10 +54,11 @@ function resolveLive2DDir(): string {
     const candidates = [
         app.isPackaged ? path.join(process.resourcesPath, "live2d-viewer") : "",
         path.join(distRoot, "live2d-viewer"),
-        path.resolve(appRoot, "../../packages/story-editor/dist/live2d-viewer"),
-        path.resolve(appRoot, "../../packages/story-editor/assets/live2d-viewer"),
+        path.join(appRoot, "vendor", "live2d-viewer"),
     ].filter(Boolean);
-    return candidates.find(dir => fs.existsSync(dir)) ?? path.join(distRoot, "live2d-viewer");
+    return candidates.find(dir => fs.existsSync(path.join(dir, "stage.js")))
+        ?? candidates.find(dir => fs.existsSync(dir))
+        ?? path.join(distRoot, "live2d-viewer");
 }
 
 function resolveUnitIconsDir(): string {

@@ -316,14 +316,24 @@ describe("staged workflow: story_report_stage, story_submit_plan & approvePlan g
 
         const mockFetch = (async (input: string | URL | Request) => {
             const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-            if (url.endsWith("/models.json")) {
+            if (url === "https://storage.pjsk.moe/jp/live2d/model/") {
                 return new Response(
                     JSON.stringify({
-                        format: 2,
-                        models: [
-                            { id: "v2_17kanade_casual", kind: "character", characterId: 17, name: "宵崎奏", episodeCount: 15 },
-                            { id: "v2_18mafuyu_casual", kind: "character", characterId: 18, name: "朝比奈まふゆ", episodeCount: 14 },
-                        ],
+                        format: "directory-listing",
+                        version: 1,
+                        directories: ["v2_17kanade_casual", "v2_18mafuyu_casual"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp/live2d/motion/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        directories: ["v2_17kanade_motion_base", "v2_18mafuyu_motion_base"],
+                        files: [],
                     }),
                     { status: 200 },
                 );

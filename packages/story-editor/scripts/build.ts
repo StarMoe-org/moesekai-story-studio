@@ -75,9 +75,8 @@ for (const file of jsFiles) {
     fs.writeFileSync(file, code, "utf8");
 }
 
-console.log("[story-editor] Copying CSS styles and static Live2D viewer / unit icon assets...");
+console.log("[story-editor] Copying CSS styles and static unit icon assets...");
 fs.cpSync(path.join(srcDir, "styles"), path.join(distDir, "styles"), { recursive: true });
-fs.cpSync(path.join(pkgRoot, "assets/live2d-viewer"), path.join(distDir, "live2d-viewer"), { recursive: true });
 fs.cpSync(path.join(pkgRoot, "assets/unit-icons"), path.join(distDir, "unit-icons"), { recursive: true });
 
-console.log(`[story-editor] Build complete -> dist/ (${jsFiles.length} ESM modules + .d.ts + styles + live2d-viewer + unit-icons)`);
+console.log(`[story-editor] Build complete -> dist/ (${jsFiles.length} ESM modules + .d.ts + styles + unit-icons)`);

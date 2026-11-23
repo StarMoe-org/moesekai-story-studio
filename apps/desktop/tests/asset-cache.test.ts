@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+    ALLOWED_CACHE_HOSTS,
     AssetCacheManager,
     CACHE_PROTOCOL_SCHEME,
+    classifyAsset,
     resolveCacheUpstreamUrl,
 } from "../src/main/asset-cache.ts";
 import { DesktopSettingsStore } from "../src/main/settings.ts";
@@ -34,32 +37,48 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
 
         const cache = new AssetCacheManager({ cacheDir, fetchImpl: mockFetch });
 
+        // Retired assets.pjsk.moe must NOT be allowlisted
+        expect(ALLOWED_CACHE_HOSTS.has("assets.pjsk.moe")).toBe(false);
+        expect(ALLOWED_CACHE_HOSTS.has("storage.pjsk.moe")).toBe(true);
+        expect(ALLOWED_CACHE_HOSTS.has("storage.exmeaning.com")).toBe(true);
+
         // Valid allowlisted hosts resolve cleanly to https://
-        expect(resolveCacheUpstreamUrl("moesekai-cache://assets.pjsk.moe/sekai-extra-assets/a.moc3").href).toBe(
-            "https://assets.pjsk.moe/sekai-extra-assets/a.moc3",
+        expect(
+            resolveCacheUpstreamUrl(
+                "moesekai-cache://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata/moc.moc3",
+            ).href,
+        ).toBe(
+            "https://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata/moc.moc3",
         );
         expect(resolveCacheUpstreamUrl("moesekai-cache://storage.pjsk.moe/jp/live2d/model/").href).toBe(
             "https://storage.pjsk.moe/jp/live2d/model/",
+        );
+        expect(resolveCacheUpstreamUrl("moesekai-cache://storage.exmeaning.com/en/live2d/motion/").href).toBe(
+            "https://storage.exmeaning.com/en/live2d/motion/",
         );
         expect(resolveCacheUpstreamUrl("moesekai-cache://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js").href).toBe(
             "https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js",
         );
 
         const blockedUrls = [
+            "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/a.moc3",
             "moesekai-cache://evil.example/payload.bin",
             "moesekai-cache://127.0.0.1/secret",
             "moesekai-cache://localhost/admin",
             "moesekai-cache://169.254.169.254/latest/meta-data/",
-            "moesekai-cache://user:pass@assets.pjsk.moe/a.moc3",
-            "moesekai-cache://assets.pjsk.moe:8443/a.moc3",
-            "https://assets.pjsk.moe/not-cache-scheme.bin",
+            "moesekai-cache://user:pass@storage.pjsk.moe/jp/live2d/model/",
+            "moesekai-cache://storage.pjsk.moe:8443/jp/live2d/model/",
+            "https://storage.pjsk.moe/not-cache-scheme.bin",
         ];
 
+        // Retired host throws directly in resolveCacheUpstreamUrl as well
+        expect(() => resolveCacheUpstreamUrl("moesekai-cache://assets.pjsk.moe/sekai-extra-assets/a.moc3")).toThrow();
+
         // Direct raw URL traversal checks (WHATWG `new Request()` collapses `..` / `%2e%2e` before reaching handler)
-        expect(() => resolveCacheUpstreamUrl("moesekai-cache://assets.pjsk.moe/foo/../secret.bin")).toThrow();
-        expect(() => resolveCacheUpstreamUrl("moesekai-cache://assets.pjsk.moe/foo/%2e%2e/secret.bin")).toThrow();
+        expect(() => resolveCacheUpstreamUrl("moesekai-cache://storage.pjsk.moe/foo/../secret.bin")).toThrow();
+        expect(() => resolveCacheUpstreamUrl("moesekai-cache://storage.pjsk.moe/foo/%2e%2e/secret.bin")).toThrow();
         const rawTraversalRes = await cache.handleRequest({
-            url: "moesekai-cache://assets.pjsk.moe/foo/%2e%2e/secret.bin",
+            url: "moesekai-cache://storage.pjsk.moe/foo/%2e%2e/secret.bin",
             method: "GET",
             headers: new Headers(),
         } as unknown as Request);
@@ -80,7 +99,9 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
 
         const mockFetch = (async (input: string | URL | Request) => {
             upstreamCalls += 1;
-            expect(String(input)).toBe("https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/test.moc3");
+            expect(String(input)).toBe(
+                "https://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata/moc.moc3",
+            );
             return new Response(payload, {
                 status: 200,
                 headers: {
@@ -91,7 +112,7 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
         }) as unknown as typeof fetch;
 
         const cache1 = new AssetCacheManager({ cacheDir, fetchImpl: mockFetch });
-        const url = `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/test.moc3`;
+        const url = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata/moc.moc3`;
 
         // 1st request -> MISS
         const r1 = await cache1.handleRequest(new Request(url));
@@ -141,7 +162,7 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
         }) as unknown as typeof fetch;
 
         const cache = new AssetCacheManager({ cacheDir, fetchImpl: mockFetch });
-        const url = `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/texture_00.png`;
+        const url = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata/texture/0.png`;
 
         const responses = await Promise.all(
             Array.from({ length: 5 }, () => cache.handleRequest(new Request(url))),
@@ -338,9 +359,9 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
         // Tighten internal budget to 2 KB via type-safe reflection for deterministic unit testing of LRU eviction
         (cache as unknown as { maxMb: number }).maxMb = 2 / 1024; // 2048 bytes
 
-        const u1 = `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/1.png`;
-        const u2 = `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/2.png`;
-        const u3 = `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/3.png`;
+        const u1 = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/texture/1.png`;
+        const u2 = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/texture/2.png`;
+        const u3 = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/texture/3.png`;
 
         // Store 1 then 2 (both fit: 2048 bytes)
         await (await cache.handleRequest(new Request(u1))).arrayBuffer();
@@ -407,11 +428,11 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
 
         // 4 actors x 8 files (mix of shared motion bundles + distinct model textures/moc3) = 32 concurrent calls
         const sharedUrls = [
-            `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/library/live2d/motion/shared_01/motion/nod.sse-motion.json`,
-            `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/library/live2d/motion/shared_01/facial/smile.sse-motion.json`,
+            `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/motion/shared_01/buildmotiondata/motion/nod.json`,
+            `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/motion/shared_01/buildmotiondata/facial/smile.json`,
         ];
         const distinctUrls = Array.from({ length: 16 }, (_, idx) =>
-            `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/library/live2d/model/actor_${idx % 4}/file_${idx}.moc3`,
+            `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/actor_${idx % 4}/buildmodeldata/file_${idx}.moc3`,
         );
 
         const allRequests: Array<{ url: string; range?: string }> = [
@@ -481,7 +502,7 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
         }) as unknown as typeof fetch;
 
         const cache = new AssetCacheManager({ cacheDir, fetchImpl: mockFetch });
-        const url = `${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/library/live2d/model/kanade/model.moc3`;
+        const url = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/17kanade_normal/buildmodeldata/moc.moc3`;
 
         // 1. Probe BEFORE caching -> 204 MISS with ZERO upstream network calls
         const probeMiss = await cache.handleRequest(
@@ -511,6 +532,208 @@ describe("AssetCacheManager persistent disk cache (`moesekai-cache://`)", () => 
         expect(recovered.status).toBe(200);
         expect(await recovered.text()).toBe("live2d-probe-bytes");
         expect(upstreamCalls).toBe(2);
+
+        cache.dispose();
+    });
+
+    it("classifies version-pinned canonical routes as immutable (long TTL) and unpinned directory listings as mutable (short TTL)", async () => {
+        // Direct classification checks across storage.pjsk.moe & storage.exmeaning.com
+        expect(
+            classifyAsset(
+                new URL("https://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata.asset.json"),
+            ),
+        ).toEqual({ category: "live2d", isDynamic: false });
+        expect(
+            classifyAsset(
+                new URL("https://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata/moc.moc3"),
+            ),
+        ).toEqual({ category: "live2d", isDynamic: false });
+        expect(
+            classifyAsset(
+                new URL("https://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata/texture/0.png"),
+            ),
+        ).toEqual({ category: "live2d", isDynamic: false });
+        expect(
+            classifyAsset(
+                new URL("https://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/motion/01ichika_motion_base/buildmotiondata/motion/w-normal-nod01.json"),
+            ),
+        ).toEqual({ category: "live2d", isDynamic: false });
+        expect(
+            classifyAsset(
+                new URL("https://storage.exmeaning.com/en@6.1.50.1-def/live2d/model/01ichika_normal/"),
+            ),
+        ).toEqual({ category: "live2d", isDynamic: false });
+
+        // Unpinned canonical directory listings are mutable (short TTL)
+        expect(classifyAsset(new URL("https://storage.pjsk.moe/jp/"))).toEqual({
+            category: "metadata",
+            isDynamic: true,
+        });
+        expect(classifyAsset(new URL("https://storage.pjsk.moe/jp/live2d/model/"))).toEqual({
+            category: "metadata",
+            isDynamic: true,
+        });
+        expect(classifyAsset(new URL("https://storage.pjsk.moe/jp/live2d/motion/"))).toEqual({
+            category: "metadata",
+            isDynamic: true,
+        });
+        expect(classifyAsset(new URL("https://storage.exmeaning.com/cn/live2d/model/"))).toEqual({
+            category: "metadata",
+            isDynamic: true,
+        });
+
+        // Verify real TTL behavior: pinned .asset.json & clip .json stay HIT past dynamicTtlMs while unpinned listing becomes STALE
+        const cacheDir = makeTempDir();
+        let clock = 1_700_000_000_000;
+        const mockFetch = (async (input: string | URL | Request) => {
+            return new Response(JSON.stringify({ ok: true, url: String(input) }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            });
+        }) as unknown as typeof fetch;
+
+        const cache = new AssetCacheManager({
+            cacheDir,
+            fetchImpl: mockFetch,
+            now: () => clock,
+            dynamicTtlMs: 1_000,
+            immutableTtlMs: 60_000,
+        });
+
+        const unpinnedListingUrl = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp/`;
+        const pinnedAssetDocUrl = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata.asset.json`;
+        const pinnedClipUrl = `${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/motion/01ichika_motion_base/buildmotiondata/motion/w-normal-nod01.json`;
+
+        await (await cache.handleRequest(new Request(unpinnedListingUrl))).text();
+        await (await cache.handleRequest(new Request(pinnedAssetDocUrl))).text();
+        await (await cache.handleRequest(new Request(pinnedClipUrl))).text();
+
+        // Advance past dynamicTtlMs (1s) but well within immutableTtlMs (60s)
+        clock += 5_000;
+
+        const listingAfter = await cache.handleRequest(new Request(unpinnedListingUrl));
+        expect(listingAfter.headers.get("X-MoeSekai-Cache")).toBe("STALE");
+        await listingAfter.text();
+
+        const pinnedAssetAfter = await cache.handleRequest(new Request(pinnedAssetDocUrl));
+        expect(pinnedAssetAfter.headers.get("X-MoeSekai-Cache")).toBe("HIT");
+        await pinnedAssetAfter.text();
+
+        const pinnedClipAfter = await cache.handleRequest(new Request(pinnedClipUrl));
+        expect(pinnedClipAfter.headers.get("X-MoeSekai-Cache")).toBe("HIT");
+        await pinnedClipAfter.text();
+
+        cache.dispose();
+    });
+
+    it("prunes stale persisted assets.pjsk.moe entries and removes orphaned blobs on loadIndex()", async () => {
+        const cacheDir = makeTempDir();
+        const blobsDir = path.join(cacheDir, "blobs");
+
+        const writeBlob = (content: string): { sha256: string; blobPath: string; size: number } => {
+            const buf = Buffer.from(content, "utf8");
+            const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
+            const blobPath = path.join(blobsDir, sha256.slice(0, 2), sha256);
+            fs.mkdirSync(path.dirname(blobPath), { recursive: true });
+            fs.writeFileSync(blobPath, buf);
+            return { sha256, blobPath, size: buf.byteLength };
+        };
+
+        const legacyOnlyBlob = writeBlob("LEGACY_ASSETS_PJSK_MOE_ONLY_BYTES");
+        const sharedBlob = writeBlob("SHARED_CONTENT_ADDRESSED_TEXTURE");
+        const validOnlyBlob = writeBlob("STORAGE_EXMEANING_MOC3_BYTES");
+
+        const legacyOnlyUrl = "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/legacy.moc3";
+        const legacySharedUrl = "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/shared.png";
+        const validSharedUrl = "https://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata/texture/0.png";
+        const validBackupUrl = "https://storage.exmeaning.com/en@6.1.50.1-def/live2d/model/01ichika_normal/buildmodeldata/moc.moc3";
+
+        const now = 1_700_000_000_000;
+        const seededIndex = {
+            version: 1,
+            entries: {
+                [legacyOnlyUrl]: {
+                    url: legacyOnlyUrl,
+                    sha256: legacyOnlyBlob.sha256,
+                    contentType: "application/octet-stream",
+                    etag: null,
+                    size: legacyOnlyBlob.size,
+                    storedAt: now,
+                    lastAccessAt: now,
+                    category: "live2d",
+                },
+                [legacySharedUrl]: {
+                    url: legacySharedUrl,
+                    sha256: sharedBlob.sha256,
+                    contentType: "image/png",
+                    etag: null,
+                    size: sharedBlob.size,
+                    storedAt: now,
+                    lastAccessAt: now,
+                    category: "live2d",
+                },
+                [validSharedUrl]: {
+                    url: validSharedUrl,
+                    sha256: sharedBlob.sha256,
+                    contentType: "image/png",
+                    etag: null,
+                    size: sharedBlob.size,
+                    storedAt: now,
+                    lastAccessAt: now,
+                    category: "live2d",
+                },
+                [validBackupUrl]: {
+                    url: validBackupUrl,
+                    sha256: validOnlyBlob.sha256,
+                    contentType: "application/octet-stream",
+                    etag: null,
+                    size: validOnlyBlob.size,
+                    storedAt: now,
+                    lastAccessAt: now,
+                    category: "live2d",
+                },
+            },
+        };
+        fs.writeFileSync(path.join(cacheDir, "index.json"), JSON.stringify(seededIndex), "utf8");
+
+        const failingFetch = (async () => {
+            throw new Error("Should not hit upstream for surviving cached blobs");
+        }) as unknown as typeof fetch;
+
+        const cache = new AssetCacheManager({
+            cacheDir,
+            fetchImpl: failingFetch,
+            now: () => now + 1000,
+        });
+
+        // Only the 2 allowlisted entries survive
+        const stats = cache.getStats();
+        expect(stats.entries).toBe(2);
+        expect(stats.totalBytes).toBe(sharedBlob.size + validOnlyBlob.size);
+
+        // Orphaned blob from legacy assets.pjsk.moe entry is deleted, while shared & valid blobs stay intact!
+        expect(fs.existsSync(legacyOnlyBlob.blobPath)).toBe(false);
+        expect(fs.existsSync(sharedBlob.blobPath)).toBe(true);
+        expect(fs.existsSync(validOnlyBlob.blobPath)).toBe(true);
+
+        // Persisted index.json on disk is rewritten cleanly with zero assets.pjsk.moe references
+        const persistedRaw = fs.readFileSync(path.join(cacheDir, "index.json"), "utf8");
+        expect(persistedRaw).not.toContain("assets.pjsk.moe");
+        const persisted = JSON.parse(persistedRaw) as { entries: Record<string, unknown> };
+        expect(Object.keys(persisted.entries).sort()).toEqual([validBackupUrl, validSharedUrl].sort());
+
+        // Surviving entries serve HIT from disk; retired host returns 403
+        const hitShared = await cache.handleRequest(
+            new Request(`${CACHE_PROTOCOL_SCHEME}://storage.pjsk.moe/jp@7.1.0.70-abc/live2d/model/01ichika_normal/buildmodeldata/texture/0.png`),
+        );
+        expect(hitShared.status).toBe(200);
+        expect(hitShared.headers.get("X-MoeSekai-Cache")).toBe("HIT");
+        expect(await hitShared.text()).toBe("SHARED_CONTENT_ADDRESSED_TEXTURE");
+
+        const rejectedLegacy = await cache.handleRequest(
+            new Request(`${CACHE_PROTOCOL_SCHEME}://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/legacy.moc3`),
+        );
+        expect(rejectedLegacy.status).toBe(403);
 
         cache.dispose();
     });

@@ -249,40 +249,95 @@ end end_unreachable "Never Reached"
         );
         const mockFetch = (async (input: string | URL | Request, init?: RequestInit) => {
             const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-            if (url.endsWith("/models.json")) {
+            if (url === "https://storage.pjsk.moe/jp/") {
                 return new Response(
                     JSON.stringify({
-                        format: 2,
-                        models: [
-                            { id: "v2_01ichika_casual", motion: "live2d/motion/v2_01ichika_motion_base" },
-                            { id: "v2_02saki_casual", motion: "live2d/motion/v2_02saki_motion_base" },
+                        format: "directory-listing",
+                        version: 1,
+                        view: "canonical",
+                        published_version: "7.1.0-test",
+                        directories: ["live2d"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp/live2d/model/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        directories: ["v2_01ichika_casual", "v2_02saki_casual"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp/live2d/motion/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        directories: ["v2_01ichika_motion_base", "v2_02saki_motion_base"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-test/live2d/motion/v2_01ichika_motion_base.asset.json") {
+                return new Response(
+                    JSON.stringify({
+                        format: "asset",
+                        version: 1,
+                        name: "live2d/motion/v2_01ichika_motion_base",
+                        form: "live2d-motions",
+                        form_version: 2,
+                        members: [
+                            { role: "motion/w-normal01-nod", extension: "json" },
+                            { role: "facial/face_smile_01", extension: "json" },
+                            { role: "facial/face_shy_01", extension: "json" },
                         ],
                     }),
                     { status: 200 },
                 );
             }
-            if (url.includes("v2_01ichika_motion_base/_ripper.json")) {
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-test/live2d/motion/v2_02saki_motion_base/") {
                 return new Response(
                     JSON.stringify({
-                        files: [
-                            { path: "motion/w-normal01-nod.sse-motion.json" },
-                            { path: "facial/face_smile_01.sse-motion.json" },
-                            { path: "facial/face_shy_01.sse-motion.json" },
-                        ],
+                        format: "directory-listing",
+                        version: 1,
+                        directories: ["v2"],
+                        files: [],
                     }),
                     { status: 200 },
                 );
             }
-            if (url.includes("v2_02saki_motion_base/_ripper.json")) {
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-test/live2d/motion/v2_02saki_motion_base/v2/") {
                 return new Response(
                     JSON.stringify({
-                        files: [
-                            { path: "motion/w-normal01-glad.sse-motion.json" },
-                            { path: "motion/w-normal01-pose.sse-motion.json" },
-                            { path: "facial/face_normal_01.sse-motion.json" },
-                            { path: "facial/face_sparkling_01.sse-motion.json" },
-                            { path: "facial/face_trouble_01.sse-motion.json" },
-                            { path: "facial/face_sad_01.sse-motion.json" },
+                        format: "directory-listing",
+                        version: 1,
+                        directories: [],
+                        files: [{ name: "buildmotiondata.asset.json" }],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-test/live2d/motion/v2_02saki_motion_base/v2/buildmotiondata.asset.json") {
+                return new Response(
+                    JSON.stringify({
+                        format: "asset",
+                        version: 1,
+                        name: "live2d/motion/v2_02saki_motion_base/v2/buildmotiondata",
+                        form: "live2d-motions",
+                        form_version: 2,
+                        members: [
+                            { role: "motion/w-normal01-glad", extension: "json" },
+                            { role: "motion/w-normal01-pose", extension: "json" },
+                            { role: "facial/face_normal_01", extension: "json" },
+                            { role: "facial/face_sparkling_01", extension: "json" },
+                            { role: "facial/face_trouble_01", extension: "json" },
+                            { role: "facial/face_sad_01", extension: "json" },
                         ],
                     }),
                     { status: 200 },
@@ -302,12 +357,123 @@ end end_unreachable "Never Reached"
         });
 
         expect(report.ok).toBe(false);
+        expect(report.assets?.live2dSiteUrl).toBe("https://storage.pjsk.moe");
+        expect(report.assets?.live2dModelListingUrl).toBe("https://storage.pjsk.moe/jp/live2d/model/");
+        expect(report.assets?.live2dMotionListingUrl).toBe("https://storage.pjsk.moe/jp/live2d/motion/");
+        expect(report.assets?.live2d[0]?.modelAssetPath).toBe("live2d/model/v2_01ichika_casual");
         expect(report.assetVerification?.ok).toBe(false);
+        expect(report.assetVerification?.live2dSource).toBe("asset-site-listings");
+        expect(report.assetVerification?.live2dPublishedVersion).toBe("7.1.0-test");
         const missingFacial = report.assetVerification?.missing.find(
             (m) => m.category === "live2d-facial" && m.name === "v2_02saki_casual:face_worry_01",
         );
         expect(missingFacial).toBeDefined();
         expect(missingFacial?.suggestions).toContain("face_trouble_01");
+    });
+
+    test("live asset verification supports asset-document-fallback when model listing is unavailable", async () => {
+        const simpleStory = `@story "Fallback Check" region=jp id="fallback_check"
+@cast ichika "Ichika" model="v2_01ichika_casual" char=1
+start -> scene_1
+scene scene_1 "Open" {
+  bg set "bg_a000401"
+  bgm stop
+  place set "Classroom"
+  cast set [
+    ichika at center facial="face_smile_01"
+  ]
+  talk ichika "Hello!" motion="w-normal01-nod" facial="face_smile_01"
+} -> end_1
+end end_1 "Done"
+`;
+        const mockFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+            const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            if (url === "https://storage.pjsk.moe/jp/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        published_version: "7.1.0-fallback",
+                        directories: ["live2d"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-fallback/live2d/model/v2_01ichika_casual/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        directories: [],
+                        files: [
+                            { name: "model3.asset.json" },
+                            { name: "buildmodeldata.asset.json" },
+                        ],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-fallback/live2d/model/v2_01ichika_casual/model3.asset.json") {
+                return new Response(
+                    JSON.stringify({
+                        format: "asset",
+                        version: 1,
+                        name: "live2d/model/v2_01ichika_casual/model3",
+                        form: "text",
+                        members: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-fallback/live2d/model/v2_01ichika_casual/buildmodeldata.asset.json") {
+                return new Response(
+                    JSON.stringify({
+                        format: "asset",
+                        version: 1,
+                        name: "live2d/model/v2_01ichika_casual/buildmodeldata",
+                        form: "live2d-model",
+                        form_version: 2,
+                        members: [{ role: "moc", extension: "moc3" }],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp@7.1.0-fallback/live2d/motion/v2_01ichika_motion_base.asset.json") {
+                return new Response(
+                    JSON.stringify({
+                        format: "asset",
+                        version: 1,
+                        name: "live2d/motion/v2_01ichika_motion_base",
+                        form: "live2d-motions",
+                        form_version: 2,
+                        members: [
+                            { role: "motion/w-normal01-nod", extension: "json" },
+                            { role: "facial/face_smile_01", extension: "json" },
+                        ],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (init?.method === "HEAD") {
+                return new Response(null, { status: 200 });
+            }
+            return new Response("not found", { status: 404 });
+        }) as typeof fetch;
+
+        const report = await validateAndSimulateStory(simpleStory, {
+            strict: true,
+            simulate: true,
+            verifyAssets: true,
+            fetchImpl: mockFetch,
+        });
+
+        expect(report.ok).toBe(true);
+        expect(report.assetVerification?.ok).toBe(true);
+        expect(report.assetVerification?.live2dSource).toBe("asset-document-fallback");
+        expect(report.assetVerification?.live2dPublishedVersion).toBe("7.1.0-fallback");
+        expect(report.assetVerification?.checked.live2dModels).toBe(1);
+        expect(report.assetVerification?.checked.live2dClips).toBe(2);
     });
 
     test("detects choice deadlock when all options have false guards", async () => {

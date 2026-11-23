@@ -933,16 +933,16 @@ test("collectStoryAssets walks v2 SceneNodes (slots, beats, reactions, SE, cross
 
     const manifest = preloaderMod.collectStoryAssets(doc, {
         models: [
-            { id: "v2_01ichika_casual", bundle: "live2d/model/v2_01ichika_casual", motions: ["live2d/motion/v2_01ichika_motion_base"] },
-            { id: "v2_02saki_casual", bundle: "live2d/model/v2_02saki_casual", motions: ["live2d/motion/v2_02saki_motion_base"] },
+            { id: "v2_01ichika_casual", asset: "live2d/model/v2_01ichika_casual", motion: "live2d/motion/v2_01ichika_motion_base", motions: ["live2d/motion/v2_01ichika_motion_base"] },
+            { id: "v2_02saki_casual", asset: "live2d/model/v2_02saki_casual", motion: "live2d/motion/v2_02saki_motion_base", motions: ["live2d/motion/v2_02saki_motion_base"] },
         ],
     });
 
     assert.equal(manifest.live2d.length, 2);
     assert.deepEqual(manifest.live2d[0], {
         modelId: "v2_01ichika_casual",
-        bundle: "live2d/model/v2_01ichika_casual",
-        motionBundle: "live2d/motion/v2_01ichika_motion_base",
+        asset: "live2d/model/v2_01ichika_casual",
+        motionAsset: "live2d/motion/v2_01ichika_motion_base",
         motions: ["m_slot", "m_talk"],
         facials: ["f_action", "f_slot"],
     });
@@ -954,17 +954,22 @@ test("collectStoryAssets walks v2 SceneNodes (slots, beats, reactions, SE, cross
     assert.equal(manifest.voices.length, 2);
     assert.deepEqual(manifest.counts, { live2d: 2, background: 1, audio: 5, uikit: 1, total: 9 });
 
-    // Cache API key verification matching stage-worker.js
+    // Cache API key verification matching SekaiLive2DViewer / SekaiLive2DStage 0.2.x (`sekai-live2d-v2`)
+    const siteMod = await import("../src/live2d/site.ts");
+    siteMod.clearLive2DSiteCache();
+    const VERSION = "7.1.0-preload-test";
+    const modelDocName = "live2d/model/v2_01ichika_casual/live2d/model/v2/main/01_ichika/v2_01ichika_casual/buildmodeldata";
+    const motionDocName = "live2d/motion/v2_01ichika_motion_base/live2d/motion/v2/main/01_ichika/v2_01ichika_motion_base/buildmotiondata";
     const stored = new Map();
-    const cachedUrl = "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library/live2d/model/v2_01ichika_casual/model.moc3?crc=777";
+    const cachedUrl = `https://storage.pjsk.moe/jp@${VERSION}/${modelDocName}/moc.moc3`;
     stored.set(cachedUrl, new Response(new Uint8Array([9, 9])));
     const prevCaches = globalThis.caches;
     const prevFetch = globalThis.fetch;
     const fetchedUrls = [];
     globalThis.caches = {
-        async has(name) { return name === "sekai-live2d-v1"; },
+        async has(name) { return name === "sekai-live2d-v2"; },
         async open(name) {
-            assert.equal(name, "sekai-live2d-v1");
+            assert.equal(name, "sekai-live2d-v2");
             return {
                 async match(key) { return stored.get(String(key)); },
                 async put(key, resp) { stored.set(String(key), resp); },
@@ -975,11 +980,78 @@ test("collectStoryAssets walks v2 SceneNodes (slots, beats, reactions, SE, cross
     globalThis.fetch = async (url) => {
         const s = String(url);
         fetchedUrls.push(s);
-        if (s.endsWith("/live2d/model/v2_01ichika_casual/_ripper.json")) {
-            return { ok: true, status: 200, json: async () => ({ crc: 777, files: [{ path: "model.moc3", kind: "model" }, { path: "tex.png", kind: "texture" }] }) };
+        if (s === "https://storage.pjsk.moe/jp/") {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "directory-listing",
+                    version: 1,
+                    published_version: VERSION,
+                    directories: ["live2d"],
+                    files: [],
+                }),
+            };
         }
-        if (s.endsWith("/live2d/motion/v2_01ichika_motion_base/_ripper.json")) {
-            return { ok: true, status: 200, json: async () => ({ crc: 888, files: [{ path: "motion/m1.sse-motion.json", kind: "motion" }, { path: "facial/face_ worry_01.sse-motion.json", kind: "motion" }] }) };
+        if (s === `https://storage.pjsk.moe/jp@${VERSION}/live2d/model/v2_01ichika_casual/`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "directory-listing",
+                    version: 1,
+                    directories: ["live2d"],
+                    files: [],
+                }),
+            };
+        }
+        if (s === `https://storage.pjsk.moe/jp@${VERSION}/live2d/model/v2_01ichika_casual/live2d/`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "directory-listing",
+                    version: 1,
+                    directories: [],
+                    files: [
+                        { name: "01ichika.moc3.asset.json", extension: "json" },
+                        { name: "buildmodeldata.asset.json", extension: "json" },
+                    ],
+                }),
+            };
+        }
+        if (s === `https://storage.pjsk.moe/jp@${VERSION}/live2d/model/v2_01ichika_casual/live2d/buildmodeldata.asset.json`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "asset",
+                    version: 1,
+                    name: modelDocName,
+                    form: "live2d-model",
+                    members: [
+                        { role: "moc", extension: "moc3" },
+                        { role: "texture/0", extension: "png" },
+                        { role: "motion/model_owned_skip", extension: "json" },
+                    ],
+                }),
+            };
+        }
+        if (s === `https://storage.pjsk.moe/jp@${VERSION}/live2d/motion/v2_01ichika_motion_base.asset.json`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "asset",
+                    version: 1,
+                    name: motionDocName,
+                    form: "live2d-motions",
+                    members: [
+                        { role: "motion/m1", extension: "json" },
+                        { role: "motion/unused_motion_skip", extension: "json" },
+                        { role: "facial/face_ worry_01", extension: "json" },
+                        { role: "facial/unused_facial_skip", extension: "json" },
+                    ],
+                }),
+            };
+        }
+        if (s.endsWith(".asset.json")) {
+            return { ok: false, status: 404, json: async () => ({}) };
         }
         return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2]).buffer };
     };
@@ -993,22 +1065,30 @@ test("collectStoryAssets walks v2 SceneNodes (slots, beats, reactions, SE, cross
 
         const final = await preloaderMod.preloadStoryAssets(smallDoc, {
             includeUiKit: false,
-            models: [{ id: "v2_01ichika_casual", bundle: "live2d/model/v2_01ichika_casual", motions: ["live2d/motion/v2_01ichika_motion_base"] }],
+            models: [{ id: "v2_01ichika_casual", asset: "live2d/model/v2_01ichika_casual", motion: "live2d/motion/v2_01ichika_motion_base", motions: ["live2d/motion/v2_01ichika_motion_base"] }],
         });
         assert.equal(final.done, true);
         assert.equal(final.failed, 0);
+        // moc (cached) + texture/0 + motion/m1 + facial/face_ worry_01 = 4 (skips model-owned motion & unused clips)
         assert.equal(final.byCategory.live2d.total, 4);
         assert.equal(final.byCategory.live2d.cached, 1);
-        assert.equal(fetchedUrls.some(u => u.endsWith("model.moc3")), false);
-        assert.ok(stored.has("https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/library/live2d/motion/v2_01ichika_motion_base/facial/face_%20worry_01.sse-motion.json?crc=888"));
+        assert.equal(fetchedUrls.some(u => u.endsWith("/moc.moc3")), false);
+        assert.equal(fetchedUrls.some(u => u.includes("model_owned_skip")), false);
+        assert.equal(fetchedUrls.some(u => u.includes("unused_motion_skip")), false);
+        assert.equal(fetchedUrls.some(u => u.includes("unused_facial_skip")), false);
+        // Exact version-pinned URLs stored in `sekai-live2d-v2` (including .asset.json docs and encoded space clip!)
+        assert.ok(stored.has(`https://storage.pjsk.moe/jp@${VERSION}/live2d/model/v2_01ichika_casual/live2d/buildmodeldata.asset.json`));
+        assert.ok(stored.has(`https://storage.pjsk.moe/jp@${VERSION}/live2d/motion/v2_01ichika_motion_base.asset.json`));
+        assert.ok(stored.has(`https://storage.pjsk.moe/jp@${VERSION}/${motionDocName}/facial/face_%20worry_01.json`));
 
         const status = await preloaderMod.inspectStoryCacheStatus(smallDoc, {
             includeUiKit: false,
-            models: [{ id: "v2_01ichika_casual", bundle: "live2d/model/v2_01ichika_casual", motions: ["live2d/motion/v2_01ichika_motion_base"] }],
+            models: [{ id: "v2_01ichika_casual", asset: "live2d/model/v2_01ichika_casual", motion: "live2d/motion/v2_01ichika_motion_base", motions: ["live2d/motion/v2_01ichika_motion_base"] }],
         });
         assert.equal(status.live2dCachedModels, 1);
         assert.equal(status.hasLocalCache, true);
     } finally {
+        siteMod.clearLive2DSiteCache();
         globalThis.caches = prevCaches;
         globalThis.fetch = prevFetch;
     }
@@ -1731,12 +1811,17 @@ test("isStoryCgBackground classifies CG vs scene backgrounds and fetchStoryBackg
     }
 });
 
-test("live2dListingUrl, live2dMotionSet, inferLive2DMotionBundleCandidates, and live2dModelsFromListings work deterministically", async () => {
+test("live2dSources, live2dListingUrl, live2dSiteListingUrl, live2dMemberUrl, live2dMotionSet, and live2dModelsFromListings work deterministically", async () => {
     const configMod = await import("../src/live2d/config.ts");
     const modelsMod = await import("../src/live2d/models.ts");
+    const siteMod = await import("../src/live2d/site.ts");
 
     resetStoryCoreConfig();
     try {
+        assert.deepEqual(configMod.live2dSources("jp"), {
+            site: "https://storage.pjsk.moe",
+            region: "jp",
+        });
         assert.equal(
             configMod.live2dListingUrl("jp", "live2d/model/"),
             "https://storage.pjsk.moe/jp/live2d/model/",
@@ -1745,17 +1830,49 @@ test("live2dListingUrl, live2dMotionSet, inferLive2DMotionBundleCandidates, and 
             configMod.live2dListingUrl("en", "/live2d/motion/", "backup"),
             "https://storage.exmeaning.com/en/live2d/motion/",
         );
-        assert.equal(configMod.hasExplicitLive2DIndexBase(), false);
+        assert.equal(configMod.hasExplicitLive2DSite(), false);
+
+        // Versioned & unversioned listing + member URL builders
+        assert.equal(
+            siteMod.live2dVersionedBaseUrl("https://storage.pjsk.moe/", "jp", "7.1.0+rev 1"),
+            "https://storage.pjsk.moe/jp@7.1.0%2Brev%201",
+        );
+        assert.equal(
+            siteMod.live2dSiteListingUrl({ site: "https://storage.pjsk.moe", region: "jp", version: "7.1.0" }, "live2d/model"),
+            "https://storage.pjsk.moe/jp@7.1.0/live2d/model/",
+        );
+        assert.equal(
+            siteMod.live2dMemberUrl(
+                "https://storage.pjsk.moe/jp@7.1.0",
+                "live2d/motion/01ichika_motion_base/buildmotiondata",
+                { role: "facial/face_ worry_01", extension: "json" },
+            ),
+            "https://storage.pjsk.moe/jp@7.1.0/live2d/motion/01ichika_motion_base/buildmotiondata/facial/face_%20worry_01.json",
+        );
 
         configureStoryCore({
             live2dAssetProxy: "http://127.0.0.1:8788/relay/",
-            live2dIndexBase: "https://custom.example/live2d/",
+            live2dSite: "https://custom.example/assets/",
+        });
+        assert.equal(configMod.hasExplicitLive2DSite(), true);
+        assert.deepEqual(configMod.live2dSources("jp"), {
+            site: "https://custom.example/assets",
+            region: "jp",
+            proxy: "http://127.0.0.1:8788/relay/",
         });
         assert.equal(
             configMod.live2dListingUrl("jp", "live2d/model/"),
-            "http://127.0.0.1:8788/relay/storage.pjsk.moe/jp/live2d/model/",
+            "http://127.0.0.1:8788/relay/custom.example/assets/jp/live2d/model/",
         );
-        assert.equal(configMod.hasExplicitLive2DIndexBase(), true);
+        assert.equal(
+            siteMod.live2dMemberUrl(
+                "https://custom.example/assets/jp@7.1.0",
+                "live2d/model/01ichika/buildmodeldata",
+                { role: "moc", extension: "moc3" },
+                "http://127.0.0.1:8788/relay/",
+            ),
+            "http://127.0.0.1:8788/relay/custom.example/assets/jp@7.1.0/live2d/model/01ichika/buildmodeldata/moc.moc3",
+        );
     } finally {
         resetStoryCoreConfig();
     }
@@ -1801,13 +1918,14 @@ test("live2dListingUrl, live2dMotionSet, inferLive2DMotionBundleCandidates, and 
         [...motionSet],
     );
     assert.deepEqual(listed.map(m => m.id), ["v2_17kanade_casual", "v2_21miku_night", "sub_arisa", "sub_arisa02"]);
+    assert.equal(listed[0].asset, "live2d/model/v2_17kanade_casual");
+    assert.equal(listed[0].motion, "live2d/motion/v2_17kanade_motion_base");
     assert.deepEqual(listed[0].motions, ["live2d/motion/v2_17kanade_motion_base"]);
-    assert.equal(listed[0].bundle, "live2d/model/v2_17kanade_casual");
     assert.equal(listed[2].ownerKey, "arisa");
     assert.equal(listed[3].ownerKey, "arisa");
 });
 
-test("fetchLive2DModels loads directory listings with backup & models.json fallbacks, caches per region, and returns [] on 404", async () => {
+test("fetchLive2DModels loads canonical directory listings with backup-line fallback, caches per region, and returns [] on 404", async () => {
     clearLive2DClientCaches();
     resetStoryCoreConfig();
     const clientMod = await import("../src/live2d/client.ts");
@@ -1861,23 +1979,24 @@ test("fetchLive2DModels loads directory listings with backup & models.json fallb
                 }),
             };
         }
-        // tw: storage listings 404 -> falls back to models.json
-        if (s.endsWith("/tw/models.json")) {
+        // Explicit live2dSite override for kr
+        if (s === "https://custom.example/site/kr/live2d/model/") {
             return {
                 ok: true, status: 200,
                 json: async () => ({
-                    format: 2,
-                    models: [{ id: "v2_02saki_casual", bundle: "live2d/model/v2_02saki_casual", motion: "live2d/motion/v2_02saki_motion_base" }],
+                    format: "directory-listing",
+                    version: 1,
+                    directories: ["v2_03honami_casual"],
                 }),
             };
         }
-        // Explicit custom index test
-        if (s === "https://custom.example/live2d/kr/models.json") {
+        if (s === "https://custom.example/site/kr/live2d/motion/") {
             return {
                 ok: true, status: 200,
                 json: async () => ({
-                    format: 2,
-                    models: [{ id: "v2_03honami_casual", bundle: "live2d/model/v2_03honami_casual", motion: "live2d/motion/v2_03honami_motion_base" }],
+                    format: "directory-listing",
+                    version: 1,
+                    directories: ["v2_03honami_motion_base"],
                 }),
             };
         }
@@ -1887,26 +2006,28 @@ test("fetchLive2DModels loads directory listings with backup & models.json fallb
         const jpFirst = await clientMod.fetchLive2DModels("jp");
         const jpSecond = await clientMod.fetchLive2DModels("jp");
         assert.deepEqual(jpFirst.map(m => m.id), ["v2_17kanade_casual", "v2_18mafuyu_casual"]);
+        assert.equal(jpFirst[0].asset, "live2d/model/v2_17kanade_casual");
+        assert.equal(jpFirst[0].motion, "live2d/motion/v2_17kanade_motion_base");
         assert.deepEqual(jpFirst[0].motions, ["live2d/motion/v2_17kanade_motion_base"]);
         assert.equal(jpSecond, jpFirst);
-        // Primary jp fetched only model/ + motion/ once (never touched 404 models.json)
         assert.equal(requestedUrls.filter(u => u.includes("/jp/")).length, 2);
 
         const cnModels = await clientMod.fetchLive2DModels("cn");
         assert.deepEqual(cnModels.map(m => m.id), ["v2_01ichika_casual"]);
-        assert.deepEqual(cnModels[0].motions, ["live2d/motion/v2_01ichika_motion_base"]);
+        assert.equal(cnModels[0].motion, "live2d/motion/v2_01ichika_motion_base");
 
-        const twModels = await clientMod.fetchLive2DModels("tw");
-        assert.deepEqual(twModels.map(m => m.id), ["v2_02saki_casual"]);
-
+        // 404 on both primary and backup returns [] cleanly (never touches legacy endpoints)
         assert.deepEqual(await clientMod.fetchLive2DModels("en"), []);
 
-        configureStoryCore({ live2dIndexBase: "https://custom.example/live2d/" });
+        configureStoryCore({ live2dSite: "https://custom.example/site/" });
         const krModels = await clientMod.fetchLive2DModels("kr");
         assert.deepEqual(krModels.map(m => m.id), ["v2_03honami_casual"]);
         assert.deepEqual(
-            requestedUrls.filter(u => u.includes("/kr/")),
-            ["https://custom.example/live2d/kr/models.json"],
+            requestedUrls.filter(u => u.includes("/kr/")).sort(),
+            [
+                "https://custom.example/site/kr/live2d/model/",
+                "https://custom.example/site/kr/live2d/motion/",
+            ],
         );
     } finally {
         globalThis.fetch = prevFetch;
@@ -1915,47 +2036,209 @@ test("fetchLive2DModels loads directory listings with backup & models.json fallb
     }
 });
 
-test("fetchLive2DModelClips probes explicit motionBundle then deterministic candidates", async () => {
+test("resolveLive2DAssetDocument discovers nested build*data .asset.json, filters form, caches, and extracts motion/facial clips", async () => {
+    const siteMod = await import("../src/live2d/site.ts");
     const assetsMod = await import("../src/story/assets.ts");
+    siteMod.clearLive2DSiteCache();
+    resetStoryCoreConfig();
+
     const prevFetch = globalThis.fetch;
     const fetched = [];
+    const VERSION = "7.1.0-abc123";
+    const modelBase = `https://storage.pjsk.moe/jp@${VERSION}`;
+
     globalThis.fetch = async (url) => {
         const s = String(url);
         fetched.push(s);
-        if (s.endsWith("/live2d/motion/v2_17kanade_motion_base/_ripper.json")) {
+        // Primary cn fails -> tests backup-line fallback on version resolution!
+        if (s === "https://storage.pjsk.moe/cn/") {
+            return { ok: false, status: 503, json: async () => ({}) };
+        }
+        if (s === "https://storage.exmeaning.com/cn/") {
             return {
                 ok: true, status: 200,
                 json: async () => ({
+                    format: "directory-listing",
+                    version: 1,
+                    published_version: "6.4.0-cn-fallback",
+                    directories: ["live2d"],
+                    files: [],
+                }),
+            };
+        }
+        if (s === "https://storage.pjsk.moe/jp/") {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "directory-listing",
+                    version: 1,
+                    published_version: VERSION,
+                    directories: ["live2d"],
+                    files: [],
+                }),
+            };
+        }
+        // Deep nested model path: live2d/model/01ichika_normal -> live2d -> model -> v1 -> buildmodeldata.asset.json
+        if (s === `${modelBase}/live2d/model/01ichika_normal/`) {
+            return { ok: true, status: 200, json: async () => ({ format: "directory-listing", version: 1, directories: ["live2d"], files: [] }) };
+        }
+        if (s === `${modelBase}/live2d/model/01ichika_normal/live2d/`) {
+            return { ok: true, status: 200, json: async () => ({ format: "directory-listing", version: 1, directories: ["v1"], files: [] }) };
+        }
+        if (s === `${modelBase}/live2d/model/01ichika_normal/live2d/v1/`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "directory-listing",
+                    version: 1,
+                    directories: ["buildmodeldata"],
                     files: [
-                        { path: "motion/w-normal01-tilthead.sse-motion.json" },
-                        { path: "facial/face_normal_01.sse-motion.json" },
-                        { path: "facial/face_smile_01.sse-motion.json" },
+                        { name: "01ichika_normal.moc3.asset.json", extension: "json" },
+                        { name: "01ichika_normal.model3.asset.json", extension: "json" },
+                        { name: "buildmodeldata.asset.json", extension: "json" },
+                    ],
+                }),
+            };
+        }
+        if (s === `${modelBase}/live2d/model/01ichika_normal/live2d/v1/01ichika_normal.moc3.asset.json`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "asset",
+                    version: 1,
+                    name: "live2d/model/01ichika_normal/live2d/v1/01ichika_normal.moc3",
+                    form: "text",
+                    members: [{ role: "bytes", extension: "bytes" }],
+                }),
+            };
+        }
+        if (s === `${modelBase}/live2d/model/01ichika_normal/live2d/v1/buildmodeldata.asset.json`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "asset",
+                    version: 1,
+                    name: "live2d/model/01ichika_normal/live2d/v1/buildmodeldata",
+                    form: "live2d-model",
+                    members: [
+                        { role: "moc", extension: "moc3" },
+                        { role: "physics", extension: "json" },
+                        { role: "texture/0", extension: "png" },
+                    ],
+                }),
+            };
+        }
+        // Only a form:"text" sibling exists in `text_only_model` -> must return null for `live2d-model`!
+        if (s === `${modelBase}/live2d/model/text_only_model/`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "directory-listing",
+                    version: 1,
+                    directories: [],
+                    files: [{ name: "readme.asset.json", extension: "json" }],
+                }),
+            };
+        }
+        if (s === `${modelBase}/live2d/model/text_only_model/readme.asset.json`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "asset",
+                    version: 1,
+                    name: "live2d/model/text_only_model/readme",
+                    form: "text",
+                    members: [{ role: "text", extension: "txt" }],
+                }),
+            };
+        }
+        // Nested motion asset for Kanade
+        if (s === `${modelBase}/live2d/motion/v2_17kanade_motion_base/`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "directory-listing",
+                    version: 1,
+                    directories: [],
+                    files: [
+                        { name: "other.asset.json", extension: "json" },
+                        { name: "buildmotiondata.asset.json", extension: "json" },
+                    ],
+                }),
+            };
+        }
+        if (s === `${modelBase}/live2d/motion/v2_17kanade_motion_base/buildmotiondata.asset.json`) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    format: "asset",
+                    version: 1,
+                    name: "live2d/motion/v2_17kanade_motion_base/buildmotiondata",
+                    form: "live2d-motions",
+                    members: [
+                        { role: "motion/w-normal01-tilthead", extension: "json" },
+                        { role: "facial/face_smile_01", extension: "json" },
+                        { role: "facial/face_normal_01", extension: "json" },
+                        { role: "facial/face_ worry_01", extension: "json" },
                     ],
                 }),
             };
         }
         return { ok: false, status: 404, json: async () => ({}) };
     };
+
     try {
-        const resolved = await assetsMod.fetchLive2DModelClips(
-            "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/",
-            "v2_17kanade_casual",
-            null,
-        );
+        const jpSources = { site: "https://storage.pjsk.moe", region: "jp" };
+
+        // 1. Concurrent published_version resolution deduplicates to 1 network request
+        const [v1, v2] = await Promise.all([
+            siteMod.resolveLive2DPublishedVersion(jpSources),
+            siteMod.resolveLive2DPublishedVersion(jpSources),
+        ]);
+        assert.equal(v1, VERSION);
+        assert.equal(v2, VERSION);
+        assert.equal(fetched.filter(u => u === "https://storage.pjsk.moe/jp/").length, 1);
+
+        // 2. Backup-line fallback when resolving site base for default asset domain
+        const cnBase = await siteMod.resolveLive2DSiteBase({ site: "https://storage.pjsk.moe", region: "cn" });
+        assert.equal(cnBase, "https://storage.exmeaning.com/cn@6.4.0-cn-fallback");
+
+        // 3. Nested model resolution prioritizes `buildmodeldata.asset.json` before `*.moc3.asset.json`
+        const modelRes = await siteMod.resolveLive2DAssetDocument(jpSources, "live2d/model/01ichika_normal", "live2d-model");
+        assert.ok(modelRes);
+        assert.equal(modelRes.doc.form, "live2d-model");
+        assert.equal(modelRes.doc.name, "live2d/model/01ichika_normal/live2d/v1/buildmodeldata");
+        assert.equal(modelRes.url, `${modelBase}/live2d/model/01ichika_normal/live2d/v1/buildmodeldata.asset.json`);
+        // Because `buildmodeldata` was sorted first, `01ichika_normal.moc3.asset.json` was NEVER fetched!
+        assert.equal(fetched.some(u => u.endsWith("01ichika_normal.moc3.asset.json")), false);
+
+        // 4. Caching returns the same resolved document without extra fetches
+        const fetchCountBefore = fetched.length;
+        const modelRes2 = await siteMod.resolveLive2DAssetDocument(jpSources, "live2d/model/01ichika_normal", "live2d-model");
+        assert.equal(modelRes2, modelRes);
+        assert.equal(fetched.length, fetchCountBefore);
+
+        // 5. Non-matching form (`form: "text"`) is ignored -> returns null
+        const textOnly = await siteMod.resolveLive2DAssetDocument(jpSources, "live2d/model/text_only_model", "live2d-model");
+        assert.equal(textOnly, null);
+
+        // 6. Clip extraction & fetchLive2DModelClips fallback across motion candidates
+        const resolved = await assetsMod.fetchLive2DModelClips(jpSources, "v2_17kanade_casual", null);
         assert.equal(resolved.motionBundle, "live2d/motion/v2_17kanade_motion_base");
         assert.deepEqual(resolved.motions, ["w-normal01-tilthead"]);
-        assert.deepEqual(resolved.facials, ["face_normal_01", "face_smile_01"]);
+        assert.deepEqual(resolved.facials, ["face_ worry_01", "face_normal_01", "face_smile_01"]);
 
-        // Falls back to inferred candidate if an explicit motionBundle returns 404
         const fallback = await assetsMod.fetchLive2DModelClips(
-            "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/jp/",
+            jpSources,
             "v2_17kanade_casual",
             "live2d/motion/nonexistent_motion_base",
         );
         assert.equal(fallback.motionBundle, "live2d/motion/v2_17kanade_motion_base");
-        assert.ok(fetched.some(u => u.endsWith("/nonexistent_motion_base/_ripper.json")));
+        assert.ok(fetched.some(u => u.endsWith("/nonexistent_motion_base.asset.json")));
     } finally {
+        siteMod.clearLive2DSiteCache();
         globalThis.fetch = prevFetch;
+        resetStoryCoreConfig();
     }
 });
 
@@ -2530,7 +2813,7 @@ test("moesekai-story-script official-story.mjs pure parsers and scenario extract
     assert.equal(kit.characterClips.length, 2);
 });
 
-test("moesekai-story-script official-story.mjs supports models.json format 2, 404 fallback, sub/collab search, and story WindowDisplayName in study", async () => {
+test("moesekai-story-script official-story.mjs supports catalog format 2, 404 fallback, sub/collab search, and story WindowDisplayName in study", async () => {
     const { resolve } = await import("node:path");
     const { pathToFileURL } = await import("node:url");
     const officialUrl = pathToFileURL(
@@ -2548,7 +2831,7 @@ test("moesekai-story-script official-story.mjs supports models.json format 2, 40
     assert.equal(mod.inferMotionBundleCandidates("sub_anfatheryoung")[0], "live2d/motion/sub_anfatheryoung_motion_base");
     assert.equal(mod.inferMotionBundleCandidates("sub_arisa02_lesson")[0], "live2d/motion/sub_arisa02_motion_base");
 
-    // 2. models.json format 2 parsing & search across CN/JP/EN/aliases/ownerKey
+    // 2. catalog format 2 parsing & search across CN/JP/EN/aliases/ownerKey
     const v2Catalog = mod.normalizeCatalogModels({
         format: 2,
         models: [

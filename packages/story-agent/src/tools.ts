@@ -13,6 +13,7 @@ import {
     mineOfficialStory,
     type OfficialStoryMineRequest,
 } from "./official-story";
+import { tagWrappedFetch } from "./live2d-core";
 import type {
     StoryAuthoringMode,
     StoryEditorAction,
@@ -99,7 +100,7 @@ function wrapFetchWithAbortSignal(
 ): typeof fetch | undefined {
     if (!toolSignal) return baseFetch;
     const underlying = baseFetch ?? globalThis.fetch;
-    return ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const wrapped = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
         if (toolSignal.aborted) {
             const err = new Error("Aborted");
             err.name = "AbortError";
@@ -110,6 +111,7 @@ function wrapFetchWithAbortSignal(
             : toolSignal;
         return underlying(input, { ...(init ?? {}), signal: combinedSignal });
     }) as typeof fetch;
+    return tagWrappedFetch(wrapped, underlying);
 }
 
 export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefinition<any, any, any>[] {

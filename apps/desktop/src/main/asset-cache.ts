@@ -11,7 +11,6 @@ export const CACHE_PROTOCOL_SCHEME = "moesekai-cache";
  * ONLY these public read-only PJSK / MoeSekai / Live2D CDN hosts may be proxied and cached.
  */
 export const ALLOWED_CACHE_HOSTS: ReadonlySet<string> = new Set([
-    "assets.pjsk.moe",
     "storage.pjsk.moe",
     "metadata.pjsk.moe",
     "storage.exmeaning.com",
@@ -20,6 +19,13 @@ export const ALLOWED_CACHE_HOSTS: ReadonlySet<string> = new Set([
     "moe.exmeaning.com",
     "cubism.live2d.com",
 ]);
+
+const ASSET_SITE_HOSTS: ReadonlySet<string> = new Set([
+    "storage.pjsk.moe",
+    "storage.exmeaning.com",
+]);
+
+const VERSION_PINNED_CANONICAL_PATH_RE = /^\/(?:jp|en|tw|kr|cn)@[^/]+\//i;
 
 export type AssetCacheCategory = "live2d" | "audio" | "image" | "metadata" | "ui" | "other";
 
@@ -77,33 +83,65 @@ function sha256Hex(data: Uint8Array): string {
     return crypto.createHash("sha256").update(data).digest("hex");
 }
 
-function classifyAsset(upstreamUrl: URL): { category: AssetCacheCategory; isDynamic: boolean } {
+export function classifyAsset(upstreamUrl: URL): { category: AssetCacheCategory; isDynamic: boolean } {
     const host = upstreamUrl.hostname.toLowerCase();
     const pathname = upstreamUrl.pathname.toLowerCase();
+    const isAssetSiteHost = ASSET_SITE_HOSTS.has(host);
+    const isVersionPinnedAssetSite = isAssetSiteHost && VERSION_PINNED_CANONICAL_PATH_RE.test(pathname);
 
+    // Version-pinned canonical asset-site routes (`/<region>@<version>/...`) are immutable snapshots:
+    // `.asset.json`, `.moc3`, `.png`, physics/motion/facial `.json` clips, and pinned dir listings.
+    if (isVersionPinnedAssetSite) {
+        if (
+            pathname.includes("/live2d/") ||
+            pathname.endsWith(".moc3") ||
+            pathname.endsWith(".motion3.json") ||
+            pathname.endsWith(".physics3.json") ||
+            pathname.endsWith(".model3.json") ||
+            pathname.endsWith(".cdi3.json")
+        ) {
+            return { category: "live2d", isDynamic: false };
+        }
+        if (/\.(mp3|ogg|wav|m4a|aac|flac)$/.test(pathname)) {
+            return { category: "audio", isDynamic: false };
+        }
+        if (/\.(png|webp|jpg|jpeg|svg|gif)$/.test(pathname)) {
+            return { category: "image", isDynamic: false };
+        }
+        if (/\.(ttf|otf|woff|woff2|wasm|js|mjs|css)$/.test(pathname) || pathname.includes("/client/")) {
+            return { category: "ui", isDynamic: false };
+        }
+        if (pathname.endsWith("/") || pathname.endsWith(".asset.json") || pathname.endsWith(".json")) {
+            return { category: "metadata", isDynamic: false };
+        }
+        return { category: "other", isDynamic: false };
+    }
+
+    // Unpinned canonical directory listings (`/<region>/`, `/<region>/live2d/model/`,
+    // `/<region>/live2d/motion/`, trailing `/`), masterdata, translations, and soundtrack indexes.
     if (
         host === "metadata.pjsk.moe" ||
         host === "metadata.exmeaning.com" ||
         host === "translation.exmeaning.com" ||
         pathname.endsWith("/") ||
-        pathname.endsWith("/models.json") ||
-        pathname.endsWith("/soundtrack.json") ||
-        pathname.endsWith("/ripper.lock.json")
+        pathname.endsWith("/soundtrack.json")
     ) {
         return { category: "metadata", isDynamic: true };
+    }
+
+    // Unpinned JSON / `.asset.json` under canonical asset sites follows the moving publication.
+    if (isAssetSiteHost && pathname.endsWith(".json")) {
+        return { category: pathname.includes("/live2d/") ? "live2d" : "metadata", isDynamic: true };
     }
 
     if (
         host === "cubism.live2d.com" ||
         pathname.includes("/live2d/") ||
-        pathname.includes("/sekai-story/ripper/") ||
-        pathname.includes("/sekai-live2d/") ||
         pathname.endsWith(".moc3") ||
         pathname.endsWith(".motion3.json") ||
         pathname.endsWith(".physics3.json") ||
         pathname.endsWith(".model3.json") ||
-        pathname.endsWith(".cdi3.json") ||
-        pathname.endsWith("_ripper.json")
+        pathname.endsWith(".cdi3.json")
     ) {
         return { category: "live2d", isDynamic: false };
     }
@@ -125,6 +163,16 @@ function classifyAsset(upstreamUrl: URL): { category: AssetCacheCategory; isDyna
     }
 
     return { category: "other", isDynamic: false };
+}
+
+function isAllowedPersistedEntryUrl(rawUrl: string): boolean {
+    try {
+        const parsed = new URL(rawUrl);
+        if (parsed.protocol !== "https:") return false;
+        return ALLOWED_CACHE_HOSTS.has(parsed.hostname.toLowerCase());
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -327,19 +375,33 @@ export class AssetCacheManager {
         this.totalBytes = 0;
         if (!fs.existsSync(this.indexPath)) return;
 
+        const prunedBlobHashes = new Set<string>();
+
         try {
             const raw = JSON.parse(fs.readFileSync(this.indexPath, "utf8")) as Partial<AssetCacheIndexFile>;
             if (raw && raw.entries && typeof raw.entries === "object") {
                 for (const [key, entry] of Object.entries(raw.entries)) {
+                    const hasValidHash = Boolean(
+                        entry && typeof entry.sha256 === "string" && /^[a-f0-9]{64}$/.test(entry.sha256),
+                    );
                     if (
                         !entry ||
                         typeof entry.url !== "string" ||
-                        typeof entry.sha256 !== "string" ||
-                        !/^[a-f0-9]{64}$/.test(entry.sha256) ||
+                        !hasValidHash ||
                         typeof entry.size !== "number" ||
                         !Number.isFinite(entry.size) ||
                         entry.size < 0
                     ) {
+                        if (hasValidHash && entry?.sha256) {
+                            prunedBlobHashes.add(entry.sha256);
+                        }
+                        this.indexDirty = true;
+                        continue;
+                    }
+                    // Prune legacy entries whose host is no longer in ALLOWED_CACHE_HOSTS (e.g. retired CDN hosts).
+                    if (!isAllowedPersistedEntryUrl(entry.url) || !isAllowedPersistedEntryUrl(key)) {
+                        prunedBlobHashes.add(entry.sha256);
+                        this.indexDirty = true;
                         continue;
                     }
                     const blobPath = this.getBlobPath(entry.sha256);
@@ -365,6 +427,11 @@ export class AssetCacheManager {
             // Corrupt index -> recover cleanly from empty state
             this.entries.clear();
             this.indexDirty = true;
+        }
+
+        // Remove orphaned blob files for any pruned legacy entries after all surviving entries are loaded.
+        for (const sha256 of prunedBlobHashes) {
+            this.deleteUnreferencedBlob(sha256);
         }
 
         this.recomputeTotalBytes();
@@ -440,6 +507,10 @@ export class AssetCacheManager {
         try {
             if (fs.existsSync(blobPath)) {
                 fs.unlinkSync(blobPath);
+            }
+            const shardDir = path.dirname(blobPath);
+            if (fs.existsSync(shardDir) && fs.readdirSync(shardDir).length === 0) {
+                fs.rmdirSync(shardDir);
             }
         } catch {
             // Best-effort cleanup

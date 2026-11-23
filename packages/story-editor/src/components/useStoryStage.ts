@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type RefObject } from "react";
-import type { Live2DModel, StoryCastMember, StoryStageState } from "@moesekai/story-core";
+import type { Live2DModel, Live2DSources, StoryCastMember, StoryStageState } from "@moesekai/story-core";
 import { useStoryStudio } from "../context/StoryStudioContext";
 import type { Live2DActorInfo } from "../live2d/stage";
 import {
@@ -44,24 +44,40 @@ export interface StoryStageHandle {
 }
 
 export interface UseStoryStageOptions {
-    /** The story library's root, as fetched; null while unknown. */
-    library: string | null;
+    /** Canonical Live2D asset-site sources (`{ site, region, version?, proxy? }`); null while unknown. */
+    sources: Live2DSources | null;
     cast: readonly StoryCastMember[];
     /** The server's models (null while loading). */
     models: readonly Live2DModel[] | null;
     /** Optional override for the Live2D viewer scripts directory (defaults to `<StoryStudioProvider live2dScriptBase>`). */
     scriptBase?: string | null;
+    /** Optional cache-busting query token (`?v=...`) for `stage.js` (defaults to `<StoryStudioProvider live2dScriptVersion>`). */
+    scriptVersion?: string | null;
     /** Optional override for Cubism Core JS URL (defaults to `<StoryStudioProvider live2dCoreUrl>`). */
     coreUrl?: string | null;
     /** Optional override for SSAA render quality preset (defaults to `<StoryStudioProvider stageRenderQuality>`). */
     renderQuality?: StoryStageRenderQuality;
 }
 
-export function useStoryStage({ library, cast, models, scriptBase, coreUrl, renderQuality }: UseStoryStageOptions): StoryStageHandle {
+export function useStoryStage({
+    sources,
+    cast,
+    models,
+    scriptBase,
+    scriptVersion,
+    coreUrl,
+    renderQuality,
+}: UseStoryStageOptions): StoryStageHandle {
     const studio = useStoryStudio();
     const effectiveScriptBase = scriptBase !== undefined ? scriptBase : studio.live2dScriptBase;
+    const effectiveScriptVersion = scriptVersion !== undefined ? scriptVersion : studio.live2dScriptVersion;
     const effectiveCoreUrl = coreUrl !== undefined ? coreUrl : studio.live2dCoreUrl;
     const effectiveRenderQuality = renderQuality ?? studio.stageRenderQuality;
+
+    const stableSources = useMemo<Live2DSources | null>(
+        () => (sources ? { ...sources } : null),
+        [sources?.site, sources?.region, sources?.version, sources?.proxy],
+    );
 
     const controllerRef = useRef<StoryStageController | null>(null);
     if (controllerRef.current === null) {
@@ -112,11 +128,12 @@ export function useStoryStage({ library, cast, models, scriptBase, coreUrl, rend
     // Keep runtime configuration synced.
     useEffect(() => {
         controller.setConfig({
-            library,
+            sources: stableSources,
             scriptBase: effectiveScriptBase,
+            scriptVersion: effectiveScriptVersion,
             coreUrl: effectiveCoreUrl,
         });
-    }, [controller, effectiveCoreUrl, effectiveScriptBase, library]);
+    }, [controller, effectiveCoreUrl, effectiveScriptBase, effectiveScriptVersion, stableSources]);
 
     // Keep dynamic cast & model catalog synced without recreating the WebGPU stage.
     useEffect(() => {
@@ -133,8 +150,9 @@ export function useStoryStage({ library, cast, models, scriptBase, coreUrl, rend
         mountedRef.current = true;
         controller.setRenderQuality(effectiveRenderQuality);
         controller.setConfig({
-            library,
+            sources: stableSources,
             scriptBase: effectiveScriptBase,
+            scriptVersion: effectiveScriptVersion,
             coreUrl: effectiveCoreUrl,
         });
         controller.setContext({ cast, models });

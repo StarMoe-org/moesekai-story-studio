@@ -75,7 +75,7 @@ export const STORY_ASSET_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
  * `bgm00016_01/bgm00016_01_1`), or full asset paths (`mysekai/sound/bgm/music0001/music0001`).
  */
 export const STORY_AUDIO_PATH_PATTERN = /^(?=.{1,128}$)[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+){0,4}$/;
-/** Model ids of `models.json`. */
+/** Model ids under `<region>/live2d/model/` on the canonical asset site. */
 export const STORY_MODEL_PATTERN = /^[a-z0-9_]{1,64}$/;
 /** Motion and facial names of a model's motion bundle (internal spaces allowed for real game clips like `face_ worry_01`). */
 export const STORY_MOTION_PATTERN = /^[A-Za-z0-9_.-](?:[A-Za-z0-9_. -]{0,62}[A-Za-z0-9_.-])?$/;

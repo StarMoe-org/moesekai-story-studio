@@ -1,29 +1,20 @@
 /**
- * The model index of a story library, `<index base>/<region>/models.json`, as SekaiLive2DViewer's
- * index tool writes it. `bundle` and `motion` are what the viewer's `model` option takes.
+ * Live2D model catalog entry derived from the canonical asset site's
+ * `/<region>/live2d/model/` and `/<region>/live2d/motion/` directory listings.
+ * `asset` and `motion` match `SekaiLive2DViewer` / `SekaiLive2DStage` 0.2.x `model` options.
  */
-export interface ILive2DModelIndex {
-    format: number;
-    region?: string;
-    generatedAt?: string;
-    /** The story library the index was made from. */
-    library?: string;
-    /** The game data version the library was unpacked from (`ripper.lock.json`'s `assetVersion`). */
-    assetVersion?: string;
-    models: ILive2DModelIndexEntry[];
-}
 
 /** How the game uses a model: one of the 26 characters, a supporting character, a collaboration character, or a mob. */
 export type Live2DModelKind = "character" | "sub" | "collab" | "mob";
 
-export interface ILive2DModelIndexEntry {
-    /** The model bundle's name, e.g. `v2_01ichika_casual`. */
+export interface Live2DModelEntry {
+    /** The model directory name, e.g. `v2_01ichika_casual`. */
     id: string;
-    /** `live2d/model/<id>`. */
-    bundle: string;
-    /** The default motion bundle (`live2d/motion/<x>_motion_base`); null for a model without one. */
+    /** Canonical model asset path on the asset site (`live2d/model/<id>`). */
+    asset: string;
+    /** Default motion asset path (`live2d/motion/<x>_motion_base`); null for a model without one. */
     motion: string | null;
-    /** Every motion bundle the stories used with the model, the default first. */
+    /** Optional ordered motion asset paths associated with the model, the default first. */
     motions?: string[];
     kind?: Live2DModelKind;
     /** MasterCharacter id, for a character's model. */
@@ -39,9 +30,9 @@ export interface ILive2DModelIndexEntry {
     unit?: string;
     /** `character2ds.characterIconAssetbundleName`, when present. */
     iconBundle?: string;
-    /** Server-native story display name (format 2). */
+    /** Server-native story display name. */
     name?: string;
-    /** Additional non-placeholder story speaker aliases (format 2). */
+    /** Additional non-placeholder story speaker aliases. */
     aliases?: string[];
     /** Multi-region localized names keyed by region (`jp`, `cn`, `tw`, `en`, `kr`). */
     names?: Partial<Record<string, string>>;
@@ -49,8 +40,7 @@ export interface ILive2DModelIndexEntry {
     episodeCount?: number;
     /** Representative story episode selectors (`event:1/1`, `unit:1/2`, etc.). */
     episodes?: string[];
-    /** What the viewer downloads the first time it opens the model (bytes, files), and the atlas pages. */
-    bytes?: number;
-    files?: number;
-    textures?: number;
 }
+
+/** Alias matching Moesekai web's naming for seamless imports from `@moesekai/story-core`. */
+export type ILive2DModelEntry = Live2DModelEntry;

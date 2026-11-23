@@ -126,11 +126,24 @@ describe("Pi SDK session controller, streaming events & worker IPC", () => {
 
         const mockFetch = (async (input: string | URL | Request) => {
             const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-            if (url.endsWith("/models.json")) {
+            if (url === "https://storage.pjsk.moe/jp/live2d/model/") {
                 return new Response(
                     JSON.stringify({
-                        format: 2,
-                        models: [{ id: "v2_01ichika_casual", kind: "character", characterId: 1, name: "星乃一歌", episodeCount: 20 }],
+                        format: "directory-listing",
+                        version: 1,
+                        directories: ["v2_01ichika_casual"],
+                        files: [],
+                    }),
+                    { status: 200 },
+                );
+            }
+            if (url === "https://storage.pjsk.moe/jp/live2d/motion/") {
+                return new Response(
+                    JSON.stringify({
+                        format: "directory-listing",
+                        version: 1,
+                        directories: ["v2_01ichika_motion_base"],
+                        files: [],
                     }),
                     { status: 200 },
                 );

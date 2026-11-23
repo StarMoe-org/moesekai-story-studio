@@ -21,7 +21,20 @@ const outFile = resolve(skillDir, "scripts/lib/msk-core.mjs");
 
 const entrySource = `
 export { ASSET_DOMAIN_BACKUP, ASSET_DOMAIN_MAIN } from ${JSON.stringify(resolve(coreSrcDir, "assetDomains.ts"))};
-export { live2dSources } from ${JSON.stringify(resolve(coreSrcDir, "live2d/config.ts"))};
+export { configureStoryCore } from ${JSON.stringify(resolve(coreSrcDir, "config.ts"))};
+export { fetchLive2DModels } from ${JSON.stringify(resolve(coreSrcDir, "live2d/client.ts"))};
+export { live2dListingUrl, live2dSources } from ${JSON.stringify(resolve(coreSrcDir, "live2d/config.ts"))};
+export { inferLive2DMotionBundleCandidates, live2dModelsFromListings, live2dMotionSet } from ${JSON.stringify(resolve(coreSrcDir, "live2d/models.ts"))};
+export {
+    extractLive2DMotionClips,
+    live2dMemberUrl,
+    live2dSiteListingUrl,
+    live2dVersionedBaseUrl,
+    resolveLive2DAssetDocument,
+    resolveLive2DPublishedVersion,
+    resolveLive2DSiteBase,
+} from ${JSON.stringify(resolve(coreSrcDir, "live2d/site.ts"))};
+export { fetchLive2DModelClips, fetchMotionBundleClips } from ${JSON.stringify(resolve(coreSrcDir, "story/assets.ts"))};
 export { compileStoryGraph } from ${JSON.stringify(resolve(coreSrcDir, "story/compiler.ts"))};
 export { detectStageActorOverlaps, layoutStageActors, STORY_LIMITS } from ${JSON.stringify(resolve(coreSrcDir, "story/limits.ts"))};
 export { advanceRuntime, computeActorRenderOrders, createInitialRuntime } from ${JSON.stringify(resolve(coreSrcDir, "story/runtime.ts"))};

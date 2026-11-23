@@ -85,6 +85,8 @@ describe("Non-intrusive MoeSekai Attribution & Notices (#175)", () => {
             expect(attribution!.licenseBody).toContain("MPL-2.0");
             expect(attribution!.licenseBody).toContain("Live2D Cubism Core");
             expect(attribution!.ipBody).toMatch(/SEGA|セガ/);
+            expect(attribution!.serviceBody).toContain("storage.pjsk.moe");
+            expect(attribution!.serviceBody).not.toContain("assets.pjsk.moe");
 
             // Multi-actor aggregate loading progress key (#209)
             const engine = messages.engine as Record<string, string> | undefined;

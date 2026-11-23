@@ -407,12 +407,14 @@ export interface StorySimulationReport {
 export interface StoryAssetReport {
     region: StoryRegion;
     line: "main" | "backup";
-    live2dIndexUrl: string;
-    live2dLibraryBaseUrl: string;
+    live2dSiteUrl: string;
+    live2dModelListingUrl: string;
+    live2dMotionListingUrl: string;
+    live2dProxyUrl?: string;
     live2d: Array<{
         modelId: string;
         castKeys: string[];
-        modelManifestUrl: string;
+        modelAssetPath: string;
         motions: string[];
         facials: string[];
     }>;
@@ -441,7 +443,8 @@ export interface StoryMissingAssetItem {
 
 export interface StoryAssetVerificationReport {
     ok: boolean;
-    live2dIndexSource: "models.json" | "ripper-fallback";
+    live2dSource: "asset-site-listings" | "asset-document-fallback";
+    live2dPublishedVersion?: string;
     checked: {
         live2dModels: number;
         live2dClips: number;

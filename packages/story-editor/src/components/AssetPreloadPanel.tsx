@@ -126,8 +126,8 @@ export function AssetPreloadDialog({
 }: AssetPreloadDialogProps) {
     const { t } = useI18n();
     const { resolveLive2dSources, sseWebScriptBase, defaultAutoPreload } = useStoryStudio();
-    const libraryBaseUrl = useMemo(
-        () => resolveLive2dSources(doc.region).library,
+    const live2dSources = useMemo(
+        () => resolveLive2dSources(doc.region),
         [doc.region, resolveLive2dSources],
     );
     const includeUiKit = Boolean(sseWebScriptBase);
@@ -143,8 +143,8 @@ export function AssetPreloadDialog({
     const effectiveAutoPreload = autoPreload ?? storedAuto;
 
     const manifest = useMemo(
-        () => collectStoryAssets(doc, { assetSource, models, voiceManifest, libraryBaseUrl, includeUiKit }),
-        [doc, assetSource, models, voiceManifest, libraryBaseUrl, includeUiKit],
+        () => collectStoryAssets(doc, { assetSource, models, voiceManifest, live2dSources, includeUiKit }),
+        [doc, assetSource, models, voiceManifest, live2dSources, includeUiKit],
     );
 
     const [scopedCache, setScopedCache] = useState<ScopedCacheState | null>(null);
@@ -167,13 +167,13 @@ export function AssetPreloadDialog({
 
     const refreshCacheStatus = useCallback(() => {
         let cancelled = false;
-        void inspectStoryCacheStatus(doc, { assetSource, models, voiceManifest, libraryBaseUrl, includeUiKit }).then((status) => {
+        void inspectStoryCacheStatus(doc, { assetSource, models, voiceManifest, live2dSources, includeUiKit }).then((status) => {
             if (!cancelled && mountedRef.current) {
                 setScopedCache({ doc, assetSource, voiceManifest, status });
             }
         });
         return () => { cancelled = true; };
-    }, [doc, assetSource, models, voiceManifest, libraryBaseUrl, includeUiKit]);
+    }, [doc, assetSource, models, voiceManifest, live2dSources, includeUiKit]);
 
     useEffect(() => {
         if (!open) return;
@@ -224,7 +224,7 @@ export function AssetPreloadDialog({
                 assetSource,
                 models,
                 voiceManifest,
-                libraryBaseUrl,
+                live2dSources,
                 includeUiKit,
                 signal: controller.signal,
                 onProgress: (next) => {
@@ -240,7 +240,7 @@ export function AssetPreloadDialog({
                 assetSource,
                 models,
                 voiceManifest,
-                libraryBaseUrl,
+                live2dSources,
                 includeUiKit,
             }).catch(() => null);
             if (!mountedRef.current || runIdRef.current !== runId) return;
@@ -255,7 +255,7 @@ export function AssetPreloadDialog({
             abortRef.current = null;
             setLocalRunning(false);
         }
-    }, [assetSource, doc, externalRunning, includeUiKit, libraryBaseUrl, localRunning, models, onCancelExternal, onComplete, voiceManifest]);
+    }, [assetSource, doc, externalRunning, includeUiKit, live2dSources, localRunning, models, onCancelExternal, onComplete, voiceManifest]);
 
     const handleAutoPreloadToggle = useCallback((checked: boolean) => {
         writeAutoPreloadPreference(checked);

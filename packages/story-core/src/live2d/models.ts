@@ -1,8 +1,8 @@
-import type { ILive2DModelIndexEntry, Live2DModelKind } from "../types/live2d";
+import type { Live2DModelEntry, Live2DModelKind } from "../types/live2d";
 
 /**
- * The models of a story library's index as the viewer page lists them. A model's id is its bundle
- * name, which spells what the game knows of it:
+ * Live2D models on the canonical asset site as the viewer and studio list them. A model's id is its
+ * directory name under `live2d/model/`, which spells what the game knows of it:
  *
  * - `[v2_]<NN><name>_<costume>`: one of the 26 characters (`NN` is the MasterCharacter id), e.g.
  *   `v2_01ichika_casual`, `21miku_band`; `v2_` marks the second generation of models
@@ -44,12 +44,14 @@ export type Live2DCostumePart =
 
 export interface Live2DModel {
     id: string;
-    /** `live2d/model/<id>`, relative to the library's `library/`. */
-    bundle: string;
-    /** The motion bundles the stories used with it, the default first; none for a model without one. */
+    /** Canonical model asset path on the asset site (`live2d/model/<id>`). */
+    asset: string;
+    /** Default motion asset path (`live2d/motion/<set>`), or `null` for a model without one. */
+    motion: string | null;
+    /** Ordered motion asset paths associated with the model, default first (empty when none matches). */
     motions: string[];
     kind: Live2DModelKind;
-    /** MasterCharacter id: the index's, else the one the id spells (preserved for main-char special models). */
+    /** MasterCharacter id: explicit or parsed from the model id (preserved for main-char special models). */
     characterId: number | null;
     /** SubGameCharacter id when `characterType == "sub_game_character"`. */
     subCharacterId: number | null;
@@ -61,9 +63,9 @@ export interface Live2DModel {
     iconBundle: string | null;
     /** `character2ds.unit`, when present and not `none`. */
     unit: string | null;
-    /** Server-native story display name (format 2). */
+    /** Server-native story display name, when available. */
     name: string | null;
-    /** Additional non-placeholder story speaker aliases (format 2). */
+    /** Additional non-placeholder story speaker aliases. */
     aliases: string[];
     /** Multi-region localized names keyed by region (`jp`, `cn`, `tw`, `en`, `kr`). */
     names: Partial<Record<string, string>>;
@@ -80,8 +82,6 @@ export interface Live2DModel {
     /** A collaboration's model (`clb<NN>_`). */
     collab: boolean;
     costume: Live2DCostumePart[];
-    bytes: number;
-    textures: number;
 }
 
 const KNOWN = new Set<string>(LIVE2D_COSTUME_TOKENS);
@@ -312,19 +312,14 @@ export function parseLive2DModelId(id: string): Pick<Live2DModel, "generation" |
     return { generation, collab: false, characterId: null, subName: null, costume: [{ text: rest }] };
 }
 
-function isEntry(value: unknown): value is ILive2DModelIndexEntry {
-    if (typeof value !== "object" || value === null) return false;
-    const entry = value as ILive2DModelIndexEntry;
-    return typeof entry.id === "string" && /^[a-z0-9_]+$/.test(entry.id)
-        && typeof entry.bundle === "string"
-        && (typeof entry.motion === "string" || entry.motion === null);
-}
-
-/** The motion bundles of an entry, the default (`motion`) first. */
-function motionBundles(entry: ILive2DModelIndexEntry): string[] {
-    const listed = Array.isArray(entry.motions) ? entry.motions.filter((item): item is string => typeof item === "string") : [];
-    if (entry.motion === null) return [];
-    return [entry.motion, ...listed.filter(item => item !== entry.motion)];
+/** The motion asset paths of an entry, the default (`motion`) first. */
+function motionAssets(entry: Live2DModelEntry): string[] {
+    const listed = Array.isArray(entry.motions)
+        ? entry.motions.map(trimmedString).filter((item): item is string => item !== null)
+        : [];
+    const primary = trimmedString(entry.motion);
+    if (!primary) return [];
+    return [primary, ...listed.filter(item => item !== primary)];
 }
 
 function trimmedString(value: unknown): string | null {
@@ -356,8 +351,8 @@ function parseNamesRecord(value: unknown): Partial<Record<string, string>> {
     return out;
 }
 
-/** One index entry as the page lists it. */
-export function parseLive2DModel(entry: ILive2DModelIndexEntry): Live2DModel {
+/** One catalog entry as the viewer and editor list it. */
+export function parseLive2DModel(entry: Live2DModelEntry): Live2DModel {
     const spelled = parseLive2DModelId(entry.id);
     const assetName = trimmedString(entry.assetName);
     const iconBundle = trimmedString(entry.iconBundle);
@@ -411,11 +406,13 @@ export function parseLive2DModel(entry: ILive2DModelIndexEntry): Live2DModel {
         ? parseCharacterSubCostume(spelled.subName)
         : spelled.costume;
 
+    const resolvedMotions = motionAssets(entry);
     return {
         ...spelled,
         id: entry.id,
-        bundle: entry.bundle,
-        motions: motionBundles(entry),
+        asset: entry.asset,
+        motion: resolvedMotions[0] ?? null,
+        motions: resolvedMotions,
         kind,
         characterId: kind === "character" ? resolvedCharacterId : null,
         subCharacterId,
@@ -430,8 +427,6 @@ export function parseLive2DModel(entry: ILive2DModelIndexEntry): Live2DModel {
         episodes,
         subVariant,
         costume,
-        bytes: typeof entry.bytes === "number" ? entry.bytes : 0,
-        textures: typeof entry.textures === "number" ? entry.textures : 0,
     };
 }
 
@@ -625,32 +620,11 @@ export function live2dModelsFromListings(
         models.push(
             parseLive2DModel({
                 id,
-                bundle: `live2d/model/${id}`,
+                asset: `live2d/model/${id}`,
                 motion: motionSet ? `live2d/motion/${motionSet}` : null,
             }),
         );
     }
-    return finalizeLive2DModels(models);
-}
-
-/**
- * The models of a `models.json` (format 1 or format 2), sorted (`compareLive2DModels`).
- * Entries the page cannot use (no id or bundle) are left out; an index of another format is an error.
- */
-export function parseLive2DModelIndex(raw: unknown): Live2DModel[] {
-    if (typeof raw !== "object" || raw === null) throw new Error("live2d_index_invalid");
-    const index = raw as { format?: unknown; models?: unknown };
-    if ((index.format !== 1 && index.format !== 2) || !Array.isArray(index.models)) {
-        throw new Error("live2d_index_invalid");
-    }
-    const seen = new Set<string>();
-    const models: Live2DModel[] = [];
-    for (const entry of index.models) {
-        if (!isEntry(entry) || seen.has(entry.id)) continue;
-        seen.add(entry.id);
-        models.push(parseLive2DModel(entry));
-    }
-
     return finalizeLive2DModels(models);
 }
 

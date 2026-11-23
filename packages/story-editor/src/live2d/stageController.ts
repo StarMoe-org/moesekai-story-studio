@@ -3,12 +3,14 @@ import {
     live2dCoreUrl,
     STORY_FADE_SECONDS,
     type Live2DModel,
+    type Live2DSources,
     type StoryActorState,
     type StoryCastMember,
     type StoryStageState,
 } from "@moesekai/story-core";
 import {
     isLive2DAbortError,
+    isLive2DStageUnavailableError,
     LIVE2D_STAGE_MAX_ACTORS,
     LIVE2D_STAGE_UNAVAILABLE,
     loadLive2DStage,
@@ -21,11 +23,11 @@ import {
     type Live2DStageStatic,
 } from "./stage";
 import { resolveModelBundlesForStage, type ResolvedLive2DModelBundles } from "./clipCatalog";
-import { live2dViewerScriptBase } from "./viewer";
+import { live2dSourcesKey, live2dViewerScriptBase } from "./viewer";
 
 export type StoryStagePhase =
     | { kind: "idle" }
-    | { kind: "unavailable" }
+    | { kind: "unavailable"; message?: string; url?: string }
     | { kind: "loading" }
     | { kind: "recovering"; attempt: number; maxAttempts: number; message?: string }
     | { kind: "ready" }
@@ -103,8 +105,9 @@ export interface StageHostAdapter {
 }
 
 export interface StoryStageConfig {
-    library: string | null;
+    sources: Live2DSources | null;
     scriptBase?: string | null;
+    scriptVersion?: string | null;
     coreUrl?: string | null;
 }
 
@@ -116,7 +119,7 @@ export interface StoryStageContextData {
 export type StageTimerHandle = unknown;
 
 export interface StoryStageControllerDeps {
-    loadStage?: (scriptBase?: string | null) => Promise<Live2DStageStatic>;
+    loadStage?: (scriptBase?: string | null, scriptVersion?: string | null) => Promise<Live2DStageStatic>;
     resolveScriptBase?: (scriptBase?: string | null) => string;
     resolveCoreUrl?: (coreUrl?: string | null) => string | undefined;
     setTimeout?: (fn: () => void, ms: number) => StageTimerHandle;
@@ -195,8 +198,16 @@ export const STAGE_RENDER_QUALITY_PRESETS: Record<
 };
 
 function classifyFailure(error: unknown): StoryStagePhase {
-    if (error instanceof Error && error.message === LIVE2D_STAGE_UNAVAILABLE) {
-        return { kind: "unavailable" };
+    if (isLive2DStageUnavailableError(error)) {
+        const detail = error as Live2DStageError;
+        const message = detail.message && detail.message !== LIVE2D_STAGE_UNAVAILABLE
+            ? detail.message
+            : undefined;
+        return {
+            kind: "unavailable",
+            ...(message ? { message } : {}),
+            ...(detail.url ? { url: detail.url } : {}),
+        };
     }
     const detail = error as Live2DStageError | undefined;
     if (detail?.kind === "unsupported") {
@@ -216,12 +227,21 @@ function isStageDestroyedError(error: unknown): boolean {
     return /stage is destroyed|stage was destroyed/i.test(message);
 }
 
-function isMotionBundleNotFoundError(error: unknown, triedMotion: string | null): boolean {
+function isMotionAssetNotFoundError(error: unknown, triedMotion: string | null): boolean {
     if (!triedMotion || !error || typeof error !== "object") return false;
     const detail = error as { kind?: unknown; url?: unknown; message?: unknown };
     if (detail.kind !== "not-found") return false;
     const haystack = `${String(detail.url ?? "")} ${String(detail.message ?? "")}`;
-    return haystack.includes(triedMotion) || haystack.includes("/live2d/motion/");
+    const encoded = triedMotion.split("/").map(encodeURIComponent).join("/");
+    return haystack.includes(triedMotion)
+        || haystack.includes(encoded)
+        || haystack.includes("/live2d/motion/");
+}
+
+function isMotionClipMismatchError(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const message = String((error as { message?: unknown }).message ?? "");
+    return /^no (?:body motion|facial)\b/i.test(message);
 }
 
 /** A clip the model has: `name`, else its fallback (null: leave it). */
@@ -441,7 +461,7 @@ export function createBrowserStageHostAdapter(
  *   waiting for the model list.
  */
 export class StoryStageController {
-    private readonly loadStage: (scriptBase?: string | null) => Promise<Live2DStageStatic>;
+    private readonly loadStage: (scriptBase?: string | null, scriptVersion?: string | null) => Promise<Live2DStageStatic>;
     private readonly resolveScriptBase: (scriptBase?: string | null) => string;
     private readonly resolveCoreUrl: (coreUrl?: string | null) => string | undefined;
     private readonly scheduleTimer: (fn: () => void, ms: number) => StageTimerHandle;
@@ -454,7 +474,8 @@ export class StoryStageController {
     private readonly maxCanvasDimension: number;
 
     private disposed = false;
-    private config: StoryStageConfig = { library: null };
+    private config: StoryStageConfig = { sources: null };
+    private sourcesKey: string | null = null;
     private configKey: string | null = null;
     private cast: readonly StoryCastMember[] = [];
     private models: readonly Live2DModel[] | null = null;
@@ -558,7 +579,7 @@ export class StoryStageController {
             });
         }
 
-        if (!nextHost || !this.config.library) {
+        if (!nextHost || !this.sourcesKey) {
             this.setPhase({ kind: "idle" });
             return;
         }
@@ -566,19 +587,24 @@ export class StoryStageController {
         this.startBoot({ isRecovery: false });
     }
 
-    /** Updates stage runtime configuration (`library`, `scriptBase`, `coreUrl`). */
+    /** Updates stage runtime configuration (`sources`, `scriptBase`, `scriptVersion`, `coreUrl`). */
     setConfig(next: StoryStageConfig): void {
         if (this.disposed) return;
-        const prevLibrary = this.config.library;
-        const nextKey = next.library
-            ? `${next.library}|${next.scriptBase ?? ""}|${next.coreUrl ?? ""}`
+        const prevSourcesKey = this.sourcesKey;
+        const nextSourcesKey = live2dSourcesKey(next.sources);
+        const nextKey = nextSourcesKey
+            ? `${nextSourcesKey}|${next.scriptBase ?? ""}|${next.scriptVersion ?? ""}|${next.coreUrl ?? ""}`
             : null;
         if (nextKey === this.configKey) return;
 
-        this.config = { ...next };
+        this.config = {
+            ...next,
+            sources: next.sources ? { ...next.sources } : null,
+        };
+        this.sourcesKey = nextSourcesKey;
         this.configKey = nextKey;
 
-        if (prevLibrary !== next.library) {
+        if (prevSourcesKey !== nextSourcesKey) {
             this.infoCache.clear();
             this.modelInfo = {};
             this.problems = {};
@@ -631,7 +657,7 @@ export class StoryStageController {
 
         const modelsArrivedOrChanged = data.models !== null && (!hadModels || data.models !== prevModels);
         if (modelsArrivedOrChanged) {
-            // Re-run pending solo preview or scene actors that waited for `models.json`.
+            // Re-run pending solo preview or scene actors that waited for the model catalog.
             if (this.desiredSolo !== null) {
                 this.schedulePump();
             } else if (this.desiredScene !== null) {
@@ -698,7 +724,7 @@ export class StoryStageController {
      * Auditions a character and/or clip on the Live2D stage:
      * - Works with 0 actors on stage, from any node (`start`/`choice`/`condition`/`end`), or from
      *   `CastPanel` / `StoryEditorBin` / `ClipPickerField` / `NodeInspector`.
-     * - Latches requests made while the stage is booting, recovering, or waiting for `models.json`.
+     * - Latches requests made while the stage is booting, recovering, or waiting for the model catalog.
      * - Automatically triggers recovery retry if called while the stage is in `"failed"`.
      */
     previewClip(castMember: StoryCastMember, clip?: StoryClipPreviewRequest): Promise<void> {
@@ -810,7 +836,7 @@ export class StoryStageController {
 
     /** Manually retries starting/recovering the stage, resetting the automatic recovery budget. */
     retry(): void {
-        if (this.disposed || !this.host || !this.config.library) return;
+        if (this.disposed || !this.host || !this.sourcesKey) return;
         this.recoveryAttempts = 0;
         this.teardownStageInstance({ clearHostCanvas: true, abortBoot: true, clearRecovery: true });
         this.startBoot({ isRecovery: false });
@@ -974,7 +1000,7 @@ export class StoryStageController {
     }
 
     private startBoot({ isRecovery }: { isRecovery: boolean }): void {
-        if (this.disposed || !this.host || !this.config.library) return;
+        if (this.disposed || !this.host || !this.sourcesKey || !this.config.sources) return;
         this.clearRecoveryTimer();
         this.clearHealthyResetTimer();
 
@@ -995,8 +1021,9 @@ export class StoryStageController {
         const controller = new AbortController();
         this.bootAbort = controller;
         const { signal } = controller;
-        const library = this.config.library;
+        const sources = { ...this.config.sources };
         const scriptBase = this.config.scriptBase;
+        const scriptVersion = this.config.scriptVersion;
         const coreUrl = this.config.coreUrl;
 
         if (!isRecovery) {
@@ -1004,7 +1031,7 @@ export class StoryStageController {
         }
 
         void (async () => {
-            const Stage = await this.loadStage(scriptBase);
+            const Stage = await this.loadStage(scriptBase, scriptVersion);
             if (signal.aborted || this.disposed || this.sessionId !== mySession) return;
 
             const resolvedJs = this.resolveScriptBase(scriptBase);
@@ -1039,7 +1066,7 @@ export class StoryStageController {
                 canvas,
                 js: resolvedJs,
                 ...(core ? { core } : {}),
-                library,
+                sources,
                 width: liveSize.width,
                 height: liveSize.height,
                 signal,
@@ -1129,7 +1156,7 @@ export class StoryStageController {
         }
 
         const maxAttempts = this.recoveryDelaysMs.length;
-        if (this.recoveryAttempts < maxAttempts && this.host && this.config.library) {
+        if (this.recoveryAttempts < maxAttempts && this.host && this.sourcesKey) {
             const delayMs = this.recoveryDelaysMs[this.recoveryAttempts];
             const nextAttempt = this.recoveryAttempts + 1;
             this.recoveryAttempts = nextAttempt;
@@ -1142,7 +1169,7 @@ export class StoryStageController {
             this.clearRecoveryTimer();
             this.recoveryTimer = this.scheduleTimer(() => {
                 this.recoveryTimer = null;
-                if (this.disposed || !this.host || !this.config.library) return;
+                if (this.disposed || !this.host || !this.sourcesKey) return;
                 this.startBoot({ isRecovery: true });
             }, delayMs);
             return;
@@ -1156,7 +1183,7 @@ export class StoryStageController {
         this.clearResizeTimer();
 
         // If boot was deferred because the host was 0x0, boot immediately once non-zero!
-        if (this.deferredBoot && !this.booting && !this.stage && this.config.library) {
+        if (this.deferredBoot && !this.booting && !this.stage && this.sourcesKey) {
             if (this.measureSafeSize() !== null) {
                 this.startBoot({ isRecovery: this.phase.kind === "recovering" });
             }
@@ -1200,7 +1227,7 @@ export class StoryStageController {
         }
 
         // Returning to foreground
-        if (this.deferredBoot && !this.booting && !this.stage && this.config.library) {
+        if (this.deferredBoot && !this.booting && !this.stage && this.sourcesKey) {
             if (this.measureSafeSize() !== null) {
                 this.startBoot({ isRecovery: this.phase.kind === "recovering" });
             }
@@ -1438,34 +1465,69 @@ export class StoryStageController {
         const motionSequence: Array<string | null> = resolved.motion !== null
             ? [resolved.motion, ...resolved.fallbackMotionCandidates, null]
             : [null];
+        const stripClips = (p: Live2DActorPlacement & { motion?: string; facial?: string }) => {
+            const stripped = { ...p };
+            delete stripped.motion;
+            delete stripped.facial;
+            return stripped;
+        };
         let lastError: unknown = null;
         for (let i = 0; i < motionSequence.length; i += 1) {
-            const motionBundle = motionSequence[i] ?? null;
-            const nextPlacement = motionBundle !== null
-                ? placement
-                : (() => {
-                    const stripped = { ...placement };
-                    delete stripped.motion;
-                    delete stripped.facial;
-                    return stripped;
-                })();
+            const motionAsset = motionSequence[i] ?? null;
+            const nextCandidate = motionSequence[i + 1] ?? null;
+            const nextPlacement = motionAsset !== null ? placement : stripClips(placement);
             if (i > 0) {
                 onProgress?.({ loaded: 0, total: 0 });
             }
             try {
-                return await activeStage.addActor(
+                const info = await activeStage.addActor(
                     actorId,
-                    { bundle: resolved.bundle, motion: motionBundle },
+                    { asset: resolved.asset, motion: motionAsset },
                     nextPlacement,
                     onProgress,
                 );
+                // If `stage.js` gracefully mounted the model without motions when an explicit motion set
+                // was 404 (`motionSet === null`, zero clips), try the next non-null fallback candidate.
+                if (
+                    motionAsset !== null
+                    && nextCandidate !== null
+                    && info.motionSet === null
+                    && info.motions.length === 0
+                    && info.facials.length === 0
+                    && this.stage === activeStage
+                    && !this.disposed
+                ) {
+                    try {
+                        activeStage.removeActor(actorId);
+                    } catch {
+                        // Ignore cleanup error before retrying fallback motion set.
+                    }
+                    continue;
+                }
+                return info;
             } catch (err) {
                 lastError = err;
                 if (this.stage !== activeStage || this.disposed || isLive2DAbortError(err) || isStageDestroyedError(err)) {
                     throw err;
                 }
-                if (i < motionSequence.length - 1 && isMotionBundleNotFoundError(err, motionBundle)) {
+                if (i < motionSequence.length - 1 && isMotionAssetNotFoundError(err, motionAsset)) {
                     continue;
+                }
+                // In SekaiLive2DStage 0.3.0, a missing motion set resolves to `motions: []`, which causes
+                // an explicit `placement.motion`/`placement.facial` to reject with `no body motion/facial <name>`.
+                if (motionAsset !== null && isMotionClipMismatchError(err)) {
+                    if (nextCandidate !== null) {
+                        continue;
+                    }
+                    if (nextPlacement.motion !== undefined || nextPlacement.facial !== undefined) {
+                        onProgress?.({ loaded: 0, total: 0 });
+                        return await activeStage.addActor(
+                            actorId,
+                            { asset: resolved.asset, motion: motionAsset },
+                            stripClips(nextPlacement),
+                            onProgress,
+                        );
+                    }
                 }
                 throw err;
             }

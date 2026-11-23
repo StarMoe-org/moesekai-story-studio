@@ -2,8 +2,8 @@ import type { Live2DModel } from "./models";
 
 /**
  * Built-in fallback localized names for supporting and collaboration Live2D characters,
- * generated from the 5-region story libraries (jp, cn, tw, en, kr).
- * Used when `models.json` is format 1 or lacks localized `names` for the current UI locale.
+ * covering all 5 game servers (jp, cn, tw, en, kr).
+ * Used when catalog entries lack localized `names` for the current UI locale.
  * All non-ASCII characters are stored as `\uXXXX` Unicode escapes so UI source files contain
  * zero raw Han characters.
  */

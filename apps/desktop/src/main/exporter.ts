@@ -1,9 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+    configureStoryCore,
+    fetchLive2DModels,
+    getStoryCoreConfig,
+    isLive2DRegion,
     parseStoryScript,
     prepareMskExport,
     stripMskPositions,
+    type AssetLine,
     type StoryDocument,
     type StoryVoiceManifest,
 } from "@moesekai/story-core";
@@ -148,23 +153,39 @@ function countStoryStats(
     };
 }
 
-async function checkLiveCdnAssets(doc: StoryDocument): Promise<string[]> {
+async function checkLiveCdnAssets(doc: StoryDocument, assetLine?: AssetLine): Promise<string[]> {
     const issues: string[] = [];
+    if (!isLive2DRegion(doc.region)) {
+        issues.push(`Unsupported Live2D region "${String(doc.region)}" for live asset site catalog check.`);
+        return issues;
+    }
+
+    const prevLine = getStoryCoreConfig().defaultAssetLine;
+    const shouldSwitchLine = Boolean(assetLine && assetLine !== prevLine);
+    let modelsPromise: ReturnType<typeof fetchLive2DModels>;
+    if (shouldSwitchLine && assetLine) {
+        configureStoryCore({ defaultAssetLine: assetLine });
+    }
     try {
-        const indexUrl = `https://assets.pjsk.moe/sekai-extra-assets/sekai-live2d/${doc.region}/models.json`;
-        const res = await fetch(indexUrl, { signal: AbortSignal.timeout(8000) });
-        if (!res.ok) {
-            issues.push(`Unable to fetch Live2D model index for region "${doc.region}" (HTTP ${res.status}).`);
+        modelsPromise = fetchLive2DModels(doc.region, AbortSignal.timeout(8000));
+    } finally {
+        if (shouldSwitchLine) {
+            configureStoryCore({ defaultAssetLine: prevLine });
+        }
+    }
+
+    try {
+        const models = await modelsPromise;
+        if (models.length === 0) {
+            issues.push(`Unable to load Live2D asset site catalog for region "${doc.region}" (empty listing).`);
             return issues;
         }
-        const raw = (await res.json()) as { models?: Array<{ id?: string; name?: string }> } | Array<{ id?: string; name?: string }>;
-        const list = Array.isArray(raw) ? raw : Array.isArray(raw?.models) ? raw.models : [];
-        const validIds = new Set(list.map(m => m.id ?? m.name ?? "").filter(Boolean));
-        if (validIds.size > 0) {
-            for (const member of doc.cast) {
-                if (!validIds.has(member.modelId)) {
-                    issues.push(`Cast "${member.key}" modelId "${member.modelId}" not found in ${doc.region} models.json.`);
-                }
+        const validIds = new Set(models.map(m => m.id).filter(Boolean));
+        for (const member of doc.cast) {
+            if (!validIds.has(member.modelId)) {
+                issues.push(
+                    `Cast "${member.key}" modelId "${member.modelId}" not found in ${doc.region} Live2D asset site catalog.`,
+                );
             }
         }
     } catch (err) {
@@ -251,7 +272,7 @@ export async function runExportPreflight(req: ExportPreflightRequest): Promise<E
         });
     }
 
-    const liveAssetIssues = req.checkLiveAssets ? await checkLiveCdnAssets(doc) : undefined;
+    const liveAssetIssues = req.checkLiveAssets ? await checkLiveCdnAssets(doc, req.assetLine) : undefined;
 
     return {
         ok: errors.length === 0,

@@ -160,8 +160,11 @@ function StageTopRightOverlay({
             </div>,
         );
     } else if (phase.kind === "unavailable") {
+        const title = phase.message
+            ? `${t("page.storyMaker.engine.unavailableDescription")}\n${phase.message}`
+            : t("page.storyMaker.engine.unavailableDescription");
         notes.push(
-            <div key="unavailable" className={chip} title={t("page.storyMaker.engine.unavailableDescription")}>
+            <div key="unavailable" className={chip} title={title}>
                 <Icon path={mdInfo} size={18} className="shrink-0 text-on-surface-variant" />
                 <span className="min-w-0 truncate">{t("page.storyMaker.engine.unavailable")}</span>
             </div>,

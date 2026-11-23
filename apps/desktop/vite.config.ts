@@ -10,14 +10,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(__dirname, "src/renderer");
 const outDir = path.resolve(__dirname, "dist/renderer");
 
-function resolveAssetDir(subName: string): string | null {
-    const candidates = [
-        path.resolve(__dirname, "dist", subName),
-        path.resolve(__dirname, "../../packages/story-editor/dist", subName),
-        path.resolve(__dirname, "../../packages/story-editor/assets", subName),
-    ];
+function resolveAssetDir(candidates: readonly string[], sentinelFile?: string): string | null {
     for (const dir of candidates) {
-        if (fs.existsSync(dir)) return dir;
+        if (!fs.existsSync(dir)) continue;
+        if (sentinelFile && !fs.existsSync(path.join(dir, sentinelFile))) continue;
+        return dir;
     }
     return null;
 }
@@ -45,9 +42,14 @@ function getMimeType(filePath: string): string {
     }
 }
 
-function mountStaticDir(server: { middlewares: { use: Function } }, mountPrefix: string, subName: string): void {
+function mountStaticDir(
+    server: { middlewares: { use: Function } },
+    mountPrefix: string,
+    candidates: readonly string[],
+    sentinelFile?: string,
+): void {
     server.middlewares.use(mountPrefix, (req: any, res: any, next: () => void) => {
-        const assetDir = resolveAssetDir(subName);
+        const assetDir = resolveAssetDir(candidates, sentinelFile);
         if (!assetDir) {
             next();
             return;
@@ -73,12 +75,21 @@ function mountStaticDir(server: { middlewares: { use: Function } }, mountPrefix:
 }
 
 /**
- * Serves `live2d-viewer` (WASM + stage-worker.js) and `unit-icons` on the same origin
+ * Serves host-vendored `live2d-viewer` (WASM + stage-worker.js) and `unit-icons` on the same origin
  * during Vite dev so Web Workers never hit cross-origin restrictions, and responds to
  * `/__moesekai_desktop_dev_ping__` with the session nonce so `scripts/dev.ts` never
  * attaches Electron to an unrelated process occupying a port.
  */
 function serveLive2DViewerPlugin(): Plugin {
+    const live2dCandidates = [
+        path.resolve(__dirname, "dist", "live2d-viewer"),
+        path.resolve(__dirname, "vendor", "live2d-viewer"),
+    ];
+    const unitIconsCandidates = [
+        path.resolve(__dirname, "dist", "unit-icons"),
+        path.resolve(__dirname, "../../packages/story-editor/dist", "unit-icons"),
+        path.resolve(__dirname, "../../packages/story-editor/assets", "unit-icons"),
+    ];
     return {
         name: "moesekai-serve-live2d-viewer",
         configureServer(server) {
@@ -93,8 +104,8 @@ function serveLive2DViewerPlugin(): Plugin {
                     }),
                 );
             });
-            mountStaticDir(server, "/live2d-viewer", "live2d-viewer");
-            mountStaticDir(server, "/unit-icons", "unit-icons");
+            mountStaticDir(server, "/live2d-viewer", live2dCandidates, "stage.js");
+            mountStaticDir(server, "/unit-icons", unitIconsCandidates);
         },
     };
 }

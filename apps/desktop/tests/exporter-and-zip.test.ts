@@ -3,9 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+    clearLive2DClientCaches,
     compileStoryGraph,
+    configureStoryCore,
     createStarterStoryFromScript,
     parseStoryScript,
+    resetStoryCoreConfig,
     serializeStoryScript,
 } from "@moesekai/story-core";
 import {
@@ -240,5 +243,91 @@ describe(".msk export pipeline", () => {
         expect(res.canceled).toBe(false);
         expect(fs.existsSync(path.join(outDir, "ja-JP.i18n.json"))).toBe(true);
         expect(fs.existsSync(path.join(outDir, "voice-manifest.json"))).toBe(true);
+    });
+
+    it("checks Live2D cast models against canonical asset-site catalog (storage.pjsk.moe / backup storage.exmeaning.com)", async () => {
+        const script = makeValidScript("Live Catalog Check");
+        const parsed = parseStoryScript(script);
+        expect(parsed.ok).toBe(true);
+        if (!parsed.ok) return;
+
+        const castModelIds = parsed.doc.cast.map(c => c.modelId);
+        expect(castModelIds.length).toBeGreaterThan(0);
+
+        const requestedUrls: string[] = [];
+        const makeListingResponse = (directories: string[]) =>
+            new Response(
+                JSON.stringify({
+                    format: "directory-listing",
+                    version: 1,
+                    view: "canonical",
+                    published_version: "7.1.0.70-test",
+                    directories,
+                    files: [],
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } },
+            );
+
+        try {
+            // 1. Main line: all cast models present -> 0 liveAssetIssues
+            clearLive2DClientCaches();
+            configureStoryCore({
+                fetchImpl: (async (input: string | URL | Request) => {
+                    const url = String(input);
+                    requestedUrls.push(url);
+                    if (url.endsWith("/jp/live2d/model/")) {
+                        return makeListingResponse(castModelIds);
+                    }
+                    if (url.endsWith("/jp/live2d/motion/")) {
+                        return makeListingResponse(["17kanade_motion_base"]);
+                    }
+                    return new Response("Not Found", { status: 404 });
+                }) as unknown as typeof fetch,
+            });
+
+            const okMain = await runExportPreflight({
+                script,
+                includePositions: false,
+                checkLiveAssets: true,
+                assetLine: "main",
+            });
+            expect(okMain.liveAssetIssues).toEqual([]);
+            expect(requestedUrls.some(u => u.startsWith("https://storage.pjsk.moe/jp/live2d/model/"))).toBe(true);
+            expect(requestedUrls.some(u => u.includes("assets.pjsk.moe") || u.includes("models.json"))).toBe(false);
+
+            // 2. Backup line with one missing model -> queries storage.exmeaning.com and reports catalog diagnostic
+            requestedUrls.length = 0;
+            clearLive2DClientCaches();
+            const partialCatalog = castModelIds.slice(1);
+            const missingModelId = castModelIds[0];
+            configureStoryCore({
+                fetchImpl: (async (input: string | URL | Request) => {
+                    const url = String(input);
+                    requestedUrls.push(url);
+                    if (url.startsWith("https://storage.exmeaning.com/jp/live2d/model/")) {
+                        return makeListingResponse(partialCatalog);
+                    }
+                    if (url.startsWith("https://storage.exmeaning.com/jp/live2d/motion/")) {
+                        return makeListingResponse([]);
+                    }
+                    return new Response("Not Found", { status: 404 });
+                }) as unknown as typeof fetch,
+            });
+
+            const missingBackup = await runExportPreflight({
+                script,
+                includePositions: false,
+                checkLiveAssets: true,
+                assetLine: "backup",
+            });
+            expect(requestedUrls.some(u => u.startsWith("https://storage.exmeaning.com/jp/live2d/model/"))).toBe(true);
+            expect(missingBackup.liveAssetIssues?.length).toBe(1);
+            expect(missingBackup.liveAssetIssues?.[0]).toContain(missingModelId);
+            expect(missingBackup.liveAssetIssues?.[0]).toContain("Live2D asset site catalog");
+            expect(missingBackup.liveAssetIssues?.[0]).not.toContain("models.json");
+        } finally {
+            clearLive2DClientCaches();
+            resetStoryCoreConfig();
+        }
     });
 });

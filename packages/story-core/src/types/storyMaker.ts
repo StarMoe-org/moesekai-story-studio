@@ -58,11 +58,11 @@ export interface StoryVoiceRef {
     end?: number;
 }
 
-/** A cast member: a Live2D model of the server's story library, referenced by `key`. */
+/** A cast member: a Live2D model on the server's canonical asset site, referenced by `key`. */
 export interface StoryCastMember {
     /** Stable key within the document (`[A-Za-z0-9_-]{1,32}`). */
     key: string;
-    /** The model's id in the server's `models.json` (e.g. `v2_01ichika_casual`). */
+    /** The model's id under `<region>/live2d/model/` (e.g. `v2_01ichika_casual`). */
     modelId: string;
     /** The name shown above the dialogue (free text). */
     name: string;

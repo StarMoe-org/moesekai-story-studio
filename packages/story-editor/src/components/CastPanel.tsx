@@ -23,7 +23,7 @@ interface CastModelDialogProps {
     onSelect: (model: Live2DModel) => void;
 }
 
-/** Choosing a model of the server's story library for a cast member. */
+/** Choosing a model from the server's asset site catalog for a cast member. */
 export function CastModelDialog({ isOpen, onClose, list, onRetry, current, onSelect }: CastModelDialogProps) {
     const { t } = useI18n();
     const [group, setGroup] = useState(() => (current ? live2dGroupKey(current) : "character:1"));
@@ -80,7 +80,7 @@ export function CastPanel({
     const [previewDrafts, setPreviewDrafts] = useState<Record<string, CastPreviewDraft>>({});
 
     const activePreviewKey = previewingCastId !== undefined ? previewingCastId : localPreviewKey;
-    const library = useMemo(() => resolveLive2dSources(doc.region).library, [doc.region, resolveLive2dSources]);
+    const live2dSources = useMemo(() => resolveLive2dSources(doc.region), [doc.region, resolveLive2dSources]);
     const models = list.status === "ready" ? list.models : [];
     const modelOf = (member: StoryCastMember) => models.find(model => model.id === member.modelId) ?? null;
     const full = doc.cast.length >= STORY_LIMITS.cast;
@@ -241,9 +241,9 @@ export function CastPanel({
                                         kind="motion"
                                         value={draft.motion}
                                         info={modelInfo?.[member.modelId]}
-                                        library={library}
+                                        sources={live2dSources}
                                         modelId={member.modelId}
-                                        motionBundle={model?.motions[0] ?? null}
+                                        motionAsset={model?.motion ?? model?.motions[0] ?? null}
                                         onChange={(motion) => updatePreviewDraft(member.key, { motion })}
                                         onPreviewClip={(motion) => onPreviewCast(member, { motion })}
                                     />
@@ -251,9 +251,9 @@ export function CastPanel({
                                         kind="facial"
                                         value={draft.facial}
                                         info={modelInfo?.[member.modelId]}
-                                        library={library}
+                                        sources={live2dSources}
                                         modelId={member.modelId}
-                                        motionBundle={model?.motions[0] ?? null}
+                                        motionAsset={model?.motion ?? model?.motions[0] ?? null}
                                         onChange={(facial) => updatePreviewDraft(member.key, { facial })}
                                         onPreviewClip={(facial) => onPreviewCast(member, { facial })}
                                     />

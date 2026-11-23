@@ -3,7 +3,9 @@ import {
     computeActorRenderOrders,
     createStoryDocument,
     INITIAL_STAGE_STATE,
+    parseLive2DModel,
     type Live2DModel,
+    type Live2DSources,
     type StoryCastMember,
     type StoryStageState,
 } from "@moesekai/story-core";
@@ -11,6 +13,7 @@ import { applyInstructionToStage } from "../src/components/StoryPlayerView";
 import {
     LIVE2D_STAGE_UNAVAILABLE,
     type Live2DActorInfo,
+    type Live2DActorModel,
     type Live2DActorPlacement,
     type Live2DStage,
     type Live2DStageOptions,
@@ -33,13 +36,15 @@ const CAST_MAFUYU: StoryCastMember = { key: "mafuyu", name: "朝比奈真冬", m
 const CAST_ENA: StoryCastMember = { key: "ena", name: "东云绘名", modelId: "19_ena", characterId: 19 };
 const CAST_MIZUKI: StoryCastMember = { key: "mizuki", name: "晓山瑞希", modelId: "20_mizuki", characterId: 20 };
 
+const TEST_SOURCES: Live2DSources = { site: "https://storage.test", region: "jp" };
+
 const TEST_MODELS: Live2DModel[] = [
-    { id: "01_ichika", bundle: "model/01_ichika", motions: ["motion/01_ichika"], characterId: 1 },
-    { id: "02_saki", bundle: "model/02_saki", motions: ["motion/02_saki"], characterId: 2 },
-    { id: "17_kanade", bundle: "model/17_kanade", motions: ["motion/17_kanade"], characterId: 17 },
-    { id: "18_mafuyu", bundle: "model/18_mafuyu", motions: ["motion/18_mafuyu"], characterId: 18 },
-    { id: "19_ena", bundle: "model/19_ena", motions: ["motion/19_ena"], characterId: 19 },
-    { id: "20_mizuki", bundle: "model/20_mizuki", motions: ["motion/20_mizuki"], characterId: 20 },
+    parseLive2DModel({ id: "01_ichika", asset: "live2d/model/01_ichika", motion: "live2d/motion/01_ichika_motion_base", characterId: 1 }),
+    parseLive2DModel({ id: "02_saki", asset: "live2d/model/02_saki", motion: "live2d/motion/02_saki_motion_base", characterId: 2 }),
+    parseLive2DModel({ id: "17_kanade", asset: "live2d/model/17_kanade", motion: "live2d/motion/17_kanade_motion_base", characterId: 17 }),
+    parseLive2DModel({ id: "18_mafuyu", asset: "live2d/model/18_mafuyu", motion: "live2d/motion/18_mafuyu_motion_base", characterId: 18 }),
+    parseLive2DModel({ id: "19_ena", asset: "live2d/model/19_ena", motion: "live2d/motion/19_ena_motion_base", characterId: 19 }),
+    parseLive2DModel({ id: "20_mizuki", asset: "live2d/model/20_mizuki", motion: "live2d/motion/20_mizuki_motion_base", characterId: 20 }),
 ];
 
 const DEFAULT_ACTOR_INFO: Live2DActorInfo = {
@@ -140,7 +145,7 @@ class FakeHostAdapter implements StageHostAdapter {
 }
 
 interface MountedFakeActor {
-    bundle: string;
+    asset: string;
     placement: Live2DActorPlacement;
     motion: string | null;
     facial: string | null;
@@ -220,12 +225,12 @@ class FakeLive2DStage extends EventTarget implements Live2DStage {
 
     async addActor(
         id: string,
-        model: { bundle: string; motion: string | null },
+        model: Live2DActorModel,
         placement?: Live2DActorPlacement & { motion?: string; facial?: string },
         onProgress?: (progress: { loaded: number; total: number }) => void,
     ): Promise<Live2DActorInfo> {
         if (this.destroyed) throw Object.assign(new Error("the stage is destroyed"), { kind: "internal" });
-        this.enterAsync(`addActor:${id}:${model.bundle}`);
+        this.enterAsync(`addActor:${id}:${model.asset}`);
         try {
             const customSteps = this.actorProgressSteps.get(id);
             if (customSteps && customSteps.length > 0) {
@@ -251,11 +256,11 @@ class FakeLive2DStage extends EventTarget implements Live2DStage {
             }
             if (this.failNextAddFor.has(id)) {
                 this.failNextAddFor.delete(id);
-                throw Object.assign(new Error(`failed to fetch ${model.bundle}`), { kind: "network" });
+                throw Object.assign(new Error(`failed to fetch ${model.asset}`), { kind: "network" });
             }
             onProgress?.({ loaded: 10, total: 10 });
             this.mounted.set(id, {
-                bundle: model.bundle,
+                asset: model.asset,
                 placement: {
                     x: placement?.x ?? 0,
                     y: placement?.y ?? 0,
@@ -268,7 +273,7 @@ class FakeLive2DStage extends EventTarget implements Live2DStage {
                 facial: placement?.facial ?? DEFAULT_ACTOR_INFO.defaultFacial,
                 talking: false,
             });
-            return { ...DEFAULT_ACTOR_INFO };
+            return { ...DEFAULT_ACTOR_INFO, model: model.asset, motionSet: model.motion ?? null };
         } finally {
             this.leaveAsync();
         }
@@ -439,7 +444,7 @@ function createHarness(opts: HarnessOptions = {}) {
             cast: [CAST_ICHIKA, CAST_SAKI, CAST_KANADE, CAST_MAFUYU, CAST_ENA, CAST_MIZUKI],
             models: withModels ? TEST_MODELS : null,
         });
-        controller.setConfig({ library: "https://assets.test/jp/" });
+        controller.setConfig({ sources: TEST_SOURCES });
         controller.setHost(host);
         await waitMs(15);
         await flushMicrotasks();
@@ -556,7 +561,7 @@ describe("StoryStageController — first-class 0-actor Solo / Audition Preview",
         await controller.previewClip(CAST_KANADE, { motion: "w-nod01" });
         expect(controller.getSnapshot().previewingCastKey).toBe("kanade");
         expect(stage.actors).toEqual([SOLO_PREVIEW_ACTOR_ID]);
-        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.bundle).toBe("model/17_kanade");
+        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/17_kanade");
 
         // Exit solo preview: cleanly returns to 0 actors on stage!
         controller.clearClipPreview();
@@ -646,7 +651,7 @@ describe("StoryStageController — first-class 0-actor Solo / Audition Preview",
         const { controller, boot, latestStage } = createHarness({ createDelayMs: 25 });
         // Start boot WITHOUT models yet (`models = null`).
         controller.setContext({ cast: [CAST_ICHIKA, CAST_KANADE], models: null });
-        controller.setConfig({ library: "https://assets.test/jp/" });
+        controller.setConfig({ sources: TEST_SOURCES });
 
         // User clicks preview immediately while stage isn't ready and models aren't loaded yet!
         const previewPromise = controller.previewClip(CAST_KANADE, { motion: "w-wave01", facial: "face_smile" });
@@ -663,7 +668,7 @@ describe("StoryStageController — first-class 0-actor Solo / Audition Preview",
 
         const stage = latestStage()!;
         expect(stage.actors).toEqual([SOLO_PREVIEW_ACTOR_ID]);
-        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.bundle).toBe("model/17_kanade");
+        expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/17_kanade");
         expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.motion).toBe("w-wave01");
         expect(stage.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.facial).toBe("face_smile");
         controller.dispose();
@@ -748,7 +753,7 @@ describe("StoryStageController — crash recovery, state replay & error classifi
         expect(controller.getSnapshot().phase.kind).toBe("ready");
         expect(controller.getSnapshot().isSoloPreview).toBe(true);
         expect(stage2.actors).toEqual([SOLO_PREVIEW_ACTOR_ID]);
-        expect(stage2.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.bundle).toBe("model/17_kanade");
+        expect(stage2.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.asset).toBe("live2d/model/17_kanade");
         expect(stage2.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.motion).toBe("w-wave01");
         expect(stage2.mounted.get(SOLO_PREVIEW_ACTOR_ID)?.facial).toBe("face_surprise");
         controller.dispose();
@@ -914,7 +919,7 @@ describe("StoryStageController — 0x0 resize guard, hidden-tab pause/resume & S
     test("handles React StrictMode detach/remount mid-boot cleanly without leaking workers or reusing transferred canvases", async () => {
         const { controller, host, stages } = createHarness({ createDelayMs: 25 });
         controller.setContext({ cast: [CAST_ICHIKA], models: TEST_MODELS });
-        controller.setConfig({ library: "https://assets.test/jp/" });
+        controller.setConfig({ sources: TEST_SOURCES });
 
         // Mount #1 begins async Stage.create.
         controller.setHost(host);
@@ -1214,7 +1219,7 @@ describe("Live2D Stage SSAA Antialiasing (computeStageCanvasSize & dynamic quali
         host.dpr = 1;
 
         controller.setContext({ cast: [CAST_ICHIKA], models: TEST_MODELS });
-        controller.setConfig({ library: "https://assets.test/jp/" });
+        controller.setConfig({ sources: TEST_SOURCES });
         controller.setHost(host);
         await waitMs(25);
         await flushMicrotasks();

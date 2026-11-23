@@ -16,8 +16,9 @@ export * from "./types/storyMaker";
 export * from "./types/live2d";
 export * from "./types/story";
 
-// Live2D model/clip helpers & catalog loaders
+// Live2D model/clip helpers, canonical asset-site loaders & catalog loaders
 export * from "./live2d/config";
+export * from "./live2d/site";
 export * from "./live2d/models";
 export * from "./live2d/clips";
 export * from "./live2d/subCharacterNames";

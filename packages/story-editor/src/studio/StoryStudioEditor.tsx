@@ -898,8 +898,8 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             [modelList],
         );
         const { kit: uiKit } = useStoryUiKit(stageDoc?.region ?? null);
-        const library = useMemo(
-            () => (stageDoc ? resolveLive2dSources(stageDoc.region).library : null),
+        const live2dSources = useMemo(
+            () => (stageDoc ? resolveLive2dSources(stageDoc.region) : null),
             [resolveLive2dSources, stageDoc],
         );
         useEffect(() => {
@@ -923,7 +923,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             shake: shakeStage,
             finish: finishStage,
             retry: retryStage,
-        } = useStoryStage({ library, cast: stageDoc?.cast ?? [], models: stageModels });
+        } = useStoryStage({ sources: live2dSources, cast: stageDoc?.cast ?? [], models: stageModels });
 
         const cancelEditorPreload = useCallback(() => {
             editorPreloadAbortRef.current?.abort();
@@ -953,7 +953,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         }, [assetSource, doc, playVoiceManifest]);
 
         useEffect(() => {
-            if (!editorPreloadKey || modelList.status === "loading" || !library) return;
+            if (!editorPreloadKey || modelList.status === "loading" || !live2dSources) return;
             const currentDoc = docRef.current;
             if (!currentDoc) return;
             const enabled = readAutoPreloadPreference(defaultAutoPreload);
@@ -962,7 +962,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 assetSource,
                 models: stageModels ?? undefined,
                 voiceManifest: playVoiceManifestRef.current,
-                libraryBaseUrl: library,
+                live2dSources,
                 includeUiKit,
             };
             void inspectStoryCacheStatus(currentDoc, preloadOptions).then((status) => {
@@ -1009,7 +1009,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     editorPreloadAbortRef.current = null;
                 }
             };
-        }, [assetSource, defaultAutoPreload, editorPreloadKey, includeUiKit, library, modelList.status, stageModels]);
+        }, [assetSource, defaultAutoPreload, editorPreloadKey, includeUiKit, live2dSources, modelList.status, stageModels]);
 
         const previewTargetNodeId = workspaceMode === "code" ? effectiveCodeNodeId : activeNodeId;
         const previewTargetBeatId = workspaceMode === "code" ? effectiveCodeBeatId : activeBeatId;
@@ -3068,7 +3068,12 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                         title={t("page.storyMaker.engine.unavailable")}
                         className={cn(immersive && hasReplacedTopBar && "mx-1.5 mt-1.5 sm:mx-2 sm:mt-2")}
                     >
-                        {t("page.storyMaker.engine.unavailableBanner")}
+                        <span>{t("page.storyMaker.engine.unavailableBanner")}</span>
+                        {stagePhase.message && (
+                            <span className="mt-1 block break-all font-mono type-label-s opacity-80">
+                                {stagePhase.message}
+                            </span>
+                        )}
                     </Banner>
                 )}
                 {stagePhase.kind === "unsupported" && (

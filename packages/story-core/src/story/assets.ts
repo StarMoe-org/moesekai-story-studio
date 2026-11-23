@@ -4,7 +4,13 @@
  * and story voices, plus cached directory/catalog loaders for the pickers.
  */
 import { getCoreFetch, getStoryCoreConfig } from "../config";
+import type { Live2DSources } from "../live2d/config";
 import { inferLive2DMotionBundleCandidates } from "../live2d/models";
+import {
+    extractLive2DMotionClips,
+    resolveLive2DAssetDocument,
+    resolveLive2DPublishedVersion,
+} from "../live2d/site";
 import {
     getAreaTalkVoiceUrl, getAssetBaseUrl, getBackgroundImageUrl, getCardStoryVoiceUrl, getStoryBgmUrl,
     getStorySoundEffectUrl, getStoryVoiceUrl, type AssetLine, type AssetSourceType,
@@ -19,10 +25,6 @@ function source(region: StoryRegion, line: AssetLine): AssetSourceType {
 
 function normalizeAssetPath(value: string): string {
     return value.trim().replace(/^\/+|\/+$/g, "");
-}
-
-function encodeAssetPath(path: string): string {
-    return path.split("/").map(encodeURIComponent).join("/");
 }
 
 function createAbortError(): Error {
@@ -519,104 +521,84 @@ export async function fetchStoryAssetNames(
     return items.map(item => item.name);
 }
 
-// ==================== Live2D Motion Bundle Clips (_ripper.json) ====================
+// ==================== Live2D Motion Set Clips (Canonical Asset Site) ====================
 
 export interface StoryMotionBundleClips {
     motions: string[];
     facials: string[];
 }
 
-interface RipperManifest {
-    files?: Array<{ path?: unknown }>;
-}
-
-const motionBundleClips = new Map<string, Promise<StoryMotionBundleClips>>();
-
 /**
- * Fetches body motion and facial clip names directly from a motion bundle's `_ripper.json`
- * manifest (matching `stage-worker.js` `clipPaths`), allowing `ClipPickerField` to browse clips
- * without waiting for WebGPU or placing the actor on stage. Cached per `${library}|${motionBundle}`.
+ * Fetches body motion and facial clip names directly from a motion set's canonical
+ * `live2d-motions` `.asset.json` document on the asset site, allowing clip pickers to browse
+ * clips without waiting for WebGPU or placing the actor on stage.
+ * Deduplicated and cached via `resolveLive2DAssetDocument`.
  */
-export function fetchMotionBundleClips(
-    library: string,
-    motionBundle: string,
+export async function fetchMotionBundleClips(
+    sources: Live2DSources,
+    motionAsset: string,
     signal?: AbortSignal,
 ): Promise<StoryMotionBundleClips> {
-    if (signal?.aborted) return Promise.reject(createAbortError());
-    const root = library.endsWith("/") ? library : `${library}/`;
-    const bundle = normalizeAssetPath(motionBundle);
-    if (!bundle) return Promise.resolve({ motions: [], facials: [] });
-    const key = `${root}|${bundle}`;
-    let cached = motionBundleClips.get(key);
-    if (!cached) {
-        const url = `${root}library/${encodeAssetPath(bundle)}/_ripper.json`;
-        const loading = (async (): Promise<StoryMotionBundleClips> => {
-            const response = await getCoreFetch()(url, { credentials: "omit", headers: { Accept: "application/json" } });
-            if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-            const manifest = await response.json() as RipperManifest;
-            const motions = new Set<string>();
-            const facials = new Set<string>();
-            for (const entry of manifest.files ?? []) {
-                const filePath = typeof entry?.path === "string" ? entry.path : "";
-                const match = /^(motion|facial)\/(.+)\.sse-motion\.json$/.exec(filePath);
-                if (!match) continue;
-                if (match[1] === "motion") motions.add(match[2]);
-                else facials.add(match[2]);
-            }
-            return {
-                motions: [...motions].sort(compareStrings),
-                facials: [...facials].sort(compareStrings),
-            };
-        })();
-        motionBundleClips.set(key, loading);
-        loading.catch(() => motionBundleClips.delete(key));
-        cached = loading;
+    if (signal?.aborted) throw createAbortError();
+    const asset = normalizeAssetPath(motionAsset);
+    if (!asset) return { motions: [], facials: [] };
+    const resolved = await resolveLive2DAssetDocument(sources, asset, "live2d-motions", signal);
+    if (!resolved) {
+        throw new Error(`Live2D motion asset not found: ${asset}`);
     }
-    return withAbortSignal(cached, signal);
+    return extractLive2DMotionClips(resolved.doc);
 }
 
 export interface ResolvedLive2DModelClips extends StoryMotionBundleClips {
+    /** The resolved motion asset path (e.g. `live2d/motion/v2_17kanade_motion_base`), or `null`. */
     motionBundle: string | null;
 }
 
 /**
- * Fetches body motion and facial clips for any Live2D `modelId` even when `motionBundle` is unknown
- * or the actor is not mounted on stage, probing `motionBundle` first and then deterministic
+ * Fetches body motion and facial clips for any Live2D `modelId` even when `motionAsset` is unknown
+ * or the actor is not mounted on stage, probing `motionAsset` first and then deterministic
  * candidates from `inferLive2DMotionBundleCandidates(modelId)`.
  */
 export async function fetchLive2DModelClips(
-    library: string,
+    sources: Live2DSources,
     modelId: string,
-    motionBundle?: string | null,
+    motionAsset?: string | null,
     signal?: AbortSignal,
 ): Promise<ResolvedLive2DModelClips> {
     if (signal?.aborted) throw createAbortError();
     const candidates: string[] = [];
     const seen = new Set<string>();
-    const addCandidate = (bundle: string | null | undefined) => {
-        const clean = bundle ? normalizeAssetPath(bundle) : "";
+    const addCandidate = (asset: string | null | undefined) => {
+        const clean = asset ? normalizeAssetPath(asset) : "";
         if (clean && !seen.has(clean)) {
             seen.add(clean);
             candidates.push(clean);
         }
     };
-    addCandidate(motionBundle);
+    addCandidate(motionAsset);
     for (const candidate of inferLive2DMotionBundleCandidates(modelId)) {
         addCandidate(candidate);
     }
 
+    if (candidates.length === 0) {
+        return { motions: [], facials: [], motionBundle: null };
+    }
+
+    const version = sources.version?.trim() || (await resolveLive2DPublishedVersion(sources, signal));
+    const pinnedSources: Live2DSources = { ...sources, version };
+
     let lastError: unknown = null;
-    for (const bundle of candidates) {
+    for (const candidate of candidates) {
         if (signal?.aborted) throw createAbortError();
         try {
-            const clips = await fetchMotionBundleClips(library, bundle, signal);
-            return { ...clips, motionBundle: bundle };
+            const clips = await fetchMotionBundleClips(pinnedSources, candidate, signal);
+            return { ...clips, motionBundle: candidate };
         } catch (err) {
             if (signal?.aborted) throw createAbortError();
             lastError = err;
         }
     }
-    if (lastError && candidates.length > 0) {
+    if (lastError) {
         throw lastError;
     }
     return { motions: [], facials: [], motionBundle: null };

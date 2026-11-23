@@ -571,7 +571,7 @@ export function StoryPlayerView({
         openNotices,
     } = useStoryStudio();
     const includeUiKit = Boolean(sseWebScriptBase);
-    const library = useMemo(() => resolveLive2dSources(doc.region).library, [doc.region, resolveLive2dSources]);
+    const live2dSources = useMemo(() => resolveLive2dSources(doc.region), [doc.region, resolveLive2dSources]);
     const {
         hostRef: stageHostRef,
         phase: stagePhase,
@@ -583,7 +583,7 @@ export function StoryPlayerView({
         shake: shakeStage,
         finish: finishStage,
         retry: retryStage,
-    } = useStoryStage({ library, cast: doc.cast, models: stageModels });
+    } = useStoryStage({ sources: live2dSources, cast: doc.cast, models: stageModels });
 
     const [volume, setVolume] = useState(0.8);
     const [muted, setMuted] = useState(false);
@@ -608,10 +608,10 @@ export function StoryPlayerView({
             assetSource: preloadSource,
             models,
             voiceManifest,
-            libraryBaseUrl: library,
+            live2dSources,
             includeUiKit,
         }),
-        [doc, includeUiKit, library, models, preloadSource, voiceManifest],
+        [doc, includeUiKit, live2dSources, models, preloadSource, voiceManifest],
     );
 
     /** First SceneNode (and optional beat) referencing each asset, for click-to-jump in Media Bin. */
@@ -866,7 +866,7 @@ export function StoryPlayerView({
         }
     }, []);
 
-    /** Inspect local caches once `models.json` resolves and honor auto-preload preference without blocking playback. */
+    /** Inspect local caches once the model catalog resolves and honor auto-preload preference without blocking playback. */
     useEffect(() => {
         if (modelList.status === "loading") return;
         const enabled = readAutoPreloadPreference(defaultAutoPreload);
@@ -875,7 +875,7 @@ export function StoryPlayerView({
             assetSource: preloadSource,
             models: stageModels ?? undefined,
             voiceManifest,
-            libraryBaseUrl: library,
+            live2dSources,
             includeUiKit,
         };
         void inspectStoryCacheStatus(doc, preloadOptions).then((status) => {
@@ -920,7 +920,7 @@ export function StoryPlayerView({
                 preloadAbortRef.current = null;
             }
         };
-    }, [defaultAutoPreload, doc, includeUiKit, library, modelList.status, preloadSource, stageModels, voiceManifest]);
+    }, [defaultAutoPreload, doc, includeUiKit, live2dSources, modelList.status, preloadSource, stageModels, voiceManifest]);
 
     const latestItem = history[history.length - 1] ?? null;
     const activeFrame = latestItem?.frame ?? null;
@@ -2111,7 +2111,12 @@ export function StoryPlayerView({
 
             {stagePhase.kind === "unavailable" && (
                 <Banner tone="info" title={t("page.storyMaker.engine.unavailable")}>
-                    {t("page.storyMaker.engine.unavailableBanner")}
+                    <span>{t("page.storyMaker.engine.unavailableBanner")}</span>
+                    {stagePhase.message && (
+                        <span className="mt-1 block break-all font-mono type-label-s opacity-80">
+                            {stagePhase.message}
+                        </span>
+                    )}
                 </Banner>
             )}
             {stagePhase.kind === "unsupported" && (

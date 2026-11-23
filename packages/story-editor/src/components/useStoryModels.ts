@@ -9,7 +9,7 @@ export type StoryModelList =
     | { status: "error"; message: string }
     | { status: "ready"; models: Live2DModel[] };
 
-/** A server's Live2D models (its story library's `models.json`), read again on retry. */
+/** A server's Live2D models (from the canonical asset site's directory listings), read again on retry. */
 export function useStoryModels(region: StoryRegion | null) {
     const [result, setResult] = useState<{ key: string; list: StoryModelList } | null>(null);
     const [attempt, setAttempt] = useState(0);

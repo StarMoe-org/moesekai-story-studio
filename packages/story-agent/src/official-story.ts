@@ -11,7 +11,14 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliDecompressSync } from "node:zlib";
-import type { StoryRegion } from "@moesekai/story-core";
+import {
+    fetchLive2DModels,
+    fetchMotionBundleClips,
+    inferLive2DMotionBundleCandidates,
+    live2dSources,
+    type StoryRegion,
+} from "@moesekai/story-core";
+import { runWithStoryCoreLive2D } from "./live2d-core";
 
 // ==================== Constants & Endpoints ====================
 
@@ -27,8 +34,6 @@ const STORAGE_DOMAINS: Record<"main" | "backup", string[]> = {
     backup: ["https://storage.exmeaning.com", "https://storage.pjsk.moe"],
 };
 
-const RIPPER_LIBRARY_BASE = "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper";
-const LIVE2D_INDEX_BASE = "https://assets.pjsk.moe/sekai-extra-assets/sekai-live2d";
 const STORY_SEARCH_BASE = "https://assets.pjsk.moe/sekai-extra-assets/sekai-story-search";
 const TRANSLATION_BASE = "https://translation.exmeaning.com";
 
@@ -134,9 +139,6 @@ const COLLAB_MODEL_RE = /^(?:v2_)?sub_(?:sanrio|enst|egg)_/;
 const SUB_VARIANT_SEGMENTS = new Set([
     "black", "zoom", "side", "stage", "casual", "lesson",
     "rw", "patient", "sunset", "cloth", "jc", "school", "transform",
-]);
-const SHARED_MOTION_SUFFIXES = new Set([
-    "black", "zoom", "stage", "casual", "lesson", "rw", "sunset", "cloth",
 ]);
 
 export const SUB_CHARACTER_NAMES: Record<
@@ -579,56 +581,8 @@ function normalizeOwnerKeyWithKnown(rawKey: string | null, keySet: ReadonlySet<s
     return rawKey;
 }
 
-function deriveSubMotionStem(modelId: string): string | null {
-    let s = String(modelId ?? "").trim();
-    const prefix = s.startsWith("v2_") ? "v2_" : "";
-    if (prefix) s = s.slice(3);
-    if (!s.startsWith("sub_")) return null;
-    const parts = s.slice(4).split("_").filter(Boolean);
-    while (parts.length > 1) {
-        const last = parts[parts.length - 1];
-        if (SHARED_MOTION_SUFFIXES.has(last) || /^live\d*$/.test(last)) parts.pop();
-        else break;
-    }
-    if (parts.length > 0) {
-        const m = /^(.+?)black\d*$/.exec(parts[parts.length - 1]);
-        if (m && m[1].length >= 3) parts[parts.length - 1] = m[1];
-    }
-    return parts.length > 0 ? `${prefix}sub_${parts.join("_")}` : null;
-}
-
 export function inferMotionBundleCandidates(modelId: string): string[] {
-    if (!modelId) return [];
-    const out: string[] = [];
-    const add = (name: string) => {
-        if (!name) return;
-        const bundle = `live2d/motion/${name}`;
-        if (!out.includes(bundle)) out.push(bundle);
-    };
-    const mainChar = /^(v2_)?(\d{2}[a-z]+)_/.exec(modelId);
-    if (mainChar) {
-        add(`${mainChar[1] ?? ""}${mainChar[2]}_motion_base`);
-        return out;
-    }
-    const collab = /^(v2_)?(clb\d+_\d{2}[a-z]+\d*)/.exec(modelId);
-    if (collab) {
-        add(`${modelId}_motion_base`);
-        add(`${collab[1] ?? ""}${collab[2]}_motion_base`);
-        return out;
-    }
-    const sub = /^(v2_)?(sub_[a-z0-9]+)/.exec(modelId);
-    if (sub) {
-        const stem = deriveSubMotionStem(modelId);
-        if (stem) add(`${stem}_motion_base`);
-        add(`${modelId}_motion_base`);
-        const ownerKey = deriveOwnerKey(modelId);
-        if (ownerKey) add(`${sub[1] ?? ""}sub_${ownerKey}_motion_base`);
-        const base = `${sub[1] ?? ""}${sub[2]}`;
-        add(`${base}_motion_base`);
-        return out;
-    }
-    add(`${modelId}_motion_base`);
-    return out;
+    return inferLive2DMotionBundleCandidates(modelId);
 }
 
 export function isStoryCgBackground(bgId: string | null | undefined): boolean {
@@ -644,10 +598,6 @@ function truncate(text: unknown, maxLen = 72): string {
     const clean = String(text ?? "").replace(/\s+/g, " ").trim();
     if (clean.length <= maxLen) return clean;
     return `${clean.slice(0, Math.max(1, maxLen - 1))}…`;
-}
-
-function encodePath(p: string): string {
-    return String(p).split("/").map(encodeURIComponent).join("/");
 }
 
 function pickLocalizedName(
@@ -2454,80 +2404,92 @@ export async function browseOfficialCatalog(
 
     if (subkind === "models") {
         const searchQuery = String(opts.search || opts.filter || arg || "").trim();
-        let models: CatalogModelItem[] = [];
-        let source = "models-v2";
-        try {
-            const idx = await fetchJsonWithFallback(
-                [`${LIVE2D_INDEX_BASE}/${net.region}/models.json`],
-                "live2d-index",
-                net.region,
-                TTL_MASTER_MS,
-                net,
-            );
-            if (idx?.format === 2) {
-                models = normalizeCatalogModels(idx, { region: net.region });
-            } else {
-                source = "models-v1-enriched";
-                const [chara2ds, subGameChars] = await Promise.all([
-                    fetchMaster("character2ds.json", net).catch(() => []),
-                    fetchMaster("subGameCharacters.json", net).catch(() => []),
-                ]);
-                models = normalizeCatalogModels({ ...idx, chara2ds, subGameChars }, { region: net.region });
-            }
-        } catch {
-            source = "storage-fallback";
-            const [{ directories }, chara2ds, subGameChars] = await Promise.all([
-                fetchDirectoryListing("live2d/model/", net),
-                fetchMaster("character2ds.json", net).catch(() => []),
-                fetchMaster("subGameCharacters.json", net).catch(() => []),
-            ]);
-            models = normalizeCatalogModels({ directories, chara2ds, subGameChars }, { region: net.region });
-        }
+        const [coreModels, chara2ds, subGameChars] = await Promise.all([
+            runWithStoryCoreLive2D(
+                {
+                    fetchImpl: opts.fetchImpl,
+                    line: net.line,
+                    bypassCache: net.noCache,
+                    timeoutMs: HTTP_TIMEOUT_MS,
+                },
+                () => fetchLive2DModels(net.region),
+            ),
+            fetchMaster("character2ds.json", net).catch(() => []),
+            fetchMaster("subGameCharacters.json", net).catch(() => []),
+        ]);
+        const models = normalizeCatalogModels(
+            { models: coreModels, chara2ds, subGameChars },
+            { region: net.region },
+        );
         const filtered = filterAndRankCatalogModels(models, {
             kind: opts.kind,
             char: opts.char,
             search: searchQuery,
             v2Only: opts.v2Only,
         });
-        return { kind: "models", region: net.region, source, total: filtered.length, items: filtered.slice(0, limit) };
+        return {
+            kind: "models",
+            region: net.region,
+            source: "asset-site-listings",
+            total: filtered.length,
+            items: filtered.slice(0, limit),
+        };
     }
 
     if (subkind === "clips") {
         const modelId = (arg ?? "").trim();
         if (!modelId) throw new Error("catalog clips requires arg=<modelId>");
-        const candidates = inferMotionBundleCandidates(modelId);
-        let manifest: any = null;
-        let matchedBundle = "";
-        for (const bundle of candidates) {
-            const url = `${RIPPER_LIBRARY_BASE}/${net.region}/library/${encodePath(bundle)}/_ripper.json`;
-            try {
-                manifest = await fetchJsonWithFallback([url], "ripper-motion", `${net.region}:${bundle}`, TTL_SCENARIO_MS, net);
-                matchedBundle = bundle;
-                break;
-            } catch {
-                // try next
-            }
+        const candidates: string[] = [];
+        const addCandidate = (asset: string) => {
+            const clean = asset.trim().replace(/^\/+|\/+$/g, "");
+            if (clean && !candidates.includes(clean)) candidates.push(clean);
+        };
+        if (modelId.startsWith("live2d/motion/")) {
+            addCandidate(modelId);
+        } else if (modelId.endsWith("_motion_base")) {
+            addCandidate(`live2d/motion/${modelId}`);
         }
-        if (!manifest) {
-            throw new Error(`Motion bundle _ripper.json not found for '${modelId}' (tried: ${candidates.join(", ")}).`);
+        for (const candidate of inferMotionBundleCandidates(modelId)) {
+            addCandidate(candidate);
         }
-        const motions: string[] = [];
-        const facials: string[] = [];
-        for (const f of manifest.files ?? []) {
-            const match = /^(motion|facial)\/(.+)\.sse-motion\.json$/.exec(String(f?.path ?? ""));
-            if (!match) continue;
-            if (filterLower && !match[2].toLowerCase().includes(filterLower)) continue;
-            if (match[1] === "motion") motions.push(match[2]);
-            else facials.push(match[2]);
+
+        const resolved = await runWithStoryCoreLive2D(
+            {
+                fetchImpl: opts.fetchImpl,
+                line: net.line,
+                bypassCache: net.noCache,
+                timeoutMs: HTTP_TIMEOUT_MS,
+            },
+            async () => {
+                const sources = live2dSources(net.region, net.line);
+                for (const bundle of candidates) {
+                    try {
+                        const clips = await fetchMotionBundleClips(sources, bundle);
+                        return { bundle, clips };
+                    } catch {
+                        // try next candidate
+                    }
+                }
+                return null;
+            },
+        );
+        if (!resolved) {
+            throw new Error(
+                `Live2D motion .asset.json not found for '${modelId}' (tried: ${candidates.join(", ")}).`,
+            );
         }
-        motions.sort();
-        facials.sort();
+        const motions = filterLower
+            ? resolved.clips.motions.filter((m) => m.toLowerCase().includes(filterLower))
+            : resolved.clips.motions;
+        const facials = filterLower
+            ? resolved.clips.facials.filter((f) => f.toLowerCase().includes(filterLower))
+            : resolved.clips.facials;
         const type = opts.type ?? "all";
         return {
             kind: "clips",
             region: net.region,
             modelId,
-            motionBundle: matchedBundle,
+            motionBundle: resolved.bundle,
             totalMotions: motions.length,
             totalFacials: facials.length,
             motions: type === "facial" ? [] : motions.slice(0, limit),

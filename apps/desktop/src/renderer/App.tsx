@@ -7,6 +7,7 @@ import {
     parseStoryScript,
     serializeStoryScript,
     type StarterLocale,
+    type StoryCoreConfig,
     type StoryDocument,
     type StoryLocalePack,
     type StoryVoiceManifest,
@@ -61,37 +62,41 @@ import { ExportMskDialog, type ExportDialogMode } from "./components/ExportMskDi
 import { PiAgentPanel, type PiAgentPanelHandle } from "./components/PiAgentPanel";
 import { SettingsDialog, type SettingsDialogTab } from "./components/SettingsDialog";
 import { UpdateDialog } from "./components/UpdateDialog";
+import live2dViewerManifest from "../../vendor/live2d-viewer/manifest.json";
 import { WorkspaceWelcome } from "./components/WorkspaceWelcome";
 import { formatDesktopMessage } from "./i18n/desktopMessages";
 
 const CACHED_CUBISM_CORE_URL = "moesekai-cache://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js";
+const LIVE2D_SCRIPT_VERSION =
+    live2dViewerManifest.version && live2dViewerManifest.commit
+        ? `${live2dViewerManifest.version}-${live2dViewerManifest.commit.slice(0, 12)}`
+        : live2dViewerManifest.version || null;
 
-function applyDesktopStoryCoreCacheRouting(enabled: boolean): void {
+function buildDesktopStoryCoreConfig(enabled: boolean): Partial<StoryCoreConfig> {
     if (enabled) {
-        configureStoryCore({
+        return {
             assetDomainMain: "moesekai-cache://storage.pjsk.moe",
             assetDomainBackup: "moesekai-cache://storage.exmeaning.com",
             masterDataDomainMain: "moesekai-cache://metadata.pjsk.moe",
             masterDataDomainBackup: "moesekai-cache://metadata.exmeaning.com",
             moeStaticBaseUrl: "moesekai-cache://moe.exmeaning.com",
-            live2dLibraryBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/",
-            live2dIndexBase: "moesekai-cache://assets.pjsk.moe/sekai-extra-assets/sekai-live2d/",
             live2dCoreUrl: CACHED_CUBISM_CORE_URL,
             sseWebSite: "moesekai-cache://storage.pjsk.moe/",
-        });
-    } else {
-        configureStoryCore({
-            assetDomainMain: DEFAULT_STORY_CORE_CONFIG.assetDomainMain,
-            assetDomainBackup: DEFAULT_STORY_CORE_CONFIG.assetDomainBackup,
-            masterDataDomainMain: DEFAULT_STORY_CORE_CONFIG.masterDataDomainMain,
-            masterDataDomainBackup: DEFAULT_STORY_CORE_CONFIG.masterDataDomainBackup,
-            moeStaticBaseUrl: DEFAULT_STORY_CORE_CONFIG.moeStaticBaseUrl,
-            live2dLibraryBase: DEFAULT_STORY_CORE_CONFIG.live2dLibraryBase,
-            live2dIndexBase: DEFAULT_STORY_CORE_CONFIG.live2dIndexBase,
-            live2dCoreUrl: DEFAULT_STORY_CORE_CONFIG.live2dCoreUrl,
-            sseWebSite: DEFAULT_STORY_CORE_CONFIG.sseWebSite,
-        });
+        };
     }
+    return {
+        assetDomainMain: DEFAULT_STORY_CORE_CONFIG.assetDomainMain,
+        assetDomainBackup: DEFAULT_STORY_CORE_CONFIG.assetDomainBackup,
+        masterDataDomainMain: DEFAULT_STORY_CORE_CONFIG.masterDataDomainMain,
+        masterDataDomainBackup: DEFAULT_STORY_CORE_CONFIG.masterDataDomainBackup,
+        moeStaticBaseUrl: DEFAULT_STORY_CORE_CONFIG.moeStaticBaseUrl,
+        live2dCoreUrl: DEFAULT_STORY_CORE_CONFIG.live2dCoreUrl,
+        sseWebSite: DEFAULT_STORY_CORE_CONFIG.sseWebSite,
+    };
+}
+
+function applyDesktopStoryCoreCacheRouting(enabled: boolean): void {
+    configureStoryCore(buildDesktopStoryCoreConfig(enabled));
 }
 
 // Configure persistent `moesekai-cache://` routing BEFORE any editor/player mounts.
@@ -949,6 +954,11 @@ export const App: React.FC = () => {
     // so they never flip string identity when `appInfo` resolves asynchronously (avoiding Live2D worker restarts).
     const isCustomAppOrigin =
         typeof window !== "undefined" && window.location.protocol === "moesekai-app:";
+    const storyCoreConfig = useMemo(
+        () => buildDesktopStoryCoreConfig(settings.assetCacheEnabled),
+        [settings.assetCacheEnabled],
+    );
+
     const live2dScriptBase =
         appInfo?.live2dScriptBase ?? (isCustomAppOrigin ? "moesekai-app://app/live2d-viewer/" : "/live2d-viewer/");
     const unitIconBaseUrl =
@@ -1064,6 +1074,8 @@ export const App: React.FC = () => {
             assetLine={settings.assetLine}
             defaultRegion={activeDoc?.region ?? "jp"}
             live2dScriptBase={live2dScriptBase}
+            live2dScriptVersion={LIVE2D_SCRIPT_VERSION}
+            coreConfig={storyCoreConfig}
             unitIconBaseUrl={unitIconBaseUrl}
             themeSeed={settings.themeSeed}
             themeMode={settings.themeMode}

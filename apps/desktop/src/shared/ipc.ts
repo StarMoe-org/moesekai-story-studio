@@ -212,6 +212,7 @@ export interface ExportPreflightRequest {
     script: string;
     includePositions: boolean;
     checkLiveAssets?: boolean;
+    assetLine?: "main" | "backup";
     locales?: Record<string, unknown>;
     voiceManifest?: unknown | null;
     workspaceRoot?: string | null;

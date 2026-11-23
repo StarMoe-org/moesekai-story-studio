@@ -2,7 +2,7 @@
  * Runtime-configurable CDN endpoints and host hooks for `@moesekai/story-core`.
  *
  * Defaults directly to Moesekai's public CORS `*` endpoints (`storage.pjsk.moe`,
- * `assets.pjsk.moe`, `metadata.pjsk.moe`, `moe.exmeaning.com`) so the core package
+ * `metadata.pjsk.moe`, `moe.exmeaning.com`) so the core package
  * works out-of-the-box in Web, Electron, Node, and Bun with zero host configuration.
  *
  * Hosts (such as `Snowy_Viewer/web` or Electron desktop) may call `configureStoryCore(...)`
@@ -30,10 +30,8 @@ export interface StoryCoreConfig {
     defaultAssetLine: AssetLine;
     /** Default server region when an unqualified source string like `"main"` is passed. */
     defaultRegion: StoryRegion;
-    /** Live2D story library base URL (trailing slash). */
-    live2dLibraryBase: string;
-    /** Live2D model index base URL (trailing slash). */
-    live2dIndexBase: string;
+    /** Optional Live2D canonical asset site override (empty string = derive from active `assetDomainMain`/`assetDomainBackup`). */
+    live2dSite: string;
     /** Optional Cubism Core JS URL override. */
     live2dCoreUrl: string | null;
     /** Optional dev proxy directory prefix for Live2D fetches. */
@@ -66,8 +64,7 @@ export const DEFAULT_STORY_CORE_CONFIG: Readonly<StoryCoreConfig> = Object.freez
     moeStaticBaseUrl: "https://moe.exmeaning.com",
     defaultAssetLine: "main",
     defaultRegion: "jp",
-    live2dLibraryBase: "https://assets.pjsk.moe/sekai-extra-assets/sekai-story/ripper/",
-    live2dIndexBase: "https://assets.pjsk.moe/sekai-extra-assets/sekai-live2d/",
+    live2dSite: "",
     live2dCoreUrl: null,
     live2dAssetProxy: null,
     sseWebSite: "https://storage.pjsk.moe/",
@@ -98,10 +95,37 @@ export function resetStoryCoreConfig(): Readonly<StoryCoreConfig> {
     return currentConfig;
 }
 
-/** Safe environment variable reader that works in Browser, Electron, Node, and Bun. */
+/**
+ * Safe environment variable reader that works in Next.js browser bundles (via literal
+ * `process.env.NEXT_PUBLIC_*` static replacement), Electron, Node, and Bun.
+ */
 export function readPublicEnv(name: string): string | undefined {
-    if (typeof process === "undefined" || !process.env) return undefined;
-    return process.env[name];
+    try {
+        switch (name) {
+            case "NEXT_PUBLIC_LIVE2D_SITE":
+                return process.env.NEXT_PUBLIC_LIVE2D_SITE;
+            case "NEXT_PUBLIC_LIVE2D_CORE_URL":
+                return process.env.NEXT_PUBLIC_LIVE2D_CORE_URL;
+            case "NEXT_PUBLIC_LIVE2D_ASSET_PROXY":
+                return process.env.NEXT_PUBLIC_LIVE2D_ASSET_PROXY;
+            case "NEXT_PUBLIC_SSE_WEB_SITE":
+                return process.env.NEXT_PUBLIC_SSE_WEB_SITE;
+            case "NEXT_PUBLIC_SSE_WEB_CORE_URL":
+                return process.env.NEXT_PUBLIC_SSE_WEB_CORE_URL;
+            case "NEXT_PUBLIC_SSE_WEB_ASSET_PROXY":
+                return process.env.NEXT_PUBLIC_SSE_WEB_ASSET_PROXY;
+            case "NEXT_PUBLIC_SSE_WEB_FONT_BASE":
+                return process.env.NEXT_PUBLIC_SSE_WEB_FONT_BASE;
+            case "NEXT_PUBLIC_SSE_WEB_CLIENT_FONTS":
+                return process.env.NEXT_PUBLIC_SSE_WEB_CLIENT_FONTS;
+            case "NEXT_PUBLIC_SSE_WEB_BUNDLED_FONTS":
+                return process.env.NEXT_PUBLIC_SSE_WEB_BUNDLED_FONTS;
+            default:
+                return typeof process !== "undefined" && process.env ? process.env[name] : undefined;
+        }
+    } catch {
+        return undefined;
+    }
 }
 
 /** Resolves the configured `fetch` function or falls back to `globalThis.fetch`. */

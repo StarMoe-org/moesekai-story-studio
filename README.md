@@ -7,7 +7,7 @@ Edit once in this repository and both the Electron desktop app and the `pjsk.moe
 ## Workspace Structure
 
 - `packages/story-core` (`@moesekai/story-core`) — Pure, zero-DOM-required story graph schema, `.msk` bidirectional parser/serializer, static compiler, runtime VM, i18n localization packs, custom voice manifest & POSIX USTAR audio bundler, PJSK CDN asset helpers, and cross-host storage/export contracts.
-- `packages/story-editor` (`@moesekai/story-editor`) — Framework-agnostic React 19 + Tailwind CSS 4 + Material 3 Expressive visual flow canvas, Live2D multi-actor stage, player, 5-locale dictionaries, and host slot hooks.
+- `packages/story-editor` (`@moesekai/story-editor`) — Framework-agnostic React 19 + Tailwind CSS 4 + Material 3 Expressive visual flow canvas, Live2D multi-actor stage (loaded at runtime from the host-served `live2dScriptBase` rather than bundled in the package), player, 5-locale dictionaries, and host slot hooks.
 - `packages/story-agent` (`@moesekai/story-agent`) — AI story authoring agent engine with custom Story Maker tools (official story mining, `.msk` edit + snapshot rollback, strict validation & exhaustive branch simulation, persistent per-project sessions, multilingual i18n and user-supplied voice manifest workflows).
 - `apps/desktop` — Electron desktop studio with local `.msk` folder workspaces, preflight-checked `.msk`/bundle export pipeline, `moesekai-app://` Live2D/WASM protocol, resizable MoeSekai Agent panel, and CNB-first auto-fallback GitHub update checker.
 - `skills/moesekai-story-script` — Standalone AI agent skill with zero-dependency `msk-core.mjs` built directly from `@moesekai/story-core`.
@@ -45,7 +45,7 @@ All packages and the Desktop app follow lockstep semantic versioning (`X.Y.Z`). 
 
 ## Asset Attribution
 
-Default public game assets, Live2D story libraries, and masterdata endpoints are served by **Moesekai (`pjsk.moe`)** (`storage.pjsk.moe`, `assets.pjsk.moe`, `metadata.pjsk.moe`) with CORS `*`. Please keep attribution to **Moesekai (pjsk.moe)** when embedding or redistributing.
+Default public game assets, canonical Live2D asset-site listings & `.asset.json` manifests, and masterdata endpoints are served by **Moesekai (`pjsk.moe`)** (`storage.pjsk.moe` / backup `storage.exmeaning.com`, `metadata.pjsk.moe` / backup `metadata.exmeaning.com`, plus the `sekai-story-search` corpus on `assets.pjsk.moe/sekai-extra-assets/sekai-story-search`) with CORS `*`. Please keep attribution to **Moesekai (pjsk.moe)** when embedding or redistributing.
 
 ## License
 

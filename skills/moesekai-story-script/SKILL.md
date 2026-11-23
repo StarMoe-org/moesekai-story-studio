@@ -9,7 +9,7 @@ MoeSekai Script (`.msk`) is the lossless, human- and AI-readable DSL for **Moese
 
 **Golden Rule**: Assets are referenced strictly by official Project SEKAI names on the story's server (`jp`, `cn`, `tw`, `kr`, `en`) — **never guess IDs!** Both scripts in `scripts/` are **100% standalone zero-dependency Node.js 18+ CLIs** (no repo checkout, no `npm install`).
 
-> **Public Asset Attribution**: Moesekai (`pjsk.moe`) serves `metadata.pjsk.moe`, `storage.pjsk.moe`, `assets.pjsk.moe`, and `translation.exmeaning.com` with `Access-Control-Allow-Origin: *`. Credit `Moesekai (pjsk.moe)` if you embed these endpoints externally.
+> **Public Asset Attribution**: Moesekai (`pjsk.moe`) serves `metadata.pjsk.moe`, `storage.pjsk.moe`, `assets.pjsk.moe/sekai-extra-assets/sekai-story-search`, and `translation.exmeaning.com` with `Access-Control-Allow-Origin: *`. Credit `Moesekai (pjsk.moe)` if you embed these endpoints externally.
 
 ---
 
@@ -89,7 +89,7 @@ node scripts/validate-msk.mjs - --strict --simulate --verify-assets < path/to/st
 What this verifies automatically:
 - **Syntax & Static Compiler (`--strict`)**: 0 parse errors, 0 compiler errors, **0 compiler warnings** (`mergeNodeInheritAmbiguous`, `stageSlotDuplicate`, `stageActorOverlap`, `portUnwired`, `nodeUnreachable`, `sceneEmptyBeats`, `endingMissing`, `cycleDetected`).
 - **Exhaustive Branch Simulator (`--simulate`)**: Executes every reachable choice combination, confirming every `end` is reachable, 0 deadlocks/loops/disconnected paths, 0 unintended runtime overlaps, and flags any off-stage `talk` beats (`stage.speaking === null`) for review.
-- **Live HTTPS Asset Verifier (`--verify-assets`)**: Checks every BG `.webp`, BGM `.mp3`, SE `.mp3`, voice `.mp3`, Live2D model `_ripper.json`, AND every single `motion` and `facial` clip against Moesekai's live ripper manifests! When a clip is missing, it prints **`did you mean: ...`** suggestions from that character's real manifest so you can self-heal in one turn!
+- **Live HTTPS Asset Verifier (`--verify-assets`)**: Checks every BG `.webp`, BGM `.mp3`, SE `.mp3`, voice `.mp3`, Live2D model on `storage.pjsk.moe/<region>/live2d/model/`, AND every single `motion` and `facial` clip against the model's canonical `live2d-motions` `.asset.json` document! When a clip is missing, it prints **`did you mean: ...`** suggestions from that character's real motion set so you can self-heal in one turn!
 - Add `--assets` to dump all concrete preview URLs (if you have vision/audio tools, inspect the `.webp` backgrounds and `.mp3` audio directly!) or `--dump-json` for machine-readable reports.
 
 **Do NOT stop until exit code is `0` with 0 errors, 0 warnings, 0 missing assets, and 100% endings reached!**

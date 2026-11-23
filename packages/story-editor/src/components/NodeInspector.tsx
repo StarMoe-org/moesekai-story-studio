@@ -127,7 +127,7 @@ export function NodeInspector({
 }: NodeInspectorProps) {
     const { t, resolveLive2dSources } = useStoryStudio();
     const line: AssetLine = assetSource.startsWith("backup") ? "backup" : "main";
-    const library = useMemo(() => resolveLive2dSources(doc.region).library, [doc.region, resolveLive2dSources]);
+    const live2dSources = useMemo(() => resolveLive2dSources(doc.region), [doc.region, resolveLive2dSources]);
 
     const selectedNode = selectedNodeId ? doc.nodes[selectedNodeId] ?? null : null;
     const selectedScene = selectedNode?.type === "scene" ? selectedNode : null;
@@ -257,10 +257,11 @@ export function NodeInspector({
         return member ? modelInfo[member.modelId] : undefined;
     };
 
-    const motionBundleOf = (castKey: string | undefined): string | null => {
+    const motionAssetOf = (castKey: string | undefined): string | null => {
         const member = castMemberOf(castKey);
         if (!member) return null;
-        return models.find(item => item.id === member.modelId)?.motions[0] ?? null;
+        const found = models.find(item => item.id === member.modelId);
+        return found?.motion ?? found?.motions[0] ?? null;
     };
 
     const renderClipPair = (
@@ -296,9 +297,9 @@ export function NodeInspector({
                     kind="motion"
                     value={motion}
                     info={actorInfoOf(castKey)}
-                    library={library}
+                    sources={live2dSources}
                     modelId={targetCast?.modelId ?? null}
-                    motionBundle={motionBundleOf(castKey)}
+                    motionAsset={motionAssetOf(castKey)}
                     disabled={disabled}
                     onChange={onMotionChange}
                     onPreviewClip={canPreview && targetCast ? clipName => onPreviewClip?.(targetCast, { motion: clipName }) : undefined}
@@ -307,9 +308,9 @@ export function NodeInspector({
                     kind="facial"
                     value={facial}
                     info={actorInfoOf(castKey)}
-                    library={library}
+                    sources={live2dSources}
                     modelId={targetCast?.modelId ?? null}
-                    motionBundle={motionBundleOf(castKey)}
+                    motionAsset={motionAssetOf(castKey)}
                     disabled={disabled}
                     onChange={onFacialChange}
                     onPreviewClip={canPreview && targetCast ? clipName => onPreviewClip?.(targetCast, { facial: clipName }) : undefined}

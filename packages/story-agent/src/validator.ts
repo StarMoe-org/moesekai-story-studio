@@ -6,13 +6,21 @@ import {
     compileStoryGraph,
     createInitialRuntime,
     detectStageActorOverlaps,
+    extractLive2DMotionClips,
+    fetchLive2DModels,
+    inferLive2DMotionBundleCandidates,
+    live2dSiteListingUrl,
     live2dSources,
     parseStoryScript,
+    resolveLive2DAssetDocument,
     type CompiledStoryProgram,
+    type Live2DModel,
+    type Live2DSources,
     type StoryDocument,
     type StoryRegion,
     type StoryVoiceRef,
 } from "@moesekai/story-core";
+import { runWithStoryCoreLive2D } from "./live2d-core";
 import type {
     StoryAssetReport,
     StoryAssetVerificationReport,
@@ -33,10 +41,6 @@ const MAX_BLOCKING_STEPS_PER_PATH = 1000;
 
 function normalizeAssetPath(value: string | undefined): string {
     return String(value ?? "").trim().replace(/^\/+|\/+$/g, "");
-}
-
-function encodePath(p: string): string {
-    return p.split("/").map(encodeURIComponent).join("/");
 }
 
 function assetBase(region: StoryRegion, line: "main" | "backup"): string {
@@ -145,14 +149,16 @@ export function collectAssetReport(
     region: StoryRegion,
     line: "main" | "backup" = "main",
 ): StoryAssetReport {
-    const l2dSources = live2dSources(region);
+    const l2dSources = live2dSources(region, line);
+    const live2dModelListingUrl = live2dSiteListingUrl(l2dSources, "live2d/model/");
+    const live2dMotionListingUrl = live2dSiteListingUrl(l2dSources, "live2d/motion/");
     const castModelByKey = new Map<string, string>();
     const live2dMap = new Map<
         string,
         {
             modelId: string;
             castKeys: string[];
-            modelManifestUrl: string;
+            modelAssetPath: string;
             motions: Set<string>;
             facials: Set<string>;
         }
@@ -166,7 +172,7 @@ export function collectAssetReport(
             entry = {
                 modelId: member.modelId,
                 castKeys: [],
-                modelManifestUrl: `${l2dSources.library}library/live2d/model/${encodePath(member.modelId)}/_ripper.json`,
+                modelAssetPath: `live2d/model/${member.modelId}`,
                 motions: new Set(),
                 facials: new Set(),
             };
@@ -246,7 +252,7 @@ export function collectAssetReport(
     const live2d = [...live2dMap.values()].map((item) => ({
         modelId: item.modelId,
         castKeys: item.castKeys,
-        modelManifestUrl: item.modelManifestUrl,
+        modelAssetPath: item.modelAssetPath,
         motions: [...item.motions].sort(),
         facials: [...item.facials].sort(),
     }));
@@ -254,8 +260,10 @@ export function collectAssetReport(
     return {
         region,
         line,
-        live2dIndexUrl: l2dSources.index,
-        live2dLibraryBaseUrl: l2dSources.library,
+        live2dSiteUrl: l2dSources.site,
+        live2dModelListingUrl,
+        live2dMotionListingUrl,
+        ...(l2dSources.proxy ? { live2dProxyUrl: l2dSources.proxy } : {}),
         live2d,
         backgrounds,
         bgm,
@@ -329,39 +337,6 @@ export function suggestClips(
     return [...availableSet].sort().slice(0, maxSuggestions);
 }
 
-function inferMotionBundleCandidates(modelId: string): string[] {
-    const out: string[] = [];
-    const add = (name: string) => {
-        if (!name) return;
-        const bundle = `live2d/motion/${name}`;
-        if (!out.includes(bundle)) out.push(bundle);
-    };
-    const mainChar = /^(v2_)?(\d{2}[a-z]+)_/.exec(modelId);
-    if (mainChar) {
-        add(`${mainChar[1] ?? ""}${mainChar[2]}_motion_base`);
-        return out;
-    }
-    const collab = /^(v2_)?(clb\d+_\d{2}[a-z]+\d*)/.exec(modelId);
-    if (collab) {
-        add(`${modelId}_motion_base`);
-        add(`${collab[1] ?? ""}${collab[2]}_motion_base`);
-        return out;
-    }
-    const sub = /^(v2_)?(sub_[a-z0-9]+)/.exec(modelId);
-    if (sub) {
-        add(`${modelId}_motion_base`);
-        const base = `${sub[1] ?? ""}${sub[2]}`;
-        add(`${base}_motion_base`);
-        const stripped = base.replace(/(?:black|white|zoom|young|child)?\d*$/, "");
-        if (stripped && stripped !== base && stripped.length > 4) {
-            add(`${stripped}_motion_base`);
-        }
-        return out;
-    }
-    add(`${modelId}_motion_base`);
-    return out;
-}
-
 async function checkUrlExists(
     url: string,
     fetchImpl: typeof fetch,
@@ -433,129 +408,184 @@ export async function verifyAssetsLive(
         se: 0,
         voices: 0,
     };
-    let live2dIndexSource: "models.json" | "ripper-fallback" = "models.json";
+    let live2dSource: StoryAssetVerificationReport["live2dSource"] = "asset-site-listings";
+    let live2dPublishedVersion: string | undefined;
 
-    const modelById = new Map<string, { id: string; motion?: string; motions?: string[] }>();
     if (assetReport.live2d.length > 0) {
-        try {
-            const res = await fetchImpl(assetReport.live2dIndexUrl, {
-                signal: AbortSignal.timeout(timeoutMs),
-            });
-            if (res.ok) {
-                const json = (await res.json()) as {
-                    models?: Array<{ id?: string; motion?: string; motions?: string[] }>;
-                };
-                for (const m of json.models ?? []) {
-                    if (typeof m?.id === "string") {
-                        modelById.set(m.id, { id: m.id, motion: m.motion, motions: m.motions });
-                    }
-                }
-            } else {
-                live2dIndexSource = "ripper-fallback";
-            }
-        } catch {
-            live2dIndexSource = "ripper-fallback";
-        }
-
-        const ripperCache = new Map<
-            string,
-            { bundle: string; motions: Set<string>; facials: Set<string>; url: string } | null
-        >();
-        const loadMotionBundle = async (bundle: string) => {
-            if (!bundle) return null;
-            if (ripperCache.has(bundle)) return ripperCache.get(bundle) ?? null;
-            const url = `${assetReport.live2dLibraryBaseUrl}library/${encodePath(bundle)}/_ripper.json`;
-            try {
-                const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
-                if (!res.ok) {
-                    ripperCache.set(bundle, null);
-                    return null;
-                }
-                const data = (await res.json()) as { files?: Array<{ path?: string }> };
-                const motions = new Set<string>();
-                const facials = new Set<string>();
-                for (const f of data.files ?? []) {
-                    const match = /^(motion|facial)\/(.+)\.sse-motion\.json$/.exec(String(f?.path ?? ""));
-                    if (!match) continue;
-                    if (match[1] === "motion") motions.add(match[2]);
-                    else facials.add(match[2]);
-                }
-                const result = { bundle, motions, facials, url };
-                ripperCache.set(bundle, result);
-                return result;
-            } catch {
-                ripperCache.set(bundle, null);
-                return null;
-            }
+        const l2dSources: Live2DSources = {
+            site: assetReport.live2dSiteUrl,
+            region: assetReport.region,
+            ...(assetReport.live2dProxyUrl ? { proxy: assetReport.live2dProxyUrl } : {}),
         };
 
-        for (const item of assetReport.live2d) {
-            checked.live2dModels += 1;
-            const indexed = modelById.get(item.modelId);
-            let modelVerified = Boolean(indexed);
-            if (!modelVerified) {
-                const directCheck = await checkUrlExists(item.modelManifestUrl, fetchImpl, timeoutMs);
-                if (directCheck.ok) {
-                    modelVerified = true;
-                } else {
-                    missing.push({
-                        category: "live2d-model",
-                        name: item.modelId,
-                        url: item.modelManifestUrl,
-                        reason: `Model _ripper.json unavailable (HTTP ${directCheck.status})`,
-                    });
-                    continue;
+        await runWithStoryCoreLive2D(
+            {
+                fetchImpl: options?.fetchImpl,
+                line: assetReport.line,
+                siteOverride: assetReport.live2dSiteUrl,
+                proxyOverride: assetReport.live2dProxyUrl,
+                timeoutMs,
+            },
+            async () => {
+                const modelById = new Map<string, Live2DModel>();
+                let listingLoaded = false;
+
+                try {
+                    const listedModels = await fetchLive2DModels(assetReport.region);
+                    if (listedModels.length > 0) {
+                        listingLoaded = true;
+                        for (const model of listedModels) {
+                            modelById.set(model.id, model);
+                        }
+                    } else {
+                        live2dSource = "asset-document-fallback";
+                    }
+                } catch {
+                    live2dSource = "asset-document-fallback";
                 }
-            }
-            if (item.motions.length > 0 || item.facials.length > 0) {
-                const candidates: string[] = [];
-                if (indexed?.motion) candidates.push(indexed.motion);
-                for (const m of indexed?.motions ?? []) {
-                    if (m && !candidates.includes(m)) candidates.push(m);
-                }
-                for (const inferred of inferMotionBundleCandidates(item.modelId)) {
-                    if (!candidates.includes(inferred)) candidates.push(inferred);
-                }
-                let manifest = null;
-                for (const bundle of candidates) {
-                    const loaded = await loadMotionBundle(bundle);
-                    if (loaded) {
-                        manifest = loaded;
-                        break;
+
+                const motionBundleCache = new Map<
+                    string,
+                    { bundle: string; motions: Set<string>; facials: Set<string>; url: string } | null
+                >();
+
+                const loadMotionBundle = async (bundle: string) => {
+                    if (!bundle) return null;
+                    if (motionBundleCache.has(bundle)) return motionBundleCache.get(bundle) ?? null;
+                    try {
+                        const resolved = await resolveLive2DAssetDocument(
+                            l2dSources,
+                            bundle,
+                            "live2d-motions",
+                        );
+                        if (!resolved) {
+                            motionBundleCache.set(bundle, null);
+                            return null;
+                        }
+                        live2dPublishedVersion ??= resolved.version;
+                        const { motions, facials } = extractLive2DMotionClips(resolved.doc);
+                        const result = {
+                            bundle,
+                            motions: new Set(motions),
+                            facials: new Set(facials),
+                            url: resolved.url,
+                        };
+                        motionBundleCache.set(bundle, result);
+                        return result;
+                    } catch {
+                        motionBundleCache.set(bundle, null);
+                        return null;
+                    }
+                };
+
+                for (const item of assetReport.live2d) {
+                    checked.live2dModels += 1;
+                    const indexed = modelById.get(item.modelId);
+                    let modelVerified = Boolean(indexed);
+
+                    if (!modelVerified) {
+                        if (listingLoaded) {
+                            missing.push({
+                                category: "live2d-model",
+                                name: item.modelId,
+                                url: assetReport.live2dModelListingUrl,
+                                reason: `Model '${item.modelId}' not found in canonical Live2D model listing`,
+                            });
+                            continue;
+                        }
+
+                        try {
+                            const resolvedModel = await resolveLive2DAssetDocument(
+                                l2dSources,
+                                item.modelAssetPath,
+                                "live2d-model",
+                            );
+                            if (resolvedModel) {
+                                live2dPublishedVersion ??= resolvedModel.version;
+                                modelVerified = true;
+                            }
+                        } catch {
+                            // handled as missing below
+                        }
+
+                        if (!modelVerified) {
+                            missing.push({
+                                category: "live2d-model",
+                                name: item.modelId,
+                                url: assetReport.live2dModelListingUrl,
+                                reason: `Model '${item.modelAssetPath}' live2d-model .asset.json unavailable`,
+                            });
+                            continue;
+                        }
+                    }
+
+                    if (item.motions.length > 0 || item.facials.length > 0) {
+                        const candidates: string[] = [];
+                        const addCandidate = (asset: string | null | undefined) => {
+                            const clean = asset?.trim();
+                            if (clean && !candidates.includes(clean)) candidates.push(clean);
+                        };
+                        addCandidate(indexed?.motion);
+                        for (const m of indexed?.motions ?? []) {
+                            addCandidate(m);
+                        }
+                        for (const inferred of inferLive2DMotionBundleCandidates(item.modelId)) {
+                            addCandidate(inferred);
+                        }
+
+                        let manifest: {
+                            bundle: string;
+                            motions: Set<string>;
+                            facials: Set<string>;
+                            url: string;
+                        } | null = null;
+                        for (const bundle of candidates) {
+                            const loaded = await loadMotionBundle(bundle);
+                            if (loaded) {
+                                manifest = loaded;
+                                break;
+                            }
+                        }
+
+                        if (!manifest) {
+                            missing.push({
+                                category: "live2d-motion-bundle",
+                                name: `${item.modelId} (${candidates[0] ?? "none"})`,
+                                url: assetReport.live2dMotionListingUrl,
+                                reason: "Motion bundle live2d-motions .asset.json unavailable",
+                            });
+                            continue;
+                        }
+
+                        for (const motion of item.motions) {
+                            checked.live2dClips += 1;
+                            if (!manifest.motions.has(motion)) {
+                                missing.push({
+                                    category: "live2d-motion",
+                                    name: `${item.modelId}:${motion}`,
+                                    url: manifest.url,
+                                    reason: `Motion not found in ${manifest.bundle}`,
+                                    suggestions: suggestClips(motion, manifest.motions),
+                                });
+                            }
+                        }
+
+                        for (const facial of item.facials) {
+                            checked.live2dClips += 1;
+                            if (!manifest.facials.has(facial)) {
+                                missing.push({
+                                    category: "live2d-facial",
+                                    name: `${item.modelId}:${facial}`,
+                                    url: manifest.url,
+                                    reason: `Facial not found in ${manifest.bundle}`,
+                                    suggestions: suggestClips(facial, manifest.facials),
+                                });
+                            }
+                        }
                     }
                 }
-                if (!manifest) {
-                    missing.push({
-                        category: "live2d-motion-bundle",
-                        name: `${item.modelId} (${candidates[0] ?? "none"})`,
-                        reason: "Motion bundle _ripper.json unavailable",
-                    });
-                    continue;
-                }
-                for (const motion of item.motions) {
-                    checked.live2dClips += 1;
-                    if (!manifest.motions.has(motion)) {
-                        missing.push({
-                            category: "live2d-motion",
-                            name: `${item.modelId}:${motion}`,
-                            reason: `Motion not found in ${manifest.bundle}`,
-                            suggestions: suggestClips(motion, manifest.motions),
-                        });
-                    }
-                }
-                for (const facial of item.facials) {
-                    checked.live2dClips += 1;
-                    if (!manifest.facials.has(facial)) {
-                        missing.push({
-                            category: "live2d-facial",
-                            name: `${item.modelId}:${facial}`,
-                            reason: `Facial not found in ${manifest.bundle}`,
-                            suggestions: suggestClips(facial, manifest.facials),
-                        });
-                    }
-                }
-            }
-        }
+            },
+        );
     }
 
     for (const bg of assetReport.backgrounds) {
@@ -600,7 +630,13 @@ export async function verifyAssetsLive(
         }
     }
 
-    return { ok: missing.length === 0, live2dIndexSource, checked, missing };
+    return {
+        ok: missing.length === 0,
+        live2dSource,
+        ...(live2dPublishedVersion ? { live2dPublishedVersion } : {}),
+        checked,
+        missing,
+    };
 }
 
 // ==================== Exhaustive Branch & Ending Simulator ====================

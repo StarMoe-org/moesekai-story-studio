@@ -23,15 +23,15 @@ function copyDirRecursive(src: string, dest: string): void {
     }
 }
 
-function copyStaticEditorAssets(): void {
-    const assetPairs: Array<{ label: string; sources: string[]; target: string }> = [
+function copyStaticAssets(): void {
+    const assetPairs: Array<{ label: string; sources: string[]; target: string; required?: boolean }> = [
         {
             label: "live2d-viewer",
             sources: [
-                path.resolve(appRoot, "../../packages/story-editor/dist/live2d-viewer"),
-                path.resolve(appRoot, "../../packages/story-editor/assets/live2d-viewer"),
+                path.join(appRoot, "vendor", "live2d-viewer"),
             ],
             target: path.join(distDir, "live2d-viewer"),
+            required: true,
         },
         {
             label: "unit-icons",
@@ -46,6 +46,11 @@ function copyStaticEditorAssets(): void {
     for (const pair of assetPairs) {
         const source = pair.sources.find(dir => fs.existsSync(dir));
         if (!source) {
+            if (pair.required) {
+                throw new Error(
+                    `[desktop:build] Required ${pair.label} assets missing (checked: ${pair.sources.join(", ")})`,
+                );
+            }
             console.warn(`[desktop:build] ${pair.label} assets not found yet; skipping copy.`);
             continue;
         }
@@ -124,7 +129,7 @@ export async function buildMainTargets(): Promise<void> {
         external: ["electron"],
     });
 
-    copyStaticEditorAssets();
+    copyStaticAssets();
 }
 
 async function buildRenderer(): Promise<void> {

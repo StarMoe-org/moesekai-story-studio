@@ -264,6 +264,7 @@ export function registerIpcHandlers(deps: IpcHandlersDeps): void {
     ipcMain.handle(IPC_CHANNELS.EXPORT_PREFLIGHT, (_ev, req: ExportPreflightRequest) =>
         runExportPreflight({
             ...req,
+            assetLine: req.assetLine ?? settings.getAppSettings().assetLine,
             workspaceRoot: req.workspaceRoot ?? workspace.getActiveRootDir(),
         }),
     );
