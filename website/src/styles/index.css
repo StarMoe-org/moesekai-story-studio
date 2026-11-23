@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", "PingFang SC", "Noto Sans SC", "Hiragino Sans", "Noto Sans JP", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-apple-white: #FFFFFF;
+  --color-apple-gray: #F5F5F7;
+  --color-apple-control: #E8E8ED;
+  --color-apple-ink: #1D1D1F;
+  --color-apple-muted: #6E6E73;
+  --color-apple-blue: #0071E3;
+  --color-apple-link: #0066CC;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    font-family: var(--font-sans);
+    background-color: #FFFFFF;
+    color: #1D1D1F;
+  }
+
+  body {
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    background: rgba(0, 113, 227, 0.16);
+    color: #1D1D1F;
+  }
+}
+
+.ease-apple {
+  transition-timing-function: cubic-bezier(0.28, 0.11, 0.32, 1);
+}
+
+@keyframes appleDotFill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.animate-apple-progress {
+  transform-origin: left center;
+  animation: appleDotFill 6s linear forwards;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .animate-apple-progress {
+    animation: none !important;
+    transform: scaleX(1) !important;
+  }
+}

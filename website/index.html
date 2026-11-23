@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MoeSekai Story Studio — 许愿，即成剧 | PJSK Live2D 互动剧情创作工作室 (story.pjsk.moe)</title>
+    <meta
+      name="description"
+      content="MoeSekai Story Studio 是 StarMoe Collective 开源免费的 Project SEKAI（世界计划 / PJSK）Live2D 互动剧情制作器。内置 MoeSekai Story Agent，支持一句话许愿生成并校验 .msk 剧本、快照一键回滚、多角色 Live2D 同台演出、可视化节点画布与 .msk 源码双向同步、26 主角 + 158 配角服装素材库、5 语种双栏校对与自定义配音打包，提供 Windows、macOS、Linux 与 pjsk.moe 网页版。"
+    />
+    <meta
+      name="keywords"
+      content="MoeSekai Story Studio, PJSK 剧情制作器, Project SEKAI 同人剧情编辑器, 世界计划 Live2D 剧情工具, AI 生成剧情, MoeSekai Story Agent, .msk 剧本, Live2D 同台演出, pjsk.moe, story.pjsk.moe, StarMoe, Project SEKAI Story Maker, PJSK 剧情生成器, 多结局分支剧情编辑器"
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="author" content="StarMoe Collective" />
+    <meta name="theme-color" content="#FFFFFF" />
+    <link rel="canonical" href="https://story.pjsk.moe/" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:locale:alternate" content="zh_HK" />
+    <meta property="og:locale:alternate" content="ja_JP" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta property="og:site_name" content="MoeSekai Story Studio" />
+    <meta property="og:url" content="https://story.pjsk.moe/" />
+    <meta property="og:title" content="MoeSekai Story Studio — 许愿，即成剧 | PJSK Live2D 剧情创作工作室" />
+    <meta
+      property="og:description"
+      content="开源免费的 Project SEKAI Live2D 互动剧情制作工具：内置 AI 许愿写剧本与快照回滚、多角色 Live2D 同台、可视化节点画布 × .msk 源码双向同步、5 语校对与自定义配音打包。"
+    />
+    <meta property="og:image" content="https://story.pjsk.moe/showcase/og-hero.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="MoeSekai Story Studio 五角色 Live2D 实时舞台与节点画布界面" />
+
+    <!-- Twitter / X Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="MoeSekai Story Studio — Wish it. Stage it." />
+    <meta
+      name="twitter:description"
+      content="Open-source Project SEKAI Live2D interactive story studio with AI Story Agent, multi-actor stage, visual node flow <-> .msk sync, 5-locale i18n, custom voice packs, and zero-error preflight export."
+    />
+    <meta name="twitter:image" content="https://story.pjsk.moe/showcase/og-hero.png" />
+
+    <!-- White-hat Structured Data (SoftwareApplication + FAQPage + WebSite + Organization) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://star.moe/#organization",
+            "name": "StarMoe Collective",
+            "url": "https://star.moe",
+            "sameAs": [
+              "https://pjsk.moe",
+              "https://github.com/StarMoe-org/moesekai-story-studio",
+              "https://cnb.cool/StarMoe-org/moesekai-story-studio",
+              "https://space.bilibili.com/5441521"
+            ]
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://story.pjsk.moe/#website",
+            "url": "https://story.pjsk.moe/",
+            "name": "MoeSekai Story Studio",
+            "alternateName": ["story.pjsk.moe", "MoeSekai 剧情工作室"],
+            "inLanguage": ["zh-CN", "zh-HK", "ja-JP", "en-US"],
+            "publisher": { "@id": "https://star.moe/#organization" }
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://story.pjsk.moe/#app",
+            "name": "MoeSekai Story Studio",
+            "alternateName": [
+              "MoeSekai 剧情工作室",
+              "PJSK 剧情制作器",
+              "Project SEKAI 同人剧情编辑器",
+              "Project SEKAI Story Maker"
+            ],
+            "url": "https://story.pjsk.moe/",
+            "softwareVersion": "0.2.0",
+            "datePublished": "2026-11-24",
+            "applicationCategory": "MultimediaApplication",
+            "applicationSubCategory": "Visual Novel & Live2D Story Editor",
+            "operatingSystem": "Windows 10/11 (x64), macOS (Apple Silicon & Intel), Linux (AppImage x64), Web",
+            "isAccessibleForFree": true,
+            "license": "https://www.mozilla.org/en-US/MPL/2.0/",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            },
+            "author": { "@id": "https://star.moe/#organization" },
+            "downloadUrl": "https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/latest",
+            "installUrl": "https://github.com/StarMoe-org/moesekai-story-studio/releases/latest",
+            "codeRepository": "https://github.com/StarMoe-org/moesekai-story-studio",
+            "description": "MoeSekai Story Studio 是一款开源免费的 Project SEKAI（世界计划 / PJSK）Live2D 互动剧情创作工作室。支持通过内置 MoeSekai Story Agent 用自然语言许愿生成并静态校验 .msk 剧情脚本，每步自动留存快照并支持一键回滚；提供多角色 Live2D 实时舞台、互动选项分支试播、可视化节点画布与 .msk 纯文本源码实时双向同步、26 位主角与 158 位配角服装背景素材库、5 语种双栏字幕校对、自定义配音 / TTS 语音清单挂载、导出前零报错体检以及浅色 / 深色双工作区主题。",
+            "featureList": [
+              "MoeSekai Story Agent：输入一句想法自动检索官方角色语气与关系、生成规范 .msk 剧本、自动静态校验与全分支路径推演，每步自动保存快照并支持一键回滚",
+              "多角色 Live2D 实时舞台：支持最多五位角色同台演绎身体动作、面部表情、站位前后层级、听者 react() 联动与互动分支选项试播",
+              "可视化节点流画布 × .msk 纯文本脚本双向实时同步，零格式损耗",
+              "内置 26 位主角 + 158 位配角 v2 Live2D 服装、场景背景与 BGM 素材索引（直连 pjsk.moe）",
+              "5 语种（简中 / 繁中 / 日语 / 英语 / 韩语）双栏字幕校对，播放中无重载切换语言",
+              "自定义配音与 TTS 语音清单（manifest.json）按 beatId 自动核对并支持打包导出",
+              "导出前自动运行语法编译与分支图预检（0 错误 0 警告），支持导出纯净 .msk 或完整 .zip 剧情包并导入 pjsk.moe 播放器",
+              "内置浅色与深色工作区主题以及 26 位 PJSK 角色官方主题色",
+              "跨平台支持 Windows (.exe 安装版 / 便携版)、macOS (Apple Silicon / Intel .dmg)、Linux (.AppImage) 与 pjsk.moe 网页版，提供 CNB 与 GitHub 双源分发",
+              "开源发布 @moesekai/story-core、@moesekai/story-editor、@moesekai/story-agent npm 包及独立 AI Skill (skills/moesekai-story-script)"
+            ],
+            "screenshot": [
+              "https://story.pjsk.moe/showcase/01-hero-studio-mmj-light.webp",
+              "https://story.pjsk.moe/showcase/02-player-theater-minori-stage.webp",
+              "https://story.pjsk.moe/showcase/06-ai-agent-authoring.webp",
+              "https://story.pjsk.moe/showcase/07-ai-agent-snapshots-rollback.webp",
+              "https://story.pjsk.moe/showcase/16-studio-dark-theme-nightcord.webp"
+            ]
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://story.pjsk.moe/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "如何免费制作 Project SEKAI（世界计划 / PJSK）Live2D 同人互动剧情？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "下载免费开源的 MoeSekai Story Studio 桌面版（或打开 pjsk.moe/story-maker 网页版），即可直接调用 26 位主角与 158 位配角的 Live2D 模型、动作、表情、背景与 BGM，在实时舞台和可视化分支节点画布中编排多结局互动剧情，也可以让内置 MoeSekai Story Agent 根据你的想法直接生成初稿。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "MoeSekai Story Agent 的「许愿就能生成剧情」是怎么工作的？支持哪些 AI 模型？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "在编辑器右侧输入一句话想法或修改指令，MoeSekai Story Agent 会自动检索官方剧情中的人物称呼与语气、编写规范的 .msk 剧本、运行静态语法校验与全分支路径推演，并在每次修改前自动保存历史快照，不满意随时一键回滚。支持接入 OpenAI、Claude、Gemini、DeepSeek、Qwen、Grok、Kimi、GLM、OpenRouter、Mistral、Ollama 及自定义兼容接口，API 密钥仅存储在用户本地设备。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "什么是 .msk 剧本格式？可视化节点画布和 .msk 文本可以双向同步吗？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": ".msk 是 MoeSekai Story Studio 设计的简洁人类可读纯文本剧情格式，支持声明角色、变量、场景、背景、BGM、Live2D 动作表情、听者 react() 反应、多分支选项与条件结局。在可视化节点流画布与 .msk 代码模式之间随时切换，两边实时双向同步且无损保留节点布局与演出参数。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "支持多语言字幕校对和自定义配音 / TTS 语音吗？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "支持。字幕翻译独立存为 .i18n.json，提供中、繁、日、英、韩 5 种语言双栏精校，观看时可即时切换语言而不影响舞台演出；配音方面支持通过本地文件、HTTPS 链接或 JSON 挂载自定义配音或 TTS 音轨清单，编辑器会自动按 beatId 逐句校验匹配状态并可一键打包为完整 .zip 剧情包。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "MoeSekai Story Studio 支持哪些操作系统？是否开源免费？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "MoeSekai Story Studio 采用 MPL-2.0 协议完全开源免费，提供 Windows（安装程序与便携版 .exe）、macOS（Apple Silicon arm64 与 Intel x64 .dmg）及 Linux（.AppImage）安装包，可通过 CNB（中国大陆镜像）或 GitHub Releases 下载并附带 SHA-256 校验值；同时也可在 pjsk.moe 网页版直接使用。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "导出作品前如何确认剧情没有缺立绘、断链或报错？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "点击导出时编辑器会自动执行静态编译与分支图预检，检查节点连通性、变量引用、模型索引与多语言/配音匹配情况，确认 0 错误 0 警告后再输出单个纯净 .msk 文件或包含字幕与音频的完整 .zip 包，可直接导入 pjsk.moe 播放器分享观看。"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+JP:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-white text-[#1D1D1F] antialiased selection:bg-[#0071E3]/15 selection:text-[#1D1D1F]">
+    <div id="root"></div>
+
+    <!-- Semantic HTML fallback for non-JS crawlers (Baidu/Bing/Google) — invisible in JS browsers -->
+    <noscript>
+      <main style="max-width:860px;margin:48px auto;padding:0 24px;font-family:sans-serif;line-height:1.7;color:#1D1D1F;">
+        <article>
+          <h1>MoeSekai Story Studio — 许愿，即成剧（Project SEKAI Live2D 互动剧情创作工作室）</h1>
+          <p>
+            MoeSekai Story Studio（story.pjsk.moe）是由 StarMoe Collective 开源维护的 Project SEKAI（世界计划 / PJSK）Live2D 互动剧情创作工具。
+            支持通过内置 AI 剧情引擎 MoeSekai Story Agent 用一句话许愿直接生成、校验并可随时回滚的 .msk 互动剧本，在多角色 Live2D 实时舞台中演出，并与 pjsk.moe 网页版互通。
+          </p>
+          <section>
+            <h2>核心功能</h2>
+            <ul>
+              <li><strong>MoeSekai Story Agent 许愿生成剧情</strong>：输入一句想法或润色指令，自动检索官方剧情角色语气、编写规范 .msk 剧本、运行静态编译检查与全分支路径推演，每步自动留存快照支持一键回滚。</li>
+              <li><strong>多角色 Live2D 实时舞台与分支播放器</strong>：驱动最多五位 Live2D 角色同台演出动作、表情、站位层级与听者 react() 联动，试播时点击互动选项实时改变变量并走向不同结局。</li>
+              <li><strong>可视化节点流画布 × .msk 源码双向同步</strong>：拖连场景幕、选项分支、条件判断与结局节点，或直接编辑人类可读的 .msk 纯文本源码，双视图实时同步零损耗。</li>
+              <li><strong>26 主角 + 158 配角服装与场景素材库</strong>：直连 pjsk.moe 公开资源索引，快速搜索 v2 Live2D 服装模型、背景与 BGM。</li>
+              <li><strong>5 语种双栏字幕校对与自定义配音打包</strong>：支持中/繁/日/英/韩独立 .i18n.json 校对与播放中即时切换，支持挂载自定义配音或 TTS 语音清单并按 beatId 自动校验。</li>
+              <li><strong>导出前零报错体检与昼夜工作区主题</strong>：导出前自动验证 0 错误 0 警告，输出纯净 .msk 或完整 .zip 剧情包；内置浅色 / 深色双模式与 26 位 PJSK 角色官方主题色。</li>
+            </ul>
+          </section>
+          <section>
+            <h2>免费开源下载（v0.2.0 · MPL-2.0）</h2>
+            <ul>
+              <li><a href="https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/latest">CNB 中国大陆镜像下载（Windows / macOS / Linux）</a></li>
+              <li><a href="https://github.com/StarMoe-org/moesekai-story-studio/releases/latest">GitHub Releases 全球源下载（含 SHA256SUMS.txt）</a></li>
+              <li><a href="https://pjsk.moe/story-maker">打开 pjsk.moe 网页版在线创作</a></li>
+              <li><a href="https://github.com/StarMoe-org/moesekai-story-studio">源码仓库与 @moesekai/story-core / story-editor / story-agent 开源套件</a></li>
+            </ul>
+          </section>
+          <section lang="en">
+            <h2>About MoeSekai Story Studio</h2>
+            <p>
+              MoeSekai Story Studio is a free, MPL-2.0 open-source Project SEKAI Live2D interactive story studio for Windows, macOS, Linux, and the web (pjsk.moe).
+              Draft verified multi-ending .msk stories from a natural-language wish with snapshot rollback, direct multi-actor Live2D stages, sync visual node graphs with plain-text .msk scripts, proofread 5-language .i18n.json subtitles, bundle custom voice manifests, and run zero-error preflight exports.
+            </p>
+          </section>
+        </article>
+      </main>
+    </noscript>
+
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "name": "moesekai-story-studio-website",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Official promotional landing page for MoeSekai Story Studio (story.pjsk.moe)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^0.511.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^5.8.3",
+    "vite": "^7.3.8"
+  }
+}

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset
+  xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+  xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+>
+  <url>
+    <loc>https://story.pjsk.moe/</loc>
+    <lastmod>2026-11-24</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://story.pjsk.moe/showcase/og-hero.png</image:loc>
+      <image:title>MoeSekai Story Studio — Project SEKAI Live2D Story Creation Studio</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://story.pjsk.moe/showcase/06-ai-agent-authoring.webp</image:loc>
+      <image:title>MoeSekai Story Agent AI Script Authoring</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://story.pjsk.moe/showcase/02-player-theater-minori-stage.webp</image:loc>
+      <image:title>Multi-Actor Live2D Stage Playback</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://story.pjsk.moe/showcase/01-hero-studio-mmj-light.webp</image:loc>
+      <image:title>MoeSekai Story Studio Light Workspace</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://story.pjsk.moe/showcase/16-studio-dark-theme-nightcord.webp</image:loc>
+      <image:title>MoeSekai Story Studio Dark Workspace</image:title>
+    </image:image>
+  </url>
+</urlset>
