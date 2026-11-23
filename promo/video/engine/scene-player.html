@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080, initial-scale=1.0" />
+  <title>MoeSekai Story Studio — Apple Minimalist PV Engine</title>
+  <link rel="stylesheet" href="/engine/styles.css" />
+</head>
+<body>
+  <div id="viewport">
+    <div id="stage-layer">
+
+      <!-- ACT 1: s01_hook (#FFFFFF, pure centered typography, zero cards) -->
+      <section class="scene bg-white" id="scene-s01_hook">
+        <div class="s1-center">
+          <div class="s1-phrase s1-phrase-a" id="s1-pa">脑海里的 PJSK 剧情，<br />想亲手演出来？</div>
+          <div class="s1-phrase s1-phrase-b" id="s1-pb"><span class="muted">不必再</span>抠立绘、对口型、剪时间轴。</div>
+          <div class="s1-brand-mark" id="s1-brand">
+            <img src="/brand/icon.svg" alt="MoeSekai Story Studio" />
+            <span>MoeSekai Story Studio</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACT 2: s02_wish_agent (#F5F5F7, Wish bar -> giant borderless 06/07 + black sliding pill) -->
+      <section class="scene bg-gray" id="scene-s02_wish_agent">
+        <h2 class="apple-headline" id="s2-hl">许个愿，AI 写完一整幕。</h2>
+
+        <div class="s2-wish-wrap" id="s2-wish-wrap">
+          <div class="s2-wish-bar" id="s2-wish-bar">
+            <div class="s2-wish-text" id="s2-wish-text"></div>
+            <div class="s2-blue-btn" id="s2-blue-btn">生成</div>
+          </div>
+        </div>
+
+        <div class="apple-media tabbed" id="s2-media" style="opacity:0">
+          <img id="img-agent" alt="" style="display:none" />
+          <img id="img-snapshots" alt="" style="display:none; opacity:0" />
+        </div>
+
+        <div class="apple-tab-dock" id="s2-dock" style="opacity:0">
+          <div class="apple-tab-track">
+            <div class="apple-tab-slider" id="s2-slider" style="width:168px"></div>
+            <div class="apple-tab-item active" id="s2-t0">生成剧本</div>
+            <div class="apple-tab-item" id="s2-t1">快照回滚</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACT 3: s03_live2d (#FFFFFF, giant 80% borderless clip-01 -> clip-02, zero cards) -->
+      <section class="scene bg-white" id="scene-s03_live2d">
+        <h2 class="apple-headline" id="s3-hl">五位 Live2D，同台实时演出。</h2>
+        <div class="apple-media full" id="s3-media">
+          <img id="img-live2d-clip" alt="" style="display:none" />
+          <img id="img-branch-clip" alt="" style="display:none; opacity:0" />
+        </div>
+      </section>
+
+      <!-- ACT 4: s04_flow_msk (#F5F5F7, giant clip-03 -> clip-04 + Apple black sliding pill) -->
+      <section class="scene bg-gray" id="scene-s04_flow_msk">
+        <h2 class="apple-headline" id="s4-hl">节点画布，与 .msk 同步。</h2>
+        <div class="apple-media tabbed" id="s4-media">
+          <img id="img-flow-clip" alt="" style="display:none" />
+          <img id="img-msk-clip" alt="" style="display:none; opacity:0" />
+        </div>
+        <div class="apple-tab-dock" id="s4-dock">
+          <div class="apple-tab-track">
+            <div class="apple-tab-slider" id="s4-slider" style="width:168px"></div>
+            <div class="apple-tab-item active" id="s4-t0">节点画布</div>
+            <div class="apple-tab-item" id="s4-t1">.msk 源码</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACT 5: s05_assets_cast (#FFFFFF, giant borderless 09 -> 08 slow push, zero side cards) -->
+      <section class="scene bg-white" id="scene-s05_assets_cast">
+        <h2 class="apple-headline" id="s5-hl">26 位角色，点选即上台。</h2>
+        <div class="apple-media full" id="s5-media">
+          <img id="img-picker" alt="" style="display:none" />
+          <img id="img-inspector" alt="" style="display:none; opacity:0" />
+        </div>
+      </section>
+
+      <!-- ACT 6: s06_i18n_voice (#F5F5F7, clean borderless 10 -> 11 -> 12 + Apple black sliding pill) -->
+      <section class="scene bg-gray" id="scene-s06_i18n_voice">
+        <h2 class="apple-headline" id="s6-hl">五语校对，自定义配音打包。</h2>
+        <div class="apple-media tabbed" id="s6-media">
+          <img id="img-i18n" alt="" style="display:none" />
+          <img id="img-ja-play" alt="" style="display:none; opacity:0" />
+          <img id="img-voice" alt="" style="display:none; opacity:0" />
+        </div>
+        <div class="apple-tab-dock" id="s6-dock">
+          <div class="apple-tab-track">
+            <div class="apple-tab-slider" id="s6-slider" style="width:168px"></div>
+            <div class="apple-tab-item active" id="s6-t0">多语校对</div>
+            <div class="apple-tab-item" id="s6-t1">日语实播</div>
+            <div class="apple-tab-item" id="s6-t2">自定义配音</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACT 7: s07_preflight_open (#FFFFFF, 13 -> Light/Dark 01/16 split + monochrome OS vector SVGs) -->
+      <section class="scene bg-white" id="scene-s07_preflight_open">
+        <h2 class="apple-headline" id="s7-hl">零报错导出，全平台开源免费。</h2>
+        <div class="apple-media tabbed" id="s7-media">
+          <img id="img-export" alt="" style="display:none" />
+          <div class="s7-split-layer" id="s7-split">
+            <img id="img-light-hero" alt="" style="display:none" />
+            <div class="s7-dark-mask" id="s7-dark-mask">
+              <img id="img-dark-hero" alt="" style="display:none" />
+            </div>
+            <div class="s7-split-bar" id="s7-split-bar"></div>
+          </div>
+        </div>
+        <div class="s7-os-dock" id="s7-os-dock">
+          <div class="s7-os-icons">
+            <!-- Windows SVG -->
+            <svg viewBox="0 0 24 24"><path d="M2 3.5L11 2.2V11.2H2V3.5ZM12.3 2L22 0.6V11.2H12.3V2ZM2 12.5H11V21.5L2 20.2V12.5ZM12.3 12.5H22V23.1L12.3 21.7V12.5Z"/></svg>
+            <!-- Apple SVG -->
+            <svg viewBox="0 0 24 24"><path d="M18.71 19.5C17.88 20.74 17 21.95 15.66 21.97C14.32 22 13.89 21.18 12.37 21.18C10.84 21.18 10.37 21.95 9.1 22C7.79 22.05 6.8 20.68 5.96 19.47C4.25 17 2.94 12.45 4.7 9.39C5.57 7.87 7.13 6.91 8.82 6.88C10.1 6.86 11.32 7.75 12.11 7.75C12.89 7.75 14.37 6.68 15.92 6.84C16.57 6.87 18.39 7.1 19.56 8.82C19.47 8.88 17.39 10.1 17.41 12.63C17.44 15.65 20.06 16.66 20.09 16.67C20.06 16.74 19.67 18.11 18.71 19.5ZM13 3.5C13.73 2.67 14.94 2.04 15.94 2C16.07 3.17 15.6 4.35 14.9 5.19C14.21 6.04 13.07 6.7 11.95 6.61C11.8 5.46 12.36 4.26 13 3.5Z"/></svg>
+            <!-- Linux Tux/Terminal minimal vector SVG -->
+            <svg viewBox="0 0 24 24"><path d="M12 2C9.2 2 7.5 4.4 7.5 7.4C7.5 9.1 7.9 10.2 7.1 11.7C6.1 13.4 4.8 15.4 5.5 17.7C5.9 19 6.9 19.7 7.7 20C7.5 20.8 8.2 21.8 9.6 21.8C10.7 21.8 11.3 21.3 12 21.3C12.7 21.3 13.3 21.8 14.4 21.8C15.8 21.8 16.5 20.8 16.3 20C17.1 19.7 18.1 19 18.5 17.7C19.2 15.4 17.9 13.4 16.9 11.7C16.1 10.2 16.5 9.1 16.5 7.4C16.5 4.4 14.8 2 12 2ZM10.3 6.7C10.8 6.7 11.2 7.1 11.2 7.6C11.2 8.1 10.8 8.5 10.3 8.5C9.8 8.5 9.4 8.1 9.4 7.6C9.4 7.1 9.8 6.7 10.3 6.7ZM13.7 6.7C14.2 6.7 14.6 7.1 14.6 7.6C14.6 8.1 14.2 8.5 13.7 8.5C13.2 8.5 12.8 8.1 12.8 7.6C12.8 7.1 13.2 6.7 13.7 6.7ZM12 9.4C13.2 9.4 14.1 9.9 14.1 10.5C14.1 11.1 13.2 11.7 12 11.7C10.8 11.7 9.9 11.1 9.9 10.5C9.9 9.9 10.8 9.4 12 9.4Z"/></svg>
+          </div>
+          <span class="s7-os-sep"></span>
+          <span>pjsk.moe</span>
+          <span class="s7-os-sep"></span>
+          <span>MPL-2.0</span>
+        </div>
+      </section>
+
+      <!-- ACT 8: s08_cta (#FFFFFF, Pure Apple Closing + Minimal Triad) -->
+      <section class="scene bg-white" id="scene-s08_cta">
+        <div class="s8-center">
+          <img class="s8-logo" id="s8-logo" src="/brand/icon.svg" alt="MoeSekai Story Studio" />
+          <h1 class="s8-title" id="s8-title">MoeSekai Story Studio</h1>
+          <div class="s8-url-blue" id="s8-url">story.pjsk.moe</div>
+          <div class="s8-triad" id="s8-triad">
+            <div class="triad-btn" id="triad-like">
+              <svg viewBox="0 0 48 48" fill="none">
+                <path d="M16 21V39H9C7.9 39 7 38.1 7 37V23C7 21.9 7.9 21 9 21H16ZM20 21L26.8 9.8C27.9 8 30.6 8.3 31.3 10.3L30 19H38.2C40.5 19 42.1 21.2 41.4 23.4L37.5 36.2C37 37.9 35.4 39 33.7 39H20V21Z" fill="#FB7299"/>
+              </svg>
+              <span>点赞</span>
+            </div>
+            <div class="triad-btn" id="triad-coin">
+              <svg viewBox="0 0 48 48" fill="none">
+                <circle cx="24" cy="24" r="19" fill="#23ADE5"/>
+                <circle cx="24" cy="24" r="14" stroke="#FFFFFF" stroke-width="2.5" opacity="0.88"/>
+                <path d="M24 14V34M18 19H30M19 25H29" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round"/>
+              </svg>
+              <span>投币</span>
+            </div>
+            <div class="triad-btn" id="triad-fav">
+              <svg viewBox="0 0 48 48" fill="none">
+                <path d="M24 6L29.2 17.2L41.5 18.8L32.4 27.3L34.8 39.5L24 33.5L13.2 39.5L15.6 27.3L6.5 18.8L18.8 17.2L24 6Z" fill="#F59E0B"/>
+              </svg>
+              <span>收藏</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Pure Naked Apple Bilingual Subtitles (ZERO box, ZERO speaker pill!) -->
+    <div id="subtitle-layer">
+      <div id="sub-zh"></div>
+      <div id="sub-ja"></div>
+    </div>
+
+    <!-- Clean White Cross-Dissolve -->
+    <div id="transition-veil"></div>
+  </div>
+
+  <script src="/engine/scenes.js"></script>
+</body>
+</html>

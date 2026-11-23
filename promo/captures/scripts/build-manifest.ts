@@ -1,0 +1,377 @@
+import fs from "node:fs";
+import path from "node:path";
+
+interface ScreenshotEntry {
+    id: string;
+    path: string;
+    width: number;
+    height: number;
+    bytes: number;
+    category: string;
+    theme: "light" | "dark";
+    locale: "zh-CN" | "ja-JP";
+    characters: string[];
+    title_zh: string;
+    caption_zh: string;
+    recommended_for: Array<"hero" | "landing" | "video">;
+    video_scenes: string[];
+}
+
+interface ClipEntry {
+    id: string;
+    path: string;
+    width: number;
+    height: number;
+    fps: number;
+    duration_sec: number;
+    codec: string;
+    pix_fmt: string;
+    bytes: number;
+    category: string;
+    characters: string[];
+    title_zh: string;
+    caption_zh: string;
+    recommended_for: Array<"hero" | "landing" | "video">;
+    video_scenes: string[];
+}
+
+function readPngDims(filePath: string): { width: number; height: number; bytes: number } {
+    const buf = fs.readFileSync(filePath);
+    if (buf.length < 24 || buf.toString("ascii", 1, 4) !== "PNG") {
+        throw new Error(`Invalid PNG: ${filePath}`);
+    }
+    return {
+        width: buf.readUInt32BE(16),
+        height: buf.readUInt32BE(20),
+        bytes: buf.length,
+    };
+}
+
+function probeVideo(filePath: string): {
+    width: number;
+    height: number;
+    fps: number;
+    duration_sec: number;
+    codec: string;
+    pix_fmt: string;
+    bytes: number;
+} {
+    const res = Bun.spawnSync(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,codec_name,pix_fmt,avg_frame_rate,duration",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            filePath,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+    );
+    if (res.exitCode !== 0) {
+        throw new Error(`ffprobe failed for ${filePath}: ${res.stderr.toString()}`);
+    }
+    const parsed = JSON.parse(res.stdout.toString()) as {
+        streams?: Array<{
+            width: number;
+            height: number;
+            codec_name: string;
+            pix_fmt: string;
+            avg_frame_rate: string;
+            duration?: string;
+        }>;
+        format?: { duration?: string };
+    };
+    const st = parsed.streams?.[0];
+    if (!st) throw new Error(`No video stream in ${filePath}`);
+    const [num, den] = (st.avg_frame_rate || "60/1").split("/").map(Number);
+    const fps = den && Number.isFinite(num / den) ? Math.round((num / den) * 100) / 100 : 60;
+    const dur = Number(st.duration ?? parsed.format?.duration ?? "0");
+    return {
+        width: st.width,
+        height: st.height,
+        fps,
+        duration_sec: Math.round(dur * 100) / 100,
+        codec: st.codec_name,
+        pix_fmt: st.pix_fmt,
+        bytes: fs.statSync(filePath).size,
+    };
+}
+
+const SCREENSHOT_META: Array<Omit<ScreenshotEntry, "width" | "height" | "bytes">> = [
+    {
+        id: "hero-studio-mmj-light",
+        path: "promo/captures/screenshots/01-hero-studio-mmj-light.png",
+        category: "hero",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "MoeSekai Story Studio 全景工作台（MORE MORE JUMP! 舞台世界）",
+        caption_zh: "集多角色 Live2D 实时舞台、可视化节点流程画布、低代码组件箱与节拍属性检查器于一体的现代化桌面端剧情创作工作室。",
+        recommended_for: ["hero", "landing", "video"],
+        video_scenes: ["s02_reveal", "s08_cta"],
+    },
+    {
+        id: "player-theater-minori-stage",
+        path: "promo/captures/screenshots/02-player-theater-minori-stage.png",
+        category: "live2d-stage",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "全屏影院模式 · 五人同台 Live2D 实时演出",
+        caption_zh: "支持最多五名角色同台渲染、显式 Z 层级排序与高清 SSAA 抗锯齿，花里实乃理居中与 MORE MORE JUMP! 及初音未来在「舞台的世界」联袂登场。",
+        recommended_for: ["hero", "landing", "video"],
+        video_scenes: ["s03_live2d", "s02_reveal"],
+    },
+    {
+        id: "player-branching-choices-minori",
+        path: "promo/captures/screenshots/03-player-branching-choices-minori.png",
+        category: "interactive-branching",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka", "airi", "shizuku"],
+        title_zh: "宫益坂屋顶 · 互动选项分支实时试玩",
+        caption_zh: "原生还原 Project SEKAI 风格的互动选项弹层，点击不同分支即刻触发变量运算与差异化剧情路线。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s03_live2d"],
+    },
+    {
+        id: "flow-graph-branching",
+        path: "promo/captures/screenshots/04-flow-graph-branching.png",
+        category: "node-flow",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka", "airi", "shizuku"],
+        title_zh: "可视化分支流程图与条件变量编排",
+        caption_zh: "所见即所得的节点连线画布，清晰管理场景幕、多路选项分支、变量加减、条件判定与多结局收敛，支持一键自动排布与实时预览。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s04_flow_msk"],
+    },
+    {
+        id: "code-mode-msk-bidirectional",
+        path: "promo/captures/screenshots/05-code-mode-msk-bidirectional.png",
+        category: "msk-code",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "双向 .msk 剧本文本工作台 × 实时舞台分屏",
+        caption_zh: "可视化画布与人类可读的 MoeSekai Script (.msk) 无损双向同步，实时语法校验零报错，右侧同步驱动 Live2D 舞台预览。",
+        recommended_for: ["hero", "landing", "video"],
+        video_scenes: ["s04_flow_msk"],
+    },
+    {
+        id: "ai-agent-authoring",
+        path: "promo/captures/screenshots/06-ai-agent-authoring.png",
+        category: "ai-agent",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["kanade", "mafuyu", "ena", "mizuki"],
+        title_zh: "内置 MoeSekai AI Story Agent 智能创作助手",
+        caption_zh: "支持官方剧情检索、角色口吻考据、.msk 精准局部修补与自动编译校验，并生成可点击跳转节点的变更摘要表。",
+        recommended_for: ["hero", "landing", "video"],
+        video_scenes: ["s05_agent"],
+    },
+    {
+        id: "ai-agent-snapshots-rollback",
+        path: "promo/captures/screenshots/07-ai-agent-snapshots-rollback.png",
+        category: "ai-agent",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["kanade", "mafuyu", "ena", "mizuki"],
+        title_zh: "AI 创作快照历史与一键安全回滚",
+        caption_zh: "每次 Agent 自动改稿与手动保存均在本地生成版本快照，支持按会话检索并随时一键回滚至任意历史节点。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s05_agent"],
+    },
+    {
+        id: "cast-and-live2d-inspector",
+        path: "promo/captures/screenshots/08-cast-and-live2d-inspector.png",
+        category: "asset-inspector",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "演员表管理与 Live2D 动作表情联动检查器",
+        caption_zh: "在左侧快速管理登场演员并实时预览动作，在右侧精细配置身体动作、面部表情与同台角色同步反应。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s03_live2d"],
+    },
+    {
+        id: "asset-picker-costume-bg",
+        path: "promo/captures/screenshots/09-asset-picker-costume-bg.png",
+        category: "asset-inspector",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori"],
+        title_zh: "全角色 Live2D 模型与服装浏览器",
+        caption_zh: "直连 pjsk.moe 官方资源索引，覆盖全部 26 位主要角色、158 位剧情配角与多代 v2 服装变体，即搜即选。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s03_live2d"],
+    },
+    {
+        id: "i18n-multilang-proofread",
+        path: "promo/captures/screenshots/10-i18n-multilang-proofread.png",
+        category: "i18n",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka"],
+        title_zh: "原生多语言字幕包（.i18n.json）双栏校对",
+        caption_zh: "文本与舞台演出逻辑彻底解耦，支持中文、日语、英语等多语种 AI 翻译辅助、来源透明声明与逐句双栏校对。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s06_i18n_voice"],
+    },
+    {
+        id: "player-ja-locale-playback",
+        path: "promo/captures/screenshots/11-player-ja-locale-playback.png",
+        category: "i18n",
+        theme: "light",
+        locale: "ja-JP",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "多语言实时切换播放（日本語 UI ＋ 日语剧情字幕）",
+        caption_zh: "界面与剧情字幕无缝切换至日本語，角色名、地点牌与对话内容即时本地化，零重新渲染延迟。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s06_i18n_voice"],
+    },
+    {
+        id: "voice-manifest-bundler",
+        path: "promo/captures/screenshots/12-voice-manifest-bundler.png",
+        category: "voice-manifest",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "自定义配音音轨（voice-manifest.json）智能匹配",
+        caption_zh: "支持挂载 HTTPS 在线或本地社区配音包，按 beatId 自动核验匹配率（20/20 句全匹配），轻松为二创注入专属声线。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s06_i18n_voice"],
+    },
+    {
+        id: "export-preflight-dialog",
+        path: "promo/captures/screenshots/13-export-preflight-dialog.png",
+        category: "export",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "自动编译预检与多格式剧情包导出",
+        caption_zh: "导出前自动运行语法与图编译预检（0 错误 · 0 警告），一键输出纯净 .msk 脚本或包含多语言与配音的完整 .zip 剧情包。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s07_ecosystem"],
+    },
+    {
+        id: "settings-themes-and-updater",
+        path: "promo/captures/screenshots/14-settings-themes-and-updater.png",
+        category: "settings-themes",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "26 位角色动态主题色与 5 语言原生界面设置",
+        caption_zh: "内置 Material 3 Expressive 动态配色引擎，自由切换全部 26 位 PJSK 角色代表色、浅/深双色模式与 5 套桌面界面语言。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s07_ecosystem"],
+    },
+    {
+        id: "update-dialog-cnb-github",
+        path: "promo/captures/screenshots/15-update-dialog-cnb-github.png",
+        category: "updater",
+        theme: "light",
+        locale: "zh-CN",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "CNB 国内高速镜像 ＋ GitHub 自动回退更新器",
+        caption_zh: "桌面端内置双源版本检查器，默认优先从 CNB 国内镜像高速拉取新版本，网络波动时自动回退至 GitHub Releases。",
+        recommended_for: ["landing", "video"],
+        video_scenes: ["s07_ecosystem"],
+    },
+    {
+        id: "studio-dark-theme-nightcord",
+        path: "promo/captures/screenshots/16-studio-dark-theme-nightcord.png",
+        category: "theme-dark",
+        theme: "dark",
+        locale: "zh-CN",
+        characters: ["kanade", "mafuyu", "ena", "mizuki"],
+        title_zh: "深色模式 × 宵崎奏角色主题色（25时深夜工作室）",
+        caption_zh: "为长时间夜间创作打造的低眩光深色 Material 3 色阶，搭配 25-ji, Nightcord de. 四人同台演出与 19 节点多分支大纲。",
+        recommended_for: ["hero", "landing", "video"],
+        video_scenes: ["s02_reveal", "s07_ecosystem"],
+    },
+];
+
+const CLIP_META: Array<Omit<ClipEntry, "width" | "height" | "fps" | "duration_sec" | "codec" | "pix_fmt" | "bytes">> = [
+    {
+        id: "clip-live2d-stage-playback",
+        path: "promo/captures/clips/clip-01-live2d-stage-playback.mp4",
+        category: "live2d-stage",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "Live2D 五人同台舞台演出实录",
+        caption_zh: "真实桌面端影院模式 60fps 实录：花里实乃理与 MORE MORE JUMP!、初音未来在「舞台的世界」连续演绎表情、肢体动作与台词。",
+        recommended_for: ["hero", "video"],
+        video_scenes: ["s03_live2d", "s02_reveal"],
+    },
+    {
+        id: "clip-branching-choice-transition",
+        path: "promo/captures/clips/clip-02-branching-choice-transition.mp4",
+        category: "interactive-branching",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "屋顶三路选项分支切换至舞台世界实录",
+        caption_zh: "从宫益坂屋顶弹出三路互动选项、点选分支并经由白屏转场丝滑跃迁至五人「舞台的世界」全过程实录。",
+        recommended_for: ["video", "landing"],
+        video_scenes: ["s03_live2d"],
+    },
+    {
+        id: "clip-node-flow-and-inspector",
+        path: "promo/captures/clips/clip-03-node-flow-and-inspector.mp4",
+        category: "node-flow",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "可视化节点画布平移与 Live2D 舞台联动实录",
+        caption_zh: "拖拽浏览完整分支节点图并依次点击屋顶场景、选项节点与舞台安可高潮，实时联动刷新上方 Live2D 舞台与右侧检查器。",
+        recommended_for: ["video", "landing"],
+        video_scenes: ["s04_flow_msk"],
+    },
+    {
+        id: "clip-msk-code-live-sync",
+        path: "promo/captures/clips/clip-04-msk-code-live-sync.mp4",
+        category: "msk-code",
+        characters: ["minori", "haruka", "airi", "shizuku", "miku_idol"],
+        title_zh: "一键切换 .msk 双向剧本代码工作台实录",
+        caption_zh: "从可视化编辑器无缝切入 .msk 代码工作台，滚动阅览清晰易读的剧本文法与右侧 Live2D 舞台实时分屏对照。",
+        recommended_for: ["video", "landing"],
+        video_scenes: ["s04_flow_msk"],
+    },
+];
+
+function main(): void {
+    const screenshots: ScreenshotEntry[] = SCREENSHOT_META.map(meta => {
+        const abs = path.resolve(meta.path);
+        const dims = readPngDims(abs);
+        return { ...meta, ...dims };
+    });
+
+    const clips: ClipEntry[] = CLIP_META.map(meta => {
+        const abs = path.resolve(meta.path);
+        const info = probeVideo(abs);
+        return { ...meta, ...info };
+    });
+
+    const manifest = {
+        schema: "moesekai-promo-captures/1",
+        generated_at: new Date().toISOString(),
+        app_version: "0.1.4",
+        resolution: { width: 1920, height: 1080 },
+        capture_source: "Real Electron Desktop App (apps/desktop, moesekai-app:// Live2D WASM + live pjsk.moe CDN assets)",
+        summary: {
+            screenshot_count: screenshots.length,
+            clip_count: clips.length,
+            total_clip_duration_sec: Math.round(clips.reduce((s, c) => s + c.duration_sec, 0) * 100) / 100,
+        },
+        screenshots,
+        clips,
+    };
+
+    const outPath = path.resolve("promo/captures/manifest.json");
+    fs.writeFileSync(outPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+    console.log(`[manifest] Wrote ${outPath} (${screenshots.length} screenshots, ${clips.length} clips)`);
+}
+
+main();

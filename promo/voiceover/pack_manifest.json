@@ -1,0 +1,103 @@
+{
+  "schema": "moesekai-pv-voiceover-pack/1",
+  "is_real_mnr_tts": true,
+  "generated_at": "2026-11-23T17:06:43Z",
+  "total_duration_sec": 88.032,
+  "files": [
+    {
+      "path": "audio/01_hook_a.wav",
+      "size_bytes": 477110,
+      "sha256": "b780f07d6a66c440b11356f4d87b5caba9765a2310d0c3c46ced185d2c7eec49"
+    },
+    {
+      "path": "audio/02_hook_b.wav",
+      "size_bytes": 325530,
+      "sha256": "8a415dfbed76ffd736ee509bcbaeebf98cbf48b8057d9ca5a4926a3322a4052d"
+    },
+    {
+      "path": "audio/03_wish_a.wav",
+      "size_bytes": 459278,
+      "sha256": "e0781f2454d0af3fc95e5919634d6ca28ffe25198b82c9688d7dcf0043f68057"
+    },
+    {
+      "path": "audio/04_wish_b.wav",
+      "size_bytes": 579650,
+      "sha256": "ed6eab62ec67d6e823bafcf349ed2c11530c86d29f1b899a469605f1f9725141"
+    },
+    {
+      "path": "audio/05_live2d_a.wav",
+      "size_bytes": 610858,
+      "sha256": "e4e000a1943e57c5911ee53fa74ba13176866ca38eabff0b43ba0d29924a13f2"
+    },
+    {
+      "path": "audio/06_live2d_b.wav",
+      "size_bytes": 503860,
+      "sha256": "96775934fd48d9caa96b003dd702c74eadc261c3f09b502a5a4ed6d1affd8423"
+    },
+    {
+      "path": "audio/07_flow_a.wav",
+      "size_bytes": 481568,
+      "sha256": "3dd1a8542d13c90cbc092721e21d542f455ba737d0a77ed56197ca7aa59048e9"
+    },
+    {
+      "path": "audio/08_msk_b.wav",
+      "size_bytes": 494944,
+      "sha256": "ec6e7a7f032055f6e9d7d4757fd0b413ee3aec11abde15524e88d549e9819989"
+    },
+    {
+      "path": "audio/09_assets_a.wav",
+      "size_bytes": 610858,
+      "sha256": "5827a18fbe94e087773f948ab25cf9d89c401fa5aa6c1979b12470cf21b69ce6"
+    },
+    {
+      "path": "audio/10_assets_b.wav",
+      "size_bytes": 463558,
+      "sha256": "10215b84628d33649280f3c85f4b471d2462e42594fb44fbcc626c7f49a2021c"
+    },
+    {
+      "path": "audio/11_i18n_a.wav",
+      "size_bytes": 512776,
+      "sha256": "596f63817e6e81f8b712e5a08d78d4520b9fc74386299a34916ae69acbb61c70"
+    },
+    {
+      "path": "audio/12_voice_b.wav",
+      "size_bytes": 452004,
+      "sha256": "7396fc65f5f085aa0586f84b944a1984e1a8185c10d8a195720abe165ba314be"
+    },
+    {
+      "path": "audio/13_preflight_a.wav",
+      "size_bytes": 499402,
+      "sha256": "7ed63ab046ab789fdf80de3834d9d1b3467ca7beca2318fd1c320c0e3ae4e727"
+    },
+    {
+      "path": "audio/14_open_b.wav",
+      "size_bytes": 459278,
+      "sha256": "f575c78b79923e6be08282b913342487ea2a4b9fc53431a1466049b76b5f5cac"
+    },
+    {
+      "path": "audio/15_cta_a.wav",
+      "size_bytes": 535068,
+      "sha256": "d84e066a0db631c9b481bd53af8c0a48adff5bfd452a8de8ae718f6af7335351"
+    },
+    {
+      "path": "audio/16_cta_b.wav",
+      "size_bytes": 405778,
+      "sha256": "8ced193ad03f723091c944547c38b5b05c077f620823373dd78d82d87f4721d2"
+    },
+    {
+      "path": "quality_report.json",
+      "size_bytes": 8690,
+      "sha256": "5a4a23c9974bb5688c1560a83aac5927f4d7febd6c9429369ac67bd20d152bec"
+    },
+    {
+      "path": "script.json",
+      "size_bytes": 20348,
+      "sha256": "9113f7239e37424c0b6841e3b0eae067e29d3b695b87e5a1ac20c4637ae0655b"
+    },
+    {
+      "path": "timings.json",
+      "size_bytes": 17350,
+      "sha256": "98086a1033ca7e6e7381542114ce6f5d8263cc2a6687947e386d777d95be2db2"
+    }
+  ]
+}

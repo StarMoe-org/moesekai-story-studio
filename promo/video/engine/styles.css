@@ -1,0 +1,515 @@
+/* ==========================================================================
+   MoeSekai Story Studio — Pure Apple Minimalist ("果味") 1080p60 PV Styles
+   Zero top navbar/HUD, zero PPT description cards, zero subtitle box/badges.
+   Luminance hierarchy only: #FFFFFF <-> #F5F5F7, borderless 28px media,
+   #1D1D1F primary ink, #86868B muted gray, #0071E3 Apple Blue.
+   ========================================================================== */
+
+@font-face {
+  font-family: 'PJSK-Rodin';
+  src: url('/fonts/FOT-RodinNTLG-Pro-B.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'MiSans';
+  src: url('/fonts/MiSans-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'MiSans';
+  src: url('/fonts/MiSans-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'MiSans';
+  src: url('/fonts/MiSans-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'NotoBlack';
+  src: url('/fonts/NotoSansCJKsc-Black.otf') format('opentype');
+  font-weight: 900;
+  font-style: normal;
+  font-display: block;
+}
+
+:root {
+  --bg-white: #FFFFFF;
+  --bg-gray: #F5F5F7;
+  --ink: #1D1D1F;
+  --ink-muted: #6E6E73;
+  --ink-sub: #86868B;
+  --apple-blue: #0071E3;
+  --pill-track: #E8E8ED;
+  --bili-pink: #FB7299;
+  --bili-blue: #23ADE5;
+  --bili-gold: #F59E0B;
+  --soft-lift: 0 24px 60px rgba(0, 0, 0, 0.07);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: #FFFFFF;
+  color: var(--ink);
+  font-family: 'MiSans', 'PJSK-Rodin', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+  user-select: none;
+}
+
+#viewport {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: #FFFFFF;
+}
+
+#stage-layer {
+  position: absolute;
+  inset: 0;
+  width: 1920px;
+  height: 1080px;
+  z-index: 10;
+}
+
+.scene {
+  position: absolute;
+  inset: 0;
+  width: 1920px;
+  height: 1080px;
+  display: none;
+  overflow: hidden;
+}
+
+.scene.active {
+  display: block;
+}
+
+.bg-white { background: #FFFFFF; }
+.bg-gray  { background: #F5F5F7; }
+
+/* ==========================================================================
+   Shared Pure Apple Layout Primitives
+   ========================================================================== */
+.apple-headline {
+  position: absolute;
+  top: 40px;
+  left: 120px;
+  right: 120px;
+  text-align: center;
+  font-family: 'NotoBlack', 'MiSans', sans-serif;
+  font-size: 50px;
+  font-weight: 900;
+  line-height: 1.12;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+/* Borderless 28px Apple stage frame — luminance + whisper-soft lift only */
+.apple-media {
+  position: absolute;
+  left: 50%;
+  border-radius: 28px;
+  overflow: hidden;
+  background: #FFFFFF;
+  box-shadow: var(--soft-lift);
+}
+
+.apple-media.full {
+  top: 118px;
+  width: 1412px;
+  height: 794px;
+  margin-left: -706px;
+}
+
+.apple-media.tabbed {
+  top: 116px;
+  width: 1316px;
+  height: 740px;
+  margin-left: -658px;
+}
+
+.apple-media img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform-origin: center center;
+}
+
+/* Signature Apple Black Sliding Capsule Switcher (exact iphone-duo aesthetic) */
+.apple-tab-dock {
+  position: absolute;
+  top: 868px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.apple-tab-track {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px;
+  border-radius: 999px;
+  background: var(--pill-track);
+}
+
+.apple-tab-track.on-white {
+  background: #F2F2F5;
+}
+
+.apple-tab-slider {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 5px;
+  border-radius: 999px;
+  background: var(--ink);
+  z-index: 1;
+}
+
+.apple-tab-item {
+  position: relative;
+  z-index: 2;
+  width: 168px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+
+.apple-tab-item.active {
+  color: #FFFFFF;
+}
+
+/* ==========================================================================
+   ACT 1: s01_hook — Monumental Pure White Apple Typography (ZERO Cards!)
+   ========================================================================== */
+.s1-center {
+  position: absolute;
+  top: 0;
+  left: 160px;
+  right: 160px;
+  bottom: 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.s1-phrase {
+  position: absolute;
+  text-align: center;
+  font-family: 'NotoBlack', 'MiSans', sans-serif;
+  font-weight: 900;
+  letter-spacing: -0.025em;
+  line-height: 1.18;
+  opacity: 0;
+}
+
+.s1-phrase-a {
+  font-size: 94px;
+  color: var(--ink);
+}
+
+.s1-phrase-b {
+  font-size: 76px;
+  color: var(--ink);
+}
+
+.s1-phrase-b .muted {
+  color: var(--ink-sub);
+}
+
+.s1-brand-mark {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  opacity: 0;
+}
+
+.s1-brand-mark img {
+  width: 108px;
+  height: 108px;
+  border-radius: 26px;
+}
+
+.s1-brand-mark span {
+  font-family: 'PJSK-Rodin', 'MiSans', sans-serif;
+  font-size: 56px;
+  font-weight: 900;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+/* ==========================================================================
+   ACT 2: s02_wish_agent — Pure Apple Wish Input -> Giant Borderless Stage
+   ========================================================================== */
+.s2-wish-wrap {
+  position: absolute;
+  top: 120px;
+  left: 120px;
+  right: 120px;
+  bottom: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 15;
+}
+
+.s2-wish-bar {
+  width: 1120px;
+  padding: 22px 24px 22px 36px;
+  border-radius: 999px;
+  background: #FFFFFF;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.s2-wish-text {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.s2-caret {
+  display: inline-block;
+  width: 3px;
+  height: 30px;
+  background: var(--apple-blue);
+  vertical-align: text-bottom;
+  margin-left: 3px;
+}
+
+.s2-blue-btn {
+  padding: 16px 36px;
+  border-radius: 999px;
+  background: var(--apple-blue);
+  color: #FFFFFF;
+  font-size: 23px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   ACT 7: s07_preflight_open — Light/Dark Split + Minimal Monochrome OS Icons
+   ========================================================================== */
+.s7-split-layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  z-index: 4;
+}
+
+.s7-dark-mask {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(0 0 0 50%);
+}
+
+.s7-split-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2.5px;
+  background: #FFFFFF;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.35);
+  z-index: 6;
+}
+
+.s7-os-dock {
+  position: absolute;
+  top: 874px;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 34px;
+  color: var(--ink-muted);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.s7-os-icons {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.s7-os-icons svg {
+  width: 24px;
+  height: 24px;
+  fill: var(--ink);
+  opacity: 0.85;
+}
+
+.s7-os-sep {
+  width: 1px;
+  height: 18px;
+  background: rgba(29, 29, 31, 0.16);
+}
+
+/* ==========================================================================
+   ACT 8: s08_cta — Pure White Apple Closing + Minimal Triad
+   ========================================================================== */
+.s8-center {
+  position: absolute;
+  top: 60px;
+  left: 160px;
+  right: 160px;
+  bottom: 165px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+}
+
+.s8-logo {
+  width: 108px;
+  height: 108px;
+  border-radius: 26px;
+}
+
+.s8-title {
+  font-family: 'PJSK-Rodin', 'MiSans', sans-serif;
+  font-size: 68px;
+  font-weight: 900;
+  color: var(--ink);
+  letter-spacing: -0.025em;
+  line-height: 1.06;
+}
+
+.s8-url-blue {
+  padding: 16px 56px 19px;
+  border-radius: 999px;
+  background: var(--apple-blue);
+  color: #FFFFFF;
+  font-family: 'PJSK-Rodin', sans-serif;
+  font-size: 46px;
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+
+.s8-triad {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  margin-top: 10px;
+}
+
+.triad-btn {
+  width: 164px;
+  height: 58px;
+  border-radius: 999px;
+  background: #F5F5F7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.triad-btn svg {
+  width: 28px;
+  height: 28px;
+}
+
+.triad-btn span {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.triad-btn.lit-like { background: #FFF0F5; }
+.triad-btn.lit-like span { color: var(--bili-pink); }
+
+.triad-btn.lit-coin { background: #EEF9FE; }
+.triad-btn.lit-coin span { color: var(--bili-blue); }
+
+.triad-btn.lit-fav  { background: #FFFBEB; }
+.triad-btn.lit-fav span  { color: #D97706; }
+
+/* ==========================================================================
+   ULTRA-CLEAN NAKED APPLE SUBTITLES (y: 942..1048px — ZERO Box, ZERO Tag!)
+   ========================================================================== */
+#subtitle-layer {
+  position: absolute;
+  left: 140px;
+  right: 140px;
+  bottom: 30px;
+  height: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  z-index: 80;
+  pointer-events: none;
+  opacity: 0;
+}
+
+#sub-zh {
+  font-family: 'MiSans', sans-serif;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.24;
+  color: #1D1D1F;
+  text-align: center;
+  letter-spacing: 0.015em;
+}
+
+#sub-ja {
+  font-family: 'PJSK-Rodin', 'MiSans', sans-serif;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: #86868B;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+/* Pure Clean Apple White Cross-Dissolve */
+#transition-veil {
+  position: absolute;
+  inset: 0;
+  background: #FFFFFF;
+  opacity: 0;
+  z-index: 95;
+  pointer-events: none;
+}

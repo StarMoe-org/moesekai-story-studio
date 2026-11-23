@@ -1,0 +1,472 @@
+{
+  "schema": "moesekai-pv-voiceover/1",
+  "project": "MoeSekai Story Studio Bilibili PV (Keynote Edition)",
+  "studio_version": "0.1.4",
+  "language": "ja-JP",
+  "subtitle_languages": [
+    "zh-CN",
+    "ja-JP"
+  ],
+  "model": "fishaudio/drama-3-int4",
+  "engine": "sglang-omni",
+  "voice": {
+    "voice_id": "pjsk_05_minori",
+    "voice_ver": 1,
+    "unit": "mmj",
+    "display_name_ja": "花里みのり",
+    "display_name_zh": "花里实乃理",
+    "display_name_en": "Hanasato Minori",
+    "ref_sha256": "20fc0c53bc82015d81e8dd6668a211a82914f577c6bf51a2e8b879b17303bda5",
+    "ref_duration_sec": 15.981,
+    "ref_sample_rate": 44100,
+    "ref_lufs": -16.0,
+    "ref_text": "わたしの想いは、アイドルとしてみんなに希望を届けたい、だからなあ えっとね、警察のお手伝いで地域の皆さんに安全を呼びかけるお仕事なんだって 人気のアイドルがよくやってるから、ちょっと憧れてたなあ",
+    "local_ref_path_hint": "<moesekai-tts>/.local_voices_out/voices/pjsk_05_minori/v1/ref.wav",
+    "hf_private_dataset": "exmeaning/moesekai-pjsk-tts-voices",
+    "hf_ref_path": "voices/pjsk_05_minori/v1/ref.wav",
+    "hf_meta_path": "voices/pjsk_05_minori/v1/meta.json",
+    "hf_jit_cache_path": "jit-cache/sglang-0.5.23-cu130-sm80.tar.gz",
+    "hf_jit_cache_sha256": "2a77f6f72f10d084cccde58742d6ccffcc3e490a2579e673a507e0b36ccb1006"
+  },
+  "audio_spec": {
+    "format": "wav",
+    "codec": "pcm_s16le",
+    "sample_rate": 48000,
+    "channels": 1,
+    "target_lufs": -16.0,
+    "true_peak_db": -1.5,
+    "lra": 11.0,
+    "ffmpeg_filter_chain": "silenceremove=start_periods=1:start_silence=0.1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_silence=0.15:start_threshold=-45dB,areverse,loudnorm=I=-16:TP=-1.5:LRA=11",
+    "note": "Lossless 48kHz mono 16-bit PCM WAV for Bilibili PV mastering (NOT 40kbps Opus)."
+  },
+  "drama3_api_contract": {
+    "endpoint": "http://127.0.0.1:8000/v1/audio/speech",
+    "allowed_fields": [
+      "input",
+      "response_format",
+      "max_new_tokens",
+      "temperature",
+      "top_p",
+      "references"
+    ],
+    "forbidden_fields": [
+      "language",
+      "instructions",
+      "seed",
+      "voice"
+    ],
+    "default_temperature": 1.0,
+    "default_top_p": 0.9,
+    "min_vram_gib": 32,
+    "allowed_gpus": [
+      "A100-80GB",
+      "A100-40GB"
+    ],
+    "forbidden_gpus": [
+      "L4",
+      "T4",
+      "V100",
+      "P100",
+      "K80",
+      "P4"
+    ]
+  },
+  "timing_defaults": {
+    "inter_line_gap_sec": 0.25,
+    "scene_tail_pad_sec": 0.45,
+    "final_scene_tail_pad_sec": 0.9,
+    "estimated_total_duration_sec": 85.0
+  },
+  "scenes": [
+    {
+      "scene_id": "s01_hook",
+      "index": 1,
+      "title_zh": "从一个脑洞开始",
+      "title_ja": "ひとつのアイデアから始まる",
+      "target_duration_sec": 7.72,
+      "inter_line_gap_sec": 0.25,
+      "post_scene_pad_sec": 0.45,
+      "line_ids": [
+        "01_hook_a",
+        "02_hook_b"
+      ],
+      "visual_cue_zh": "纯净浅色 Keynote 开场：展示脑海中的 PJSK 原创剧情与传统抠立绘、对口型、剪时间轴的门槛痛点"
+    },
+    {
+      "scene_id": "s02_wish_agent",
+      "index": 2,
+      "title_zh": "许个愿，就能生成整幕剧情",
+      "title_ja": "願いを伝えるだけで脚本が完成",
+      "target_duration_sec": 12.48,
+      "inter_line_gap_sec": 0.25,
+      "post_scene_pad_sec": 0.45,
+      "line_ids": [
+        "03_wish_a",
+        "04_wish_b"
+      ],
+      "visual_cue_zh": "核心主角幕：输入一句愿望 → AI 检索官方设定 → 编写 .msk 剧本 → 自动静态校验 0 errors 与全分支推演 → 快照一键回滚（实机 06 + 07 特写）"
+    },
+    {
+      "scene_id": "s03_live2d",
+      "index": 3,
+      "title_zh": "Live2D 多角色舞台实时开演",
+      "title_ja": "Live2D マルチアクター即時再生",
+      "target_duration_sec": 11.33,
+      "inter_line_gap_sec": 0.25,
+      "post_scene_pad_sec": 0.45,
+      "line_ids": [
+        "05_live2d_a",
+        "06_live2d_b"
+      ],
+      "visual_cue_zh": "实机 60fps 录屏 clip-01 与 clip-02：多位 Live2D 角色带动作表情与服装同台演出，点击分支选项立刻进入不同剧情走向"
+    },
+    {
+      "scene_id": "s04_flow_msk",
+      "index": 4,
+      "title_zh": "节点画布与 .msk 实时双向同步",
+      "title_ja": "ノードキャンバス＆.msk 双方向同期",
+      "target_duration_sec": 11.0,
+      "inter_line_gap_sec": 0.25,
+      "post_scene_pad_sec": 0.45,
+      "line_ids": [
+        "07_flow_a",
+        "08_msk_b"
+      ],
+      "visual_cue_zh": "实机 clip-03 与 clip-04：在可视化节点画布上拖拽连线梳理多结局分支，并在 .msk 纯文本视图精修对白，双向同步即刻生效"
+    },
+    {
+      "scene_id": "s05_assets_cast",
+      "index": 5,
+      "title_zh": "内置 26 角色素材与演出检视器",
+      "title_ja": "26キャラ素材＆演出インスペクター",
+      "target_duration_sec": 10.67,
+      "inter_line_gap_sec": 0.25,
+      "post_scene_pad_sec": 0.45,
+      "line_ids": [
+        "09_assets_a",
+        "10_assets_b"
+      ],
+      "visual_cue_zh": "实机 08 与 09 截图聚焦：直接浏览 26 位角色服装、动作、表情与舞台背景，在演出检视器中为每句对白点选表演与 BGM"
+    },
+    {
+      "scene_id": "s06_i18n_voice",
+      "index": 6,
+      "title_zh": "多语言字幕校对与自定义配音打包",
+      "title_ja": "多言語校閲＆カスタムボイス梱包",
+      "target_duration_sec": 10.01,
+      "inter_line_gap_sec": 0.25,
+      "post_scene_pad_sec": 0.45,
+      "line_ids": [
+        "11_i18n_a",
+        "12_voice_b"
+      ],
+      "visual_cue_zh": "实机 10、11、12 截图聚焦：5 语言本地化双语校对界面 + 导入自定义配音/TTS 语音清单自动匹配对白并一键打包"
+    },
+    {
+      "scene_id": "s07_preflight_open",
+      "index": 7,
+      "title_zh": "导出自动体检，全平台开源免费",
+      "title_ja": "書き出し前自動検査＆無料オープンソース",
+      "target_duration_sec": 10.83,
+      "inter_line_gap_sec": 0.25,
+      "post_scene_pad_sec": 0.45,
+      "line_ids": [
+        "13_preflight_a",
+        "14_open_b"
+      ],
+      "visual_cue_zh": "实机 13 预检弹窗（0 errors, 0 warnings）与 01/16 全平台桌面展示，与 pjsk.moe 网页端互通，Win/Mac/Linux MPL-2.0 开源免费"
+    },
+    {
+      "scene_id": "s08_cta",
+      "index": 8,
+      "title_zh": "前往 story.pjsk.moe 把愿望搬上舞台",
+      "title_ja": "story.pjsk.moe から始めよう＆三連お願い",
+      "target_duration_sec": 10.96,
+      "inter_line_gap_sec": 0.25,
+      "post_scene_pad_sec": 0.9,
+      "line_ids": [
+        "15_cta_a",
+        "16_cta_b"
+      ],
+      "visual_cue_zh": "纯白 Keynote 终幕：story.pjsk.moe 清晰主视觉 + 桌面端下载入口 + B 站一键三连收尾动效"
+    }
+  ],
+  "lines": [
+    {
+      "id": "01_hook_a",
+      "index": 1,
+      "scene_id": "s01_hook",
+      "speaker": "pjsk_05_minori",
+      "emotion": "cheerful, curious, bright smile",
+      "text_tts": "[cheerful, curious, bright smile] みんなー！オリジナル物語、動かしてみたいよね？",
+      "subtitle_ja": "みんなー！オリジナル物語、動かしてみたいよね？",
+      "subtitle_zh": "大家——！想把脑海里的原创剧情直接搬上舞台吗？",
+      "spoken_chars": 23,
+      "max_new_tokens": 260,
+      "est_duration_sec": 3.92,
+      "audio_file": "audio/01_hook_a.wav",
+      "audio_filename": "01_hook_a.wav",
+      "guide_audio_file": "guide_audio/01_hook_a.wav"
+    },
+    {
+      "id": "02_hook_b",
+      "index": 2,
+      "scene_id": "s01_hook",
+      "speaker": "pjsk_05_minori",
+      "emotion": "lightly troubled, relatable sigh",
+      "text_tts": "[lightly troubled, relatable sigh] でも切り抜きや口パク編集って大変……",
+      "subtitle_ja": "でも切り抜きや口パク編集って大変……",
+      "subtitle_zh": "可抠立绘、对口型、剪时间轴实在太劝退了……",
+      "spoken_chars": 18,
+      "max_new_tokens": 260,
+      "est_duration_sec": 3.1,
+      "audio_file": "audio/02_hook_b.wav",
+      "audio_filename": "02_hook_b.wav",
+      "guide_audio_file": "guide_audio/02_hook_b.wav"
+    },
+    {
+      "id": "03_wish_a",
+      "index": 3,
+      "scene_id": "s02_wish_agent",
+      "speaker": "pjsk_05_minori",
+      "emotion": "excited, bright smile",
+      "text_tts": "[excited, bright smile] モエセカイ・ストーリースタジオなら、願いを伝えるだけで脚本が完成！",
+      "subtitle_ja": "MoeSekai Story Studio なら、願いを伝えるだけで脚本が完成！",
+      "subtitle_zh": "在 MoeSekai Story Studio，许个愿就能生成整幕剧情！",
+      "spoken_chars": 33,
+      "max_new_tokens": 280,
+      "est_duration_sec": 5.56,
+      "audio_file": "audio/03_wish_a.wav",
+      "audio_filename": "03_wish_a.wav",
+      "guide_audio_file": "guide_audio/03_wish_a.wav"
+    },
+    {
+      "id": "04_wish_b",
+      "index": 4,
+      "scene_id": "s02_wish_agent",
+      "speaker": "pjsk_05_minori",
+      "emotion": "earnest, lively, reassuring",
+      "text_tts": "[earnest, lively, reassuring] エーアイが公式設定を調べて分岐を検証、スナップショットでいつでも戻せるよ！",
+      "subtitle_ja": "AIが公式設定を調べて分岐を検証、スナップショットでいつでも戻せるよ！",
+      "subtitle_zh": "内置 AI 检索官方设定、自动校验全分支，每一步快照随时回滚！",
+      "spoken_chars": 37,
+      "max_new_tokens": 310,
+      "est_duration_sec": 6.22,
+      "audio_file": "audio/04_wish_b.wav",
+      "audio_filename": "04_wish_b.wav",
+      "guide_audio_file": "guide_audio/04_wish_b.wav"
+    },
+    {
+      "id": "05_live2d_a",
+      "index": 5,
+      "scene_id": "s03_live2d",
+      "speaker": "pjsk_05_minori",
+      "emotion": "amazed, sparkling with excitement",
+      "text_tts": "[amazed, sparkling with excitement] 脚本はすぐ再生！ライブツーディーの仲間が衣装や表情つきで動くよ！",
+      "subtitle_ja": "脚本はすぐ再生！Live2Dの仲間が衣装や表情つきで動くよ！",
+      "subtitle_zh": "剧本生成即可运行，多位 Live2D 角色带动作表情与服装同台演绎！",
+      "spoken_chars": 32,
+      "max_new_tokens": 280,
+      "est_duration_sec": 5.4,
+      "audio_file": "audio/05_live2d_a.wav",
+      "audio_filename": "05_live2d_a.wav",
+      "guide_audio_file": "guide_audio/05_live2d_a.wav"
+    },
+    {
+      "id": "06_live2d_b",
+      "index": 6,
+      "scene_id": "s03_live2d",
+      "speaker": "pjsk_05_minori",
+      "emotion": "happy, upbeat, inviting",
+      "text_tts": "[happy, upbeat, inviting] 立ち位置もカメラも確認できて、選択肢で別ルートもすぐ遊べるの！",
+      "subtitle_ja": "立ち位置もカメラも確認できて、選択肢で別ルートもすぐ遊べるの！",
+      "subtitle_zh": "站位与镜头实时呈现，内置分支播放器点击选项立刻体验不同走向！",
+      "spoken_chars": 31,
+      "max_new_tokens": 280,
+      "est_duration_sec": 5.23,
+      "audio_file": "audio/06_live2d_b.wav",
+      "audio_filename": "06_live2d_b.wav",
+      "guide_audio_file": "guide_audio/06_live2d_b.wav"
+    },
+    {
+      "id": "07_flow_a",
+      "index": 7,
+      "scene_id": "s04_flow_msk",
+      "speaker": "pjsk_05_minori",
+      "emotion": "bright, explaining clearly",
+      "text_tts": "[bright, explaining clearly] こだわりたいときは、ノードキャンバスで線をつないで分岐を整理！",
+      "subtitle_ja": "こだわりたいときは、ノードキャンバスで線をつないで分岐を整理！",
+      "subtitle_zh": "想亲手精修？在可视化节点画布上拖拽连线梳理多结局分支！",
+      "spoken_chars": 31,
+      "max_new_tokens": 280,
+      "est_duration_sec": 5.4,
+      "audio_file": "audio/07_flow_a.wav",
+      "audio_filename": "07_flow_a.wav",
+      "guide_audio_file": "guide_audio/07_flow_a.wav"
+    },
+    {
+      "id": "08_msk_b",
+      "index": 8,
+      "scene_id": "s04_flow_msk",
+      "speaker": "pjsk_05_minori",
+      "emotion": "impressed, clear, upbeat",
+      "text_tts": "[impressed, clear, upbeat] エムエスケー画面とも双方向同期、直した瞬間にすぐ反映だよ！",
+      "subtitle_ja": ".msk テキスト画面とも双方向同期、直した瞬間にすぐ反映だよ！",
+      "subtitle_zh": "与 .msk 纯文本视图实时双向同步，画布或代码修改即刻生效！",
+      "spoken_chars": 29,
+      "max_new_tokens": 260,
+      "est_duration_sec": 4.9,
+      "audio_file": "audio/08_msk_b.wav",
+      "audio_filename": "08_msk_b.wav",
+      "guide_audio_file": "guide_audio/08_msk_b.wav"
+    },
+    {
+      "id": "09_assets_a",
+      "index": 9,
+      "scene_id": "s05_assets_cast",
+      "speaker": "pjsk_05_minori",
+      "emotion": "cheerful, proud, enthusiastic",
+      "text_tts": "[cheerful, proud, enthusiastic] 二十六人の衣装・動き・背景を収録、素材探しはいらないよ！",
+      "subtitle_ja": "26人の衣装・モーション・背景を収録、素材探しはいらないよ！",
+      "subtitle_zh": "内置 26 位角色服装、动作、表情与舞台背景，不用手动找图抠图！",
+      "spoken_chars": 28,
+      "max_new_tokens": 260,
+      "est_duration_sec": 4.74,
+      "audio_file": "audio/09_assets_a.wav",
+      "audio_filename": "09_assets_a.wav",
+      "guide_audio_file": "guide_audio/09_assets_a.wav"
+    },
+    {
+      "id": "10_assets_b",
+      "index": 10,
+      "scene_id": "s05_assets_cast",
+      "speaker": "pjsk_05_minori",
+      "emotion": "warm, focused, friendly",
+      "text_tts": "[warm, focused, friendly] インスペクターで選ぶだけで、セリフごとの演技や曲も組めるんだ！",
+      "subtitle_ja": "インスペクターで選ぶだけで、セリフごとの演技やBGMも組めるんだ！",
+      "subtitle_zh": "在演出检视器中直接点选，轻松为每句对白编排专属表演与 BGM！",
+      "spoken_chars": 31,
+      "max_new_tokens": 280,
+      "est_duration_sec": 5.23,
+      "audio_file": "audio/10_assets_b.wav",
+      "audio_filename": "10_assets_b.wav",
+      "guide_audio_file": "guide_audio/10_assets_b.wav"
+    },
+    {
+      "id": "11_i18n_a",
+      "index": 11,
+      "scene_id": "s06_i18n_voice",
+      "speaker": "pjsk_05_minori",
+      "emotion": "warm, upbeat, clear",
+      "text_tts": "[warm, upbeat, clear] 五つの言語パック対応、字幕の対訳校閲も一画面で完結！",
+      "subtitle_ja": "5言語パック対応、字幕の対訳校閲も1画面で完結！",
+      "subtitle_zh": "内置 5 语言本地化双语校对界面，同一视图完成多语字幕校对！",
+      "spoken_chars": 26,
+      "max_new_tokens": 260,
+      "est_duration_sec": 4.41,
+      "audio_file": "audio/11_i18n_a.wav",
+      "audio_filename": "11_i18n_a.wav",
+      "guide_audio_file": "guide_audio/11_i18n_a.wav"
+    },
+    {
+      "id": "12_voice_b",
+      "index": 12,
+      "scene_id": "s06_i18n_voice",
+      "speaker": "pjsk_05_minori",
+      "emotion": "cheerful, excited",
+      "text_tts": "[cheerful, excited] ボイスや音声リストを入れれば、自動対応して一括パッケージ！",
+      "subtitle_ja": "ボイスやTTS音声リストを入れれば、自動対応して一括パッケージ！",
+      "subtitle_zh": "导入自有配音或 TTS 语音清单，自动匹配对白并一键打包完整作品！",
+      "spoken_chars": 29,
+      "max_new_tokens": 260,
+      "est_duration_sec": 4.9,
+      "audio_file": "audio/12_voice_b.wav",
+      "audio_filename": "12_voice_b.wav",
+      "guide_audio_file": "guide_audio/12_voice_b.wav"
+    },
+    {
+      "id": "13_preflight_a",
+      "index": 13,
+      "scene_id": "s07_preflight_open",
+      "speaker": "pjsk_05_minori",
+      "emotion": "reassuring, clear, helpful",
+      "text_tts": "[reassuring, clear, helpful] 書き出し前に素材抜けや分岐エラーを自動検査して安全に出力！",
+      "subtitle_ja": "書き出し前に素材抜けや分岐エラーを自動検査して出力！",
+      "subtitle_zh": "导出前自动排查缺失素材与断链分支，一键导出 .msk 或独立资源包！",
+      "spoken_chars": 29,
+      "max_new_tokens": 260,
+      "est_duration_sec": 4.9,
+      "audio_file": "audio/13_preflight_a.wav",
+      "audio_filename": "13_preflight_a.wav",
+      "guide_audio_file": "guide_audio/13_preflight_a.wav"
+    },
+    {
+      "id": "14_open_b",
+      "index": 14,
+      "scene_id": "s07_preflight_open",
+      "speaker": "pjsk_05_minori",
+      "emotion": "bright, warm, generous",
+      "text_tts": "[bright, warm, generous] ウェブ版とも互換、ウィンドウズもマックも無料のオープンソース！",
+      "subtitle_ja": "pjsk.moe Web版互換！Windows・macOS・Linux 対応の無料オープンソース！",
+      "subtitle_zh": "与 pjsk.moe 网页端互通，全平台覆盖且 MPL-2.0 开源免费！",
+      "spoken_chars": 31,
+      "max_new_tokens": 280,
+      "est_duration_sec": 5.23,
+      "audio_file": "audio/14_open_b.wav",
+      "audio_filename": "14_open_b.wav",
+      "guide_audio_file": "guide_audio/14_open_b.wav"
+    },
+    {
+      "id": "15_cta_a",
+      "index": 15,
+      "scene_id": "s08_cta",
+      "speaker": "pjsk_05_minori",
+      "emotion": "enthusiastic, warm, inviting",
+      "text_tts": "[enthusiastic, warm, inviting] さあ公式サイトから体験して、あなたの願いを本物のステージに！",
+      "subtitle_ja": "さあ story.pjsk.moe から体験して、あなたの願いを本物のステージに！",
+      "subtitle_zh": "前往 story.pjsk.moe 下载体验，把你的愿望变成真实的舞台！",
+      "spoken_chars": 30,
+      "max_new_tokens": 280,
+      "est_duration_sec": 5.07,
+      "audio_file": "audio/15_cta_a.wav",
+      "audio_filename": "15_cta_a.wav",
+      "guide_audio_file": "guide_audio/15_cta_a.wav"
+    },
+    {
+      "id": "16_cta_b",
+      "index": 16,
+      "scene_id": "s08_cta",
+      "speaker": "pjsk_05_minori",
+      "emotion": "joyful, sparkling idol energy, laughs softly",
+      "text_tts": "[joyful, sparkling idol energy] よかったら、[laughs softly] いいね、コイン、お気に入りの三連もお願いね！",
+      "subtitle_ja": "よかったら、いいね・コイン・お気に入りの三連もお願いね！",
+      "subtitle_zh": "喜欢的话别忘了点赞、投币、收藏一键三连支持我们！",
+      "spoken_chars": 28,
+      "max_new_tokens": 280,
+      "est_duration_sec": 4.74,
+      "audio_file": "audio/16_cta_b.wav",
+      "audio_filename": "16_cta_b.wav",
+      "guide_audio_file": "guide_audio/16_cta_b.wav"
+    }
+  ],
+  "ab_comparison_samples": [
+    {
+      "id": "ab_01_wish",
+      "label": "核心卖点：许愿生成剧情 (JA 原生 vs ZH 跨语种)",
+      "ja_input": "[excited, bright smile] モエセカイ・ストーリースタジオなら、願いを伝えるだけで脚本が完成！",
+      "zh_input": "[excited, bright smile] 在萌世界剧情工坊，只要像许愿一样说出想法，AI 就能自动生成整幕剧本！"
+    },
+    {
+      "id": "ab_02_live2d",
+      "label": "Live2D 舞台实时开演 (JA 原生 vs ZH 跨语种)",
+      "ja_input": "[amazed, sparkling with excitement] 脚本はすぐ再生！ライブツーディーの仲間が衣装や表情つきで動くよ！",
+      "zh_input": "[amazed, sparkling with excitement] 剧本生成立刻开演，多位角色带着服装和表情在舞台上实时动起来！"
+    },
+    {
+      "id": "ab_03_cta",
+      "label": "B站三连收尾 (JA 原生 vs ZH 跨语种)",
+      "ja_input": "[joyful, sparkling idol energy] よかったら、[laughs softly] いいね、コイン、お気に入りの三連もお願いね！",
+      "zh_input": "[joyful, sparkling idol energy] 喜欢的话，[laughs softly] 别忘了点赞、投币、收藏一键三连支持我们！"
+    }
+  ]
+}

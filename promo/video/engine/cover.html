@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080, initial-scale=1.0" />
+  <title>MoeSekai Story Studio — Pure Apple Minimalist Bilibili Cover (1920x1080)</title>
+  <style>
+    @font-face {
+      font-family: 'PJSK-Rodin';
+      src: url('/fonts/FOT-RodinNTLG-Pro-B.otf') format('opentype');
+      font-weight: 700;
+      font-display: block;
+    }
+    @font-face {
+      font-family: 'MiSans';
+      src: url('/fonts/MiSans-Bold.ttf') format('truetype');
+      font-weight: 700;
+      font-display: block;
+    }
+    @font-face {
+      font-family: 'NotoBlack';
+      src: url('/fonts/NotoSansCJKsc-Black.otf') format('opentype');
+      font-weight: 900;
+      font-display: block;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      background: #FFFFFF;
+      font-family: 'NotoBlack', 'MiSans', sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    #cover {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      background: #FFFFFF;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 64px 56px 64px 76px;
+      gap: 44px;
+    }
+
+    .left-col {
+      width: 688px;
+      height: 100%;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 28px 0;
+    }
+
+    .brand-lockup {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .brand-lockup img {
+      width: 52px;
+      height: 52px;
+      border-radius: 13px;
+    }
+
+    .brand-lockup span {
+      font-family: 'PJSK-Rodin', 'MiSans', sans-serif;
+      font-size: 32px;
+      font-weight: 700;
+      color: #1D1D1F;
+      letter-spacing: -0.01em;
+    }
+
+    .headline {
+      font-family: 'NotoBlack', 'MiSans', sans-serif;
+      font-size: 122px;
+      font-weight: 900;
+      line-height: 1.12;
+      color: #1D1D1F;
+      letter-spacing: -0.025em;
+    }
+
+    .headline .line-accent {
+      color: #0071E3;
+    }
+
+    .cta-row {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .apple-blue-pill {
+      padding: 18px 46px 21px;
+      border-radius: 999px;
+      background: #0071E3;
+      color: #FFFFFF;
+      font-family: 'PJSK-Rodin', sans-serif;
+      font-size: 40px;
+      font-weight: 900;
+      line-height: 1.05;
+      letter-spacing: 0.01em;
+    }
+
+    /* Right pure unobstructed exact 16:9 borderless 5-actor Live2D stage (0% face cropping!) */
+    .right-stage {
+      width: 1064px;
+      height: 600px;
+      flex-shrink: 0;
+      margin-bottom: 64px; /* keeps bottom-right Bilibili duration safe zone cleanly open */
+      border-radius: 30px;
+      overflow: hidden;
+      background: #F5F5F7;
+      box-shadow: 0 32px 84px rgba(0, 0, 0, 0.11);
+      position: relative;
+    }
+
+    .right-stage img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center center;
+    }
+  </style>
+</head>
+<body>
+  <div id="cover">
+    <div class="left-col">
+      <div class="brand-lockup">
+        <img src="/brand/icon.svg" alt="MoeSekai Story Studio" />
+        <span>MoeSekai Story Studio</span>
+      </div>
+
+      <h1 class="headline">
+        许个愿，<br />
+        <span class="line-accent">直接生成</span><br />
+        PJSK 剧情。
+      </h1>
+
+      <div class="cta-row">
+        <span class="apple-blue-pill">story.pjsk.moe</span>
+      </div>
+    </div>
+
+    <div class="right-stage">
+      <img id="cover-main-img" alt="" style="display:none" />
+    </div>
+  </div>
+
+  <script>
+    window.setCoverImages = async function (cfg) {
+      const el = document.getElementById('cover-main-img');
+      if (!el || !cfg.main) return;
+      el.src = cfg.main;
+      el.style.display = 'block';
+      try {
+        if (el.decode) await el.decode();
+      } catch {}
+    };
+  </script>
+</body>
+</html>

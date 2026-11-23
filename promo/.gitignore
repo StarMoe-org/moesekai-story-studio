@@ -1,0 +1,22 @@
+# Heavy rendered media & capture binaries (web-optimized WebP/WebM live in website/public/showcase/)
+captures/screenshots/*.png
+captures/clips/*.mp4
+
+# Synthesized & guide voiceover WAVs and Colab download archives (reproducible via mnr_drama3_colab.ipynb)
+voiceover/audio/*.wav
+voiceover/guide_audio/
+voiceover/*.zip
+voiceover/tmp/
+
+# Rendered PV video master, BGM WAV masters, Chromium worker profiles, chunk intermediates & caches
+video/out/
+video/work/
+video/audio/*.wav
+video/tmp/
+video/.cache/
+video/engine/frames/
+
+# Python caches
+**/__pycache__/
+*.pyc
+*.pyo
