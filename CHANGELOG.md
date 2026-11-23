@@ -4,6 +4,12 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-11-23
+
+### Fixed
+- **Desktop Updater (CNB Anonymous Endpoint)**: Switched CNB primary update checks to the public anonymous `https://cnb.cool/StarMoe-org/moesekai-story-studio/-/releases/latest` JSON endpoint (HTTP 200 without auth) and normalized percent-encoded (`%20`) asset download URLs for external browser opening.
+- **Release & CI Packaging**: Fixed Linux AppImage `executableName` for scoped workspace packaging (`moesekai-story-studio`), switched npm idempotency checks to query scoped packuments directly on `registry.npmjs.org`, fixed `release.yml` step-level secret environment handling, and added Bun Linux `Bun.stdin` support in `skills/moesekai-story-script/scripts/validate-msk.mjs`.
+
 ## [0.1.0] - 2026-11-23
 
 ### Added
