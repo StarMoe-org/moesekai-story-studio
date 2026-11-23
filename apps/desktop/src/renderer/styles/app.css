@@ -1,0 +1,84 @@
+@import "tailwindcss";
+/* app.css sits 5 levels below repo root: apps/desktop/src/renderer/styles/app.css */
+@source "../../shared";
+@source "../../../../../packages/story-editor/dist";
+@source "../../../../../packages/story-editor/src";
+@source "../../../node_modules/@moesekai/story-editor/dist";
+@import "@moesekai/story-editor/styles/md3.css";
+@import "@moesekai/story-editor/styles/story-game-ui.css";
+
+html,
+body,
+#root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    font-family: var(--md-ref-typeface-plain, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+}
+
+/* Frameless Electron titlebar drag helpers:
+   Apply .desktop-drag-region to the header & blank flex spacers;
+   apply .desktop-no-drag ONLY to interactive leaf controls (never flex-1 wrappers). */
+.desktop-drag-region {
+    -webkit-app-region: drag;
+    app-region: drag;
+    user-select: none;
+}
+
+.desktop-no-drag,
+.desktop-no-drag button,
+.desktop-no-drag input,
+.desktop-no-drag a,
+.desktop-no-drag select {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+}
+
+/* Outlined MD3 text field label background masks */
+.bg-surface { --md3-tf-label-bg: var(--md-sys-color-surface); }
+.bg-surface-card { --md3-tf-label-bg: var(--md-sys-color-surface-card); }
+.bg-surface-container-lowest { --md3-tf-label-bg: var(--md-sys-color-surface-container-lowest); }
+.bg-surface-container-low { --md3-tf-label-bg: var(--md-sys-color-surface-container-low); }
+.bg-surface-container { --md3-tf-label-bg: var(--md-sys-color-surface-container); }
+.bg-surface-container-high { --md3-tf-label-bg: var(--md-sys-color-surface-container-high); }
+.bg-surface-container-highest { --md3-tf-label-bg: var(--md-sys-color-surface-container-highest); }
+
+/* MD3 scrollbars */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--md-sys-color-outline-variant);
+    border-radius: 99px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--md-sys-color-outline);
+    background-clip: padding-box;
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--md-sys-color-outline-variant) transparent;
+}

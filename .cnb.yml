@@ -1,0 +1,35 @@
+# CNB (cnb.cool) native pipeline for StarMoe-org/moesekai-story-studio.
+# Runs Linux verification and ensures CNB Release metadata exists on v* tag pushes.
+# Full 3-OS desktop installers (Windows .exe, macOS .dmg, Linux .AppImage) + SHA256SUMS.txt
+# are mirrored automatically by GitHub Actions (`scripts/sync-cnb-release.ts`).
+v*:
+  tag_push:
+    - docker:
+        image: oven/bun:1.3.14
+      stages:
+        - name: Install workspace dependencies
+          script: bun install --frozen-lockfile
+
+        - name: Verify lockstep version & tag
+          script: bun run version:check --tag "$CNB_BRANCH"
+
+        - name: Build packages & standalone skill
+          script: |
+            bun run build:packages
+            bun run build:skill
+
+        - name: Typecheck & test workspaces
+          script: |
+            bun run typecheck:core
+            bun run typecheck:editor
+            bun run typecheck:agent
+            bun run test:core
+            bun run test:editor
+            bun run test:agent
+            bun run test:release
+
+        - name: Create or update CNB Release metadata
+          type: git:release
+          options:
+            title: "MoeSekai Story Studio $CNB_BRANCH"
+            overWrite: true

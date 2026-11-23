@@ -1,0 +1,239 @@
+"use client";
+import React, { createContext, useContext, useEffect, useMemo } from "react";
+import {
+    configureStoryCore,
+    createBrowserStoryExportAdapter,
+    createIndexedDbStoryDraftStorageAdapter,
+    getAssetLine,
+    live2dSources as defaultLive2dSources,
+    MOE_LOGO_URL,
+    WEB_STORY_WORKSPACE_CAPABILITIES,
+    type AssetLine,
+    type AssetSourceType,
+    type Live2DRegion,
+    type Live2DSources,
+    type StoryCoreConfig,
+    type StoryDraftStorageAdapter,
+    type StoryExportAdapter,
+    type StoryRegion,
+    type StoryWorkspaceCapabilities,
+    type UiLocale,
+} from "@moesekai/story-core";
+import { Md3Provider, DefaultStudioLink, type StudioLinkComponent } from "../md3/context";
+import {
+    createStudioTranslator,
+    normalizeStudioLocale,
+    type MessageInterpolationValues,
+    type StudioTranslateFn,
+} from "../messages";
+
+export interface StoryStudioContextValue {
+    locale: UiLocale;
+    t: StudioTranslateFn;
+    assetLine: AssetLine;
+    assetSource: AssetSourceType;
+    defaultRegion: StoryRegion;
+    LinkComponent: StudioLinkComponent;
+    navigate: (href: string) => void;
+    pathname?: string;
+    live2dScriptBase: string | null;
+    live2dCoreUrl: string | null;
+    resolveLive2dSources: (region: Live2DRegion) => Live2DSources;
+    sseWebScriptBase: string | null;
+    brandLogoUrl: string;
+    unitIconBaseUrl: string;
+    themeSeed?: string;
+    themeMode?: "light" | "dark";
+    storage: StoryDraftStorageAdapter;
+    exporter: StoryExportAdapter;
+    capabilities: StoryWorkspaceCapabilities;
+}
+
+export interface StoryStudioProviderProps {
+    /** Active UI locale (`zh-CN` | `zh-TW` | `en-US` | `ja-JP` | `ko-KR`). Default: `"zh-CN"`. */
+    locale?: UiLocale | string;
+    /** Optional host translation function (e.g. Snowy_Viewer's `useI18n().t`). Falls back to built-in 5-locale studio dictionary. */
+    t?: StudioTranslateFn;
+    /** Active asset CDN line (`"main"` | `"backup"`). Derived from `assetSource` if omitted. */
+    assetLine?: AssetLine;
+    /** Active asset source (`"main"` | `"backup"` | `"main-jp"` | ...). Defaults to `assetLine ?? "main"`. */
+    assetSource?: AssetSourceType;
+    /** Default game server region when creating new stories. Default: `"jp"`. */
+    defaultRegion?: StoryRegion;
+    /** Custom link component (e.g. Snowy_Viewer's `LocalizedLink`). Defaults to standard `<a>`. */
+    LinkComponent?: StudioLinkComponent;
+    /** Custom programmatic navigation handler (e.g. Next.js `router.push` or Electron route handler). */
+    navigate?: (href: string) => void;
+    /** Optional current pathname to close portaled MD3 Menus on route transitions. */
+    pathname?: string;
+    /** Base URL serving Live2D viewer scripts (`stage.js`, `viewer.js`, workers, wasm). */
+    live2dScriptBase?: string | null;
+    /** Optional override for Cubism Core for Web script URL. */
+    live2dCoreUrl?: string | null;
+    /** Optional custom resolver for Live2D library/index URLs per region. */
+    live2dSources?: (region: Live2DRegion) => Live2DSources;
+    /** Optional base URL serving `sse-web` UI kit worker scripts. */
+    sseWebScriptBase?: string | null;
+    /** Optional extra runtime overrides passed to `@moesekai/story-core`'s `configureStoryCore`. */
+    coreConfig?: Partial<StoryCoreConfig>;
+    /** Brand logo URL rendered in immersive headers (defaults to `MOE_LOGO_URL`). */
+    brandLogoUrl?: string;
+    /** Base URL for unit icon `.webp` files in `Live2DModelPicker` (defaults to `"/data/icon/"`). */
+    unitIconBaseUrl?: string;
+    /** Optional MD3 theme seed (character seed ID). */
+    themeSeed?: string;
+    /** Optional MD3 color mode (`"light"` | `"dark"`). */
+    themeMode?: "light" | "dark";
+    /** Storage adapter for drafts (defaults to IndexedDB `moesekai-story-maker-v2`). */
+    storage?: StoryDraftStorageAdapter;
+    /** Export adapter for `.msk`, `.i18n.json`, and full bundles (defaults to browser download). */
+    exporter?: StoryExportAdapter;
+    /** Host capabilities metadata. */
+    capabilities?: StoryWorkspaceCapabilities;
+    children: React.ReactNode;
+}
+
+const defaultStorage = createIndexedDbStoryDraftStorageAdapter();
+const defaultExporter = createBrowserStoryExportAdapter();
+const defaultT = createStudioTranslator("zh-CN");
+
+function defaultNavigate(href: string): void {
+    if (typeof window !== "undefined") {
+        window.location.assign(href);
+    }
+}
+
+const StoryStudioContext = createContext<StoryStudioContextValue>({
+    locale: "zh-CN",
+    t: defaultT,
+    assetLine: "main",
+    assetSource: "main",
+    defaultRegion: "jp",
+    LinkComponent: DefaultStudioLink,
+    navigate: defaultNavigate,
+    pathname: undefined,
+    live2dScriptBase: null,
+    live2dCoreUrl: null,
+    resolveLive2dSources: defaultLive2dSources,
+    sseWebScriptBase: null,
+    brandLogoUrl: MOE_LOGO_URL,
+    unitIconBaseUrl: "/data/icon/",
+    storage: defaultStorage,
+    exporter: defaultExporter,
+    capabilities: WEB_STORY_WORKSPACE_CAPABILITIES,
+});
+
+export function StoryStudioProvider({
+    locale = "zh-CN",
+    t: hostT,
+    assetLine,
+    assetSource,
+    defaultRegion = "jp",
+    LinkComponent = DefaultStudioLink,
+    navigate = defaultNavigate,
+    pathname,
+    live2dScriptBase = null,
+    live2dCoreUrl = null,
+    live2dSources: customLive2dSources,
+    sseWebScriptBase = null,
+    coreConfig,
+    brandLogoUrl = MOE_LOGO_URL,
+    unitIconBaseUrl = "/data/icon/",
+    themeSeed,
+    themeMode,
+    storage = defaultStorage,
+    exporter = defaultExporter,
+    capabilities = WEB_STORY_WORKSPACE_CAPABILITIES,
+    children,
+}: StoryStudioProviderProps) {
+    const normalizedLocale = normalizeStudioLocale(locale) as UiLocale;
+    const resolvedAssetSource: AssetSourceType = assetSource ?? assetLine ?? "main";
+    const resolvedAssetLine: AssetLine = assetLine ?? getAssetLine(resolvedAssetSource);
+
+    const builtinT = useMemo(() => createStudioTranslator(normalizedLocale), [normalizedLocale]);
+    const t = useMemo<StudioTranslateFn>(() => {
+        if (!hostT) return builtinT;
+        return (key: string, values?: MessageInterpolationValues) => {
+            const out = hostT(key, values);
+            return out === key ? builtinT(key, values) : out;
+        };
+    }, [builtinT, hostT]);
+
+    // Sync runtime overrides into @moesekai/story-core so pure helpers (assets, uiKit, live2d) pick them up.
+    useEffect(() => {
+        const patch: Partial<StoryCoreConfig> = {
+            ...(coreConfig ?? {}),
+            defaultAssetLine: resolvedAssetLine,
+            defaultRegion,
+        };
+        if (live2dCoreUrl !== undefined && live2dCoreUrl !== null) {
+            patch.live2dCoreUrl = live2dCoreUrl;
+        }
+        if (sseWebScriptBase !== undefined && sseWebScriptBase !== null) {
+            patch.sseWebScriptBase = sseWebScriptBase;
+        }
+        configureStoryCore(patch);
+    }, [coreConfig, defaultRegion, live2dCoreUrl, resolvedAssetLine, sseWebScriptBase]);
+
+    const value = useMemo<StoryStudioContextValue>(
+        () => ({
+            locale: normalizedLocale,
+            t,
+            assetLine: resolvedAssetLine,
+            assetSource: resolvedAssetSource,
+            defaultRegion,
+            LinkComponent,
+            navigate,
+            pathname,
+            live2dScriptBase,
+            live2dCoreUrl,
+            resolveLive2dSources: customLive2dSources ?? defaultLive2dSources,
+            sseWebScriptBase,
+            brandLogoUrl,
+            unitIconBaseUrl: unitIconBaseUrl.endsWith("/") ? unitIconBaseUrl : `${unitIconBaseUrl}/`,
+            themeSeed,
+            themeMode,
+            storage,
+            exporter,
+            capabilities,
+        }),
+        [
+            brandLogoUrl,
+            capabilities,
+            customLive2dSources,
+            defaultRegion,
+            exporter,
+            LinkComponent,
+            live2dCoreUrl,
+            live2dScriptBase,
+            navigate,
+            normalizedLocale,
+            pathname,
+            resolvedAssetLine,
+            resolvedAssetSource,
+            sseWebScriptBase,
+            storage,
+            t,
+            themeMode,
+            themeSeed,
+            unitIconBaseUrl,
+        ],
+    );
+
+    return (
+        <StoryStudioContext.Provider value={value}>
+            <Md3Provider t={t} LinkComponent={LinkComponent} pathname={pathname}>
+                {children}
+            </Md3Provider>
+        </StoryStudioContext.Provider>
+    );
+}
+
+export function useStoryStudio(): StoryStudioContextValue {
+    return useContext(StoryStudioContext);
+}
+
+export function useStoryI18n(): { t: StudioTranslateFn; locale: UiLocale } {
+    const { t, locale } = useContext(StoryStudioContext);
+    return { t, locale };
+}

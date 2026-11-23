@@ -1,0 +1,104 @@
+# One-click lockstep release on main:
+# Bumps all 5 package.json versions + @moesekai/story-core peer range, commits
+# `chore(release): vX.Y.Z`, pushes annotated tag `vX.Y.Z`, and triggers Publish.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type (or 'custom' with custom_version)"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+        default: patch
+        required: true
+      custom_version:
+        description: "Strict semver X.Y.Z (required when bump = custom)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Fetch existing tags
+        run: git fetch --tags --force
+
+      - name: Verify current lockstep versions
+        run: bun run version:check
+
+      - name: Bump lockstep version
+        id: bump
+        shell: bash
+        env:
+          BUMP_KIND: ${{ inputs.bump }}
+          CUSTOM_VERSION: ${{ inputs.custom_version }}
+        run: |
+          if [ "$BUMP_KIND" = "custom" ]; then
+            if [ -z "$CUSTOM_VERSION" ]; then
+              echo "custom_version is required when bump=custom" >&2
+              exit 1
+            fi
+            TARGET="$CUSTOM_VERSION"
+          else
+            TARGET="$BUMP_KIND"
+          fi
+          bun run version:bump "$TARGET"
+          bun run version:check
+          bun run version:show --shell >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bump and push annotated tag
+        shell: bash
+        env:
+          NEXT_VERSION: ${{ steps.bump.outputs.version }}
+          NEXT_TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          if git rev-parse "$NEXT_TAG" >/dev/null 2>&1; then
+            echo "Tag $NEXT_TAG already exists" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json packages/story-core/package.json packages/story-editor/package.json packages/story-agent/package.json apps/desktop/package.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): ${NEXT_TAG}"
+            git push origin HEAD:main
+          fi
+          git tag -a "$NEXT_TAG" -m "MoeSekai Story Studio ${NEXT_TAG}"
+          git push origin "$NEXT_TAG"
+
+      - name: Trigger Publish workflow when using default GITHUB_TOKEN
+        if: ${{ secrets.RELEASE_PAT == '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT_TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          # Tags pushed with GITHUB_TOKEN do not automatically trigger push:tags workflows;
+          # dispatch publish.yml explicitly on the newly created tag.
+          gh workflow run publish.yml --ref "$NEXT_TAG" -f tag="$NEXT_TAG"

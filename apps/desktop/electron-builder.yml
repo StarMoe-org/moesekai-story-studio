@@ -1,0 +1,65 @@
+appId: moe.pjsk.story-studio
+productName: MoeSekai Story Studio
+copyright: Copyright © StarMoe / MoeSekai Contributors
+
+directories:
+  output: release
+
+files:
+  - dist/**/*
+  - package.json
+  - "!dist/**/*.map"
+
+extraResources:
+  - from: dist/live2d-viewer
+    to: live2d-viewer
+    filter:
+      - "**/*"
+  - from: dist/unit-icons
+    to: unit-icons
+    filter:
+      - "**/*"
+  - from: ../../skills/moesekai-story-script
+    to: skills/moesekai-story-script
+    filter:
+      - "**/*"
+
+fileAssociations:
+  - ext: msk
+    name: MoeSekai Story Script
+    description: MoeSekai Story Studio Script (.msk)
+    role: Editor
+    mimeType: text/plain
+
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+
+linux:
+  category: Development
+  target:
+    - target: AppImage
+      arch:
+        - x64

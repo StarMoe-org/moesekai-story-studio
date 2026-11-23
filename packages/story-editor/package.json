@@ -1,0 +1,118 @@
+{
+  "name": "@moesekai/story-editor",
+  "version": "0.1.0",
+  "description": "MoeSekai Story Studio React editor, player, Live2D stage, MD3 Expressive primitives, and 5-locale dictionaries",
+  "type": "module",
+  "license": "MPL-2.0",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./md3": {
+      "types": "./dist/md3/index.d.ts",
+      "import": "./dist/md3/index.js"
+    },
+    "./md3/icons": {
+      "types": "./dist/md3/icons.d.ts",
+      "import": "./dist/md3/icons.js"
+    },
+    "./live2d": {
+      "types": "./dist/live2d/index.d.ts",
+      "import": "./dist/live2d/index.js"
+    },
+    "./messages": {
+      "types": "./dist/messages/index.d.ts",
+      "import": "./dist/messages/index.js"
+    },
+    "./messages/zh-CN": {
+      "types": "./dist/messages/zh-CN.d.ts",
+      "import": "./dist/messages/zh-CN.js"
+    },
+    "./messages/zh-TW": {
+      "types": "./dist/messages/zh-TW.d.ts",
+      "import": "./dist/messages/zh-TW.js"
+    },
+    "./messages/en-US": {
+      "types": "./dist/messages/en-US.d.ts",
+      "import": "./dist/messages/en-US.js"
+    },
+    "./messages/ja-JP": {
+      "types": "./dist/messages/ja-JP.d.ts",
+      "import": "./dist/messages/ja-JP.js"
+    },
+    "./messages/ko-KR": {
+      "types": "./dist/messages/ko-KR.d.ts",
+      "import": "./dist/messages/ko-KR.js"
+    },
+    "./styles/story-game-ui.css": "./dist/styles/story-game-ui.css",
+    "./styles/md3.css": "./dist/styles/md3.css",
+    "./styles/md3-tokens.css": "./dist/styles/md3-tokens.css",
+    "./styles/md3-schemes.css": "./dist/styles/md3-schemes.css",
+    "./styles/md3-loading.css": "./dist/styles/md3-loading.css",
+    "./live2d-viewer/*": "./dist/live2d-viewer/*",
+    "./unit-icons/*": "./dist/unit-icons/*"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "moesekai",
+    "project-sekai",
+    "pjsk",
+    "story-maker",
+    "story-editor",
+    "live2d",
+    "react",
+    "material-3"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/StarMoe-org/moesekai-story-studio.git",
+    "directory": "packages/story-editor"
+  },
+  "homepage": "https://github.com/StarMoe-org/moesekai-story-studio",
+  "bugs": {
+    "url": "https://github.com/StarMoe-org/moesekai-story-studio/issues"
+  },
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "clean": "bun -e \"require('fs').rmSync('dist', { recursive: true, force: true })\""
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@moesekai/story-core": "^0.1.0",
+    "framer-motion": "^12.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@moesekai/story-core": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@moesekai/story-core": "workspace:*",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "framer-motion": "^12.34.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  }
+}

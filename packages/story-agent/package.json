@@ -1,0 +1,89 @@
+{
+  "name": "@moesekai/story-agent",
+  "version": "0.1.0",
+  "description": "AI story authoring agent engine for MoeSekai Story Studio: custom Story Maker tools, official PJSK story mining, snapshot/rollback diffing, strict validation & branch simulation, i18n automation, and SDK + RPC session streaming.",
+  "type": "module",
+  "license": "MPL-2.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    },
+    "./workspace": {
+      "types": "./dist/workspace.d.ts",
+      "import": "./dist/workspace.js"
+    },
+    "./validator": {
+      "types": "./dist/validator.d.ts",
+      "import": "./dist/validator.js"
+    },
+    "./official-story": {
+      "types": "./dist/official-story.d.ts",
+      "import": "./dist/official-story.js"
+    },
+    "./i18n": {
+      "types": "./dist/i18n-tools.d.ts",
+      "import": "./dist/i18n-tools.js"
+    },
+    "./tools": {
+      "types": "./dist/tools.d.ts",
+      "import": "./dist/tools.js"
+    },
+    "./presets": {
+      "types": "./dist/presets.d.ts",
+      "import": "./dist/presets.js"
+    },
+    "./models": {
+      "types": "./dist/models.d.ts",
+      "import": "./dist/models.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "moesekai",
+    "project-sekai",
+    "pjsk",
+    "story-maker",
+    "story-agent",
+    "msk",
+    "ai-agent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/StarMoe-org/moesekai-story-studio.git",
+    "directory": "packages/story-agent"
+  },
+  "homepage": "https://github.com/StarMoe-org/moesekai-story-studio",
+  "bugs": {
+    "url": "https://github.com/StarMoe-org/moesekai-story-studio/issues"
+  },
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^1.6.0",
+    "@earendil-works/pi-ai": "^1.6.0",
+    "@earendil-works/pi-coding-agent": "^1.6.0",
+    "@moesekai/story-core": "workspace:*",
+    "typebox": "^1.3.27"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "name": "@moesekai/story-core",
+  "version": "0.1.0",
+  "description": "Pure MoeSekai Story Maker (moesekai-story/2) graph engine, .msk script compiler, runtime VM, i18n packs, voice/audio utilities, PJSK CDN helpers, and cross-host workspace/export contracts.",
+  "type": "module",
+  "license": "MPL-2.0",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/storyMaker.d.ts",
+      "import": "./dist/types/storyMaker.js"
+    },
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.js"
+    },
+    "./live2d": {
+      "types": "./dist/live2d/index.d.ts",
+      "import": "./dist/live2d/index.js"
+    },
+    "./assets": {
+      "types": "./dist/story/assets.d.ts",
+      "import": "./dist/story/assets.js"
+    },
+    "./i18n": {
+      "types": "./dist/story/i18nPack.d.ts",
+      "import": "./dist/story/i18nPack.js"
+    },
+    "./audio": {
+      "types": "./dist/story/audioBundle.d.ts",
+      "import": "./dist/story/audioBundle.js"
+    },
+    "./script": {
+      "types": "./dist/story/script.d.ts",
+      "import": "./dist/story/script.js"
+    },
+    "./runtime": {
+      "types": "./dist/story/runtime.d.ts",
+      "import": "./dist/story/runtime.js"
+    },
+    "./compiler": {
+      "types": "./dist/story/compiler.d.ts",
+      "import": "./dist/story/compiler.js"
+    },
+    "./story-search": {
+      "types": "./dist/storySearch/index.d.ts",
+      "import": "./dist/storySearch/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "moesekai",
+    "project-sekai",
+    "pjsk",
+    "story-maker",
+    "visual-novel",
+    "msk",
+    "live2d"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/StarMoe-org/moesekai-story-studio.git",
+    "directory": "packages/story-core"
+  },
+  "homepage": "https://github.com/StarMoe-org/moesekai-story-studio",
+  "bugs": {
+    "url": "https://github.com/StarMoe-org/moesekai-story-studio/issues"
+  },
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,4 @@
+/* Combined Material 3 Expressive stylesheet for @moesekai/story-editor consumers (e.g. Electron desktop). */
+@import "./md3-schemes.css";
+@import "./md3-tokens.css";
+@import "./md3-loading.css";

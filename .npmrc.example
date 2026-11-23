@@ -1,0 +1,5 @@
+# Copy to .npmrc when publishing @moesekai/* packages to public npmjs.org.
+# Installing published @moesekai/* packages requires NO authentication token.
+
+@moesekai:registry=https://registry.npmjs.org/
+//registry.npmjs.org/:_authToken=${NPM_TOKEN}
