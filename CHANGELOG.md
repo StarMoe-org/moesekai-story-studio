@@ -4,6 +4,12 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-11-23
+
+### Added
+- **Custom Brand App Icon (`apps/desktop`)**: Added the flat vector Branching Star logo (`build/icon.svg`) along with a reproducible native icon generator (`scripts/generate-icons.ts`) emitting multi-size Windows `icon.ico` (16–256px), Big Sur+ padded macOS `icon.icns`, and `512×512` transparent Linux/runtime `icon.png`.
+- **Desktop Brand Integration**: Wired the native icon into `electron-builder.yml` (Windows NSIS installer/uninstaller & portable EXE, macOS DMG, Linux AppImage), runtime `BrowserWindow` icon resolution, renderer favicon, and the `<StudioLogo />` brand mark across the Welcome screen and Editor top bar.
+
 ## [0.1.1] - 2026-11-23
 
 ### Fixed
