@@ -93,12 +93,16 @@ jobs:
           git push origin "$NEXT_TAG"
 
       - name: Trigger Publish workflow when using default GITHUB_TOKEN
-        if: ${{ secrets.RELEASE_PAT == '' }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
           NEXT_TAG: ${{ steps.bump.outputs.tag }}
         run: |
+          if [ -n "$RELEASE_PAT" ]; then
+            echo "Tag pushed via RELEASE_PAT; publish.yml will trigger automatically on push:tags."
+            exit 0
+          fi
           # Tags pushed with GITHUB_TOKEN do not automatically trigger push:tags workflows;
           # dispatch publish.yml explicitly on the newly created tag.
           gh workflow run publish.yml --ref "$NEXT_TAG" -f tag="$NEXT_TAG"

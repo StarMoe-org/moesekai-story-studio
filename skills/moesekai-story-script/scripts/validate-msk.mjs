@@ -114,11 +114,15 @@ function parseArgs(argv) {
 async function readInput(fileArg) {
     let raw;
     if (fileArg === "-") {
-        const chunks = [];
-        for await (const chunk of process.stdin) {
-            chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        if (typeof globalThis.Bun !== "undefined" && typeof globalThis.Bun.stdin?.text === "function") {
+            raw = await globalThis.Bun.stdin.text();
+        } else {
+            const chunks = [];
+            for await (const chunk of process.stdin) {
+                chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+            }
+            raw = Buffer.concat(chunks).toString("utf8");
         }
-        raw = Buffer.concat(chunks).toString("utf8");
     } else {
         raw = await readFile(fileArg, "utf8");
     }
