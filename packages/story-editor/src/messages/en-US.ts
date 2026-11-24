@@ -71,7 +71,7 @@ export const storyMakerMessages = {
     "desktopOnly": {
         "title": "Desktop Browser Required",
         "description": "The Story Maker editor requires a desktop viewport (≥ 1024px) and does not support mobile editing.",
-        "landingNotice": "Editing requires desktop (≥ 1024px); mobile supports playback only."
+        "landingNotice": "The full editor needs a desktop (≥ 1024px); on a phone, edit by chatting with the Story Agent, or play."
     },
     "cast": {
         "title": "Cast",
@@ -1103,6 +1103,72 @@ export const storyMakerMessages = {
         "licenseBody": "This software and the @moesekai/story-* packages are open-sourced under the Mozilla Public License 2.0 (MPL-2.0). Live2D Cubism Core for Web loaded at runtime is governed by Live2D Inc.'s proprietary license and is not covered by MPL-2.0.",
         "contentTitle": "User Content & Custom Audio Responsibility",
         "contentBody": "All story scripts, translations, and custom voice audio attached to stories are created or provided by their respective authors, who remain solely responsible for reviewing and ensuring lawful, respectful content. Please keep backups of important projects."
+    },
+    "agent": {
+        "draftMissing": "This draft could not be found. It may have been deleted.",
+        "history": "Chat history",
+        "historyEmpty": "No saved chats for this draft yet.",
+        "untitledChat": "Untitled chat",
+        "turnCount": "Turns: {count}",
+        "deleteChat": "Delete chat",
+        "context": "Context {tokens}",
+        "compactHint": "Condense earlier turns into a summary so each request sends less; long chats are condensed automatically.",
+        "compaction": {
+            "running": "Condensing earlier turns…",
+            "done": "Condensed earlier turns: {before} → {after}",
+            "failed": "Could not condense; the chat is unchanged"
+        },
+        "title": "Story Agent",
+        "settings": "Model settings",
+        "newChat": "New chat",
+        "clearMarks": "Clear change marks",
+        "apiKey": "DeepSeek API key",
+        "apiKeyHint": "Stored only in this browser. Requests go from the browser straight to DeepSeek, not through MoeSekai servers.",
+        "model": "Model",
+        "thinkingLevel": "Thinking effort",
+        "thinkingLevels": {
+            "off": "Off",
+            "minimal": "Minimal",
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High",
+            "xhigh": "Extra high",
+            "max": "Max"
+        },
+        "empty": {
+            "docked": "Describe the change you want, e.g. \"after the selected scene, add a talk between mzk and ena\". Nodes the agent changes are marked on the canvas.",
+            "page": "Describe the change you want, e.g. \"open with a talk between mzk and ena\". Edits are saved to the draft; tap a changed node to play from there."
+        },
+        "modeEdit": "Edit",
+        "modeCreate": "Create",
+        "placeholder": {
+            "docked": "Tell the agent what to change… (Enter to send, Shift+Enter for a new line)",
+            "page": "Tell the agent what to change…"
+        },
+        "needKey": "Add an API key in model settings first",
+        "send": "Send",
+        "stop": "Stop",
+        "thinking": "Thinking",
+        "aborted": "Stopped",
+        "undoTurn": "Undo this turn",
+        "diffSummary": "Nodes +{added} ~{modified} −{removed}",
+        "diffBeats": "Lines {delta}",
+        "compileOk": "Compiles",
+        "compileErrors": "{count} errors",
+        "change": {
+            "added": "New",
+            "modified": "Changed"
+        },
+        "status": {
+            "idle": "Idle",
+            "starting": "Starting…",
+            "thinking": "Thinking…",
+            "streaming": "Replying…",
+            "tool_running": "Running a tool…",
+            "retrying": "Retrying…",
+            "aborted": "Stopped",
+            "error": "Error"
+        }
     }
 };
 

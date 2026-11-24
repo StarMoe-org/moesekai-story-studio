@@ -71,7 +71,7 @@ export const storyMakerMessages = {
     "desktopOnly": {
         "title": "데스크톱 브라우저가 필요합니다",
         "description": "스토리 메이커 편집기는 데스크톱 화면(너비 ≥ 1024px) 전용이며 모바일 편집을 지원하지 않습니다.",
-        "landingNotice": "편집은 데스크톱(≥ 1024px) 전용이며 모바일에서는 재생만 가능합니다."
+        "landingNotice": "전체 편집기는 데스크톱(1024px 이상)이 필요합니다. 휴대폰에서는 스토리 Agent와 대화로 편집하거나 재생할 수 있습니다."
     },
     "cast": {
         "title": "출연진",
@@ -1103,6 +1103,72 @@ export const storyMakerMessages = {
         "licenseBody": "본 소프트웨어와 @moesekai/story-* 패키지는 Mozilla Public License 2.0 (MPL-2.0) 라이선스로 공개됩니다. 런타임에 로드되는 Live2D Cubism Core for Web은 Live2D Inc.의 독점 라이선스를 따르며 MPL-2.0 범위에 포함되지 않습니다.",
         "contentTitle": "사용자 창작물 및 커스텀 오디오 책임",
         "contentBody": "모든 스토리 대본, 번역문 및 사용자가 직접 연결한 커스텀 음성 파일의 작성과 책임은 제작자 본인에게 있습니다. 관련 법령과 커뮤니티 규정을 준수하고 중요한 프로젝트는 정기적으로 백업해 주세요."
+    },
+    "agent": {
+        "draftMissing": "이 초안을 찾을 수 없습니다. 삭제되었을 수 있습니다.",
+        "history": "대화 기록",
+        "historyEmpty": "이 초안에 저장된 대화가 아직 없습니다.",
+        "untitledChat": "제목 없는 대화",
+        "turnCount": "{count}턴",
+        "deleteChat": "대화 삭제",
+        "context": "컨텍스트 {tokens}",
+        "compactHint": "이전 대화를 요약으로 압축해 요청마다 보내는 양을 줄입니다. 대화가 길어지면 자동으로 압축합니다.",
+        "compaction": {
+            "running": "이전 대화를 압축하는 중…",
+            "done": "이전 대화를 압축했습니다: {before} → {after}",
+            "failed": "압축하지 못했습니다. 대화는 그대로입니다"
+        },
+        "title": "스토리 Agent",
+        "settings": "모델 설정",
+        "newChat": "새 대화",
+        "clearMarks": "변경 표시 지우기",
+        "apiKey": "DeepSeek API 키",
+        "apiKeyHint": "이 브라우저에만 저장됩니다. 요청은 브라우저에서 DeepSeek로 직접 전송되며 MoeSekai 서버를 거치지 않습니다.",
+        "model": "모델",
+        "thinkingLevel": "사고 강도",
+        "thinkingLevels": {
+            "off": "끔",
+            "minimal": "최소",
+            "low": "낮음",
+            "medium": "보통",
+            "high": "높음",
+            "xhigh": "매우 높음",
+            "max": "최대"
+        },
+        "empty": {
+            "docked": "원하는 변경을 적어 주세요. 예: \"선택한 장면 뒤에 mzk와 ena의 대화를 추가\". Agent가 바꾼 노드는 캔버스에 표시됩니다.",
+            "page": "원하는 변경을 적어 주세요. 예: \"시작 부분에 mzk와 ena의 대화를 추가\". 변경은 초안에 바로 저장되며, 바뀐 노드를 누르면 거기서부터 재생됩니다."
+        },
+        "modeEdit": "편집",
+        "modeCreate": "창작",
+        "placeholder": {
+            "docked": "Agent에게 바꿀 내용을 알려 주세요… (Enter 전송, Shift+Enter 줄바꿈)",
+            "page": "Agent에게 바꿀 내용을 알려 주세요…"
+        },
+        "needKey": "먼저 모델 설정에 API 키를 입력하세요",
+        "send": "전송",
+        "stop": "중지",
+        "thinking": "생각 과정",
+        "aborted": "중지됨",
+        "undoTurn": "이번 변경 되돌리기",
+        "diffSummary": "노드 +{added} ~{modified} −{removed}",
+        "diffBeats": "대사 {delta}",
+        "compileOk": "컴파일 성공",
+        "compileErrors": "오류 {count}개",
+        "change": {
+            "added": "추가",
+            "modified": "변경"
+        },
+        "status": {
+            "idle": "대기",
+            "starting": "시작 중…",
+            "thinking": "생각 중…",
+            "streaming": "답변 중…",
+            "tool_running": "도구 실행 중…",
+            "retrying": "재시도 중…",
+            "aborted": "중지됨",
+            "error": "오류"
+        }
     }
 };
 

@@ -71,7 +71,7 @@ export const storyMakerMessages = {
     "desktopOnly": {
         "title": "请使用桌面端浏览器",
         "description": "剧情制作器编辑器需要桌面端大屏环境（宽度 ≥ 1024px），暂不支持手机端编辑。",
-        "landingNotice": "编辑功能仅支持桌面端（≥ 1024px），移动端可播放剧情。"
+        "landingNotice": "完整编辑器需要桌面端（≥ 1024px）；手机上可以用剧情 Agent 对话修改剧情，或直接播放。"
     },
     "cast": {
         "title": "演员表",
@@ -1103,6 +1103,72 @@ export const storyMakerMessages = {
         "licenseBody": "本软件与 @moesekai/story-* 套件基于 Mozilla Public License 2.0 (MPL-2.0) 协议开源。运行时加载的 Live2D Cubism Core for Web 遵循 Live2D Inc. 的专有许可条款，不包含在 MPL-2.0 授权范围内。",
         "contentTitle": "用户创作内容与自定义音频责任",
         "contentBody": "所有剧情剧本、翻译文本及用户自行挂载的自定义音频均由创作者自行编写、提供并承担相应责任；请遵守相关法律法规、尊重原作与社区规范，并妥善备份重要剧情工程。"
+    },
+    "agent": {
+        "draftMissing": "找不到这份草稿，它可能已被删除。",
+        "history": "历史对话",
+        "historyEmpty": "这份草稿还没有保存的对话。",
+        "untitledChat": "未命名对话",
+        "turnCount": "{count} 轮",
+        "deleteChat": "删除对话",
+        "context": "上下文 {tokens}",
+        "compactHint": "把较早的对话压缩成摘要，减少每次请求的用量；对话很长时会自动压缩。",
+        "compaction": {
+            "running": "正在压缩较早的对话…",
+            "done": "已压缩较早的对话：{before} → {after}",
+            "failed": "压缩失败，对话保持原样"
+        },
+        "title": "剧情 Agent",
+        "settings": "模型设置",
+        "newChat": "新对话",
+        "clearMarks": "清除改动标记",
+        "apiKey": "DeepSeek API Key",
+        "apiKeyHint": "只保存在本浏览器；请求从浏览器直接发往 DeepSeek，不经过 MoeSekai 服务器。",
+        "model": "模型",
+        "thinkingLevel": "思考强度",
+        "thinkingLevels": {
+            "off": "关",
+            "minimal": "极低",
+            "low": "低",
+            "medium": "中",
+            "high": "高",
+            "xhigh": "极高",
+            "max": "最高"
+        },
+        "empty": {
+            "docked": "描述你想要的改动，例如“在选中的场景后加一段 mzk 和 ena 的对话”。Agent 改过的节点会在画布上标出。",
+            "page": "描述你想要的改动，例如“在开头加一段 mzk 和 ena 的对话”。改动会直接保存到草稿，点改过的节点就能从那里播放。"
+        },
+        "modeEdit": "修改",
+        "modeCreate": "创作",
+        "placeholder": {
+            "docked": "告诉 Agent 要怎么改…（Enter 发送，Shift+Enter 换行）",
+            "page": "告诉 Agent 要怎么改…"
+        },
+        "needKey": "先在模型设置里填入 API Key",
+        "send": "发送",
+        "stop": "停止",
+        "thinking": "思考过程",
+        "aborted": "已停止",
+        "undoTurn": "撤销这轮改动",
+        "diffSummary": "节点 +{added} ~{modified} −{removed}",
+        "diffBeats": "台词 {delta}",
+        "compileOk": "编译通过",
+        "compileErrors": "{count} 个错误",
+        "change": {
+            "added": "新增",
+            "modified": "已改"
+        },
+        "status": {
+            "idle": "空闲",
+            "starting": "启动中…",
+            "thinking": "思考中…",
+            "streaming": "回复中…",
+            "tool_running": "正在运行工具…",
+            "retrying": "重试中…",
+            "aborted": "已停止",
+            "error": "出错"
+        }
     }
 };
 

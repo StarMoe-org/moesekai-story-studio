@@ -130,6 +130,9 @@ export interface ReloadFromDocOptions {
     silent?: boolean;
 }
 
+/** How an outside author (e.g. an AI agent) changed a node since the user last looked. */
+export type StoryNodeChange = "added" | "modified";
+
 export interface StoryStudioEditorHandle {
     /** Parse `.msk` script text and hot-reload the live editor canvas (e.g. from Electron FS watcher or Pi Agent). */
     reloadFromScript: (
@@ -164,6 +167,8 @@ export interface StoryStudioEditorHandle {
     openVoiceManifestDialog: (tab?: "import" | "upload") => void;
     /** Trigger export (`onRequestExport` or `exporter.exportMsk`). */
     openExportDialog: () => void;
+    /** Marks nodes on the Flow Canvas as added or modified by an outside author; `null` clears the marks. */
+    showNodeChanges: (changes: ReadonlyMap<string, StoryNodeChange> | null) => void;
 }
 
 export interface StoryStudioEditorProps {
@@ -187,6 +192,11 @@ export interface StoryStudioEditorProps {
     initialImmersive?: boolean;
     /** When true, displays the desktop-only notice below `1024px` without mounting WebGPU (Web sets `true`; Desktop leaves `false`). */
     enforceDesktopViewport?: boolean;
+    /**
+     * Shown below `1024px` in place of the desktop-only notice when `enforceDesktopViewport` is set
+     * (e.g. a phone agent screen). It mounts only once the viewport width is known, never on wide screens.
+     */
+    narrowViewport?: ReactNode;
     /** Called when the user toggles immersive mode. */
     onImmersiveChange?: (immersive: boolean, meta: { effective: boolean; userTriggered: boolean }) => void;
     /** Called whenever effective immersive state (`immersive && !loadError`) changes, for host shell suppression. */

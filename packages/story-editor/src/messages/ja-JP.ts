@@ -71,7 +71,7 @@ export const storyMakerMessages = {
     "desktopOnly": {
         "title": "PCブラウザをご利用ください",
         "description": "ストーリーメーカーのエディタはPC大画面環境（幅1024px以上）専用です。モバイルでの編集には対応していません。",
-        "landingNotice": "編集はPC（幅1024px以上）専用です。モバイルでは再生のみ対応しています。"
+        "landingNotice": "フルエディタにはデスクトップ（1024px 以上）が必要です。スマホではストーリー Agent との会話で編集するか、再生できます。"
     },
     "cast": {
         "title": "キャスト",
@@ -1103,6 +1103,72 @@ export const storyMakerMessages = {
         "licenseBody": "本ソフトウェアおよび @moesekai/story-* パッケージは Mozilla Public License 2.0 (MPL-2.0) の下で公開されています。実行時に読み込まれる Live2D Cubism Core for Web は Live2D Inc. の独自ライセンスに従い、MPL-2.0 の適用対象外です。",
         "contentTitle": "創作コンテンツ・カスタム音声に関する責任",
         "contentBody": "すべてのシナリオ台本・翻訳・独自に組み込んだ音声ファイルは制作者自身の責任において作成・管理されます。法令およびガイドラインを遵守のうえ、大切なプロジェクトは定期的にバックアップしてください。"
+    },
+    "agent": {
+        "draftMissing": "この下書きが見つかりません。削除された可能性があります。",
+        "history": "会話履歴",
+        "historyEmpty": "この下書きに保存された会話はまだありません。",
+        "untitledChat": "無題の会話",
+        "turnCount": "{count} ターン",
+        "deleteChat": "会話を削除",
+        "context": "コンテキスト {tokens}",
+        "compactHint": "以前のやり取りを要約に圧縮し、毎回のリクエスト量を減らします。会話が長くなると自動で圧縮します。",
+        "compaction": {
+            "running": "以前のやり取りを圧縮中…",
+            "done": "以前のやり取りを圧縮しました：{before} → {after}",
+            "failed": "圧縮できませんでした。会話はそのままです"
+        },
+        "title": "ストーリー Agent",
+        "settings": "モデル設定",
+        "newChat": "新しいチャット",
+        "clearMarks": "変更マークを消す",
+        "apiKey": "DeepSeek API キー",
+        "apiKeyHint": "このブラウザにのみ保存されます。リクエストはブラウザから DeepSeek へ直接送られ、MoeSekai のサーバーを経由しません。",
+        "model": "モデル",
+        "thinkingLevel": "思考レベル",
+        "thinkingLevels": {
+            "off": "オフ",
+            "minimal": "最小",
+            "low": "低",
+            "medium": "中",
+            "high": "高",
+            "xhigh": "極高",
+            "max": "最高"
+        },
+        "empty": {
+            "docked": "したい変更を書いてください。例：「選択中のシーンの後に mzk と ena の会話を追加」。Agent が変えたノードはキャンバス上でマークされます。",
+            "page": "したい変更を書いてください。例：「冒頭に mzk と ena の会話を追加」。変更は下書きに直接保存され、変わったノードをタップするとそこから再生できます。"
+        },
+        "modeEdit": "編集",
+        "modeCreate": "創作",
+        "placeholder": {
+            "docked": "Agent に変更内容を伝える…（Enter で送信、Shift+Enter で改行）",
+            "page": "Agent に変更内容を伝える…"
+        },
+        "needKey": "先にモデル設定で API キーを入力してください",
+        "send": "送信",
+        "stop": "停止",
+        "thinking": "思考",
+        "aborted": "停止しました",
+        "undoTurn": "このターンの変更を元に戻す",
+        "diffSummary": "ノード +{added} ~{modified} −{removed}",
+        "diffBeats": "セリフ {delta}",
+        "compileOk": "コンパイル成功",
+        "compileErrors": "エラー {count} 件",
+        "change": {
+            "added": "追加",
+            "modified": "変更"
+        },
+        "status": {
+            "idle": "待機中",
+            "starting": "起動中…",
+            "thinking": "思考中…",
+            "streaming": "返信中…",
+            "tool_running": "ツール実行中…",
+            "retrying": "再試行中…",
+            "aborted": "停止しました",
+            "error": "エラー"
+        }
     }
 };
 

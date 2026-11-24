@@ -17,6 +17,7 @@ import {
     type StoryBeatDragPayload, type StoryDragPayload, type StoryDropTarget, type StoryDropZone,
 } from "@moesekai/story-core";
 import { STORY_LIMITS } from "@moesekai/story-core";
+import type { StoryNodeChange } from "../studio/editorTypes";
 import type {
     ConditionExpr, SceneBeat, SceneNode, StageActionBeat, StoryCompileDiagnostic, StoryDocument, StoryEdge,
     StoryNode, StoryNodePos, StoryVariable, VarOp,
@@ -66,6 +67,8 @@ export interface StoryFlowCanvasProps {
     onRedo?: () => void;
     viewportActionsRef?: React.MutableRefObject<StoryFlowViewportActions | null>;
     activeDragPayload?: StoryDragPayload | null;
+    /** Nodes an outside author added or modified, outlined and badged until cleared. */
+    nodeChanges?: ReadonlyMap<string, StoryNodeChange> | null;
     className?: string;
 }
 
@@ -77,6 +80,16 @@ const SCENE_NODE_WIDTH = 292;
 const BRANCH_NODE_WIDTH = 272;
 const END_NODE_WIDTH = 216;
 const MAX_VISIBLE_BEATS = 5;
+
+const NODE_CHANGE_RING: Record<StoryNodeChange, string> = {
+    added: "ring-2 ring-tertiary shadow-elev-2",
+    modified: "ring-2 ring-secondary shadow-elev-2",
+};
+
+const NODE_CHANGE_BADGE: Record<StoryNodeChange, string> = {
+    added: "bg-tertiary text-on-tertiary",
+    modified: "bg-secondary text-on-secondary",
+};
 
 interface Point {
     x: number;
@@ -571,6 +584,7 @@ export function StoryFlowCanvas({
     onRedo,
     viewportActionsRef,
     activeDragPayload = null,
+    nodeChanges = null,
     className,
 }: StoryFlowCanvasProps): React.JSX.Element {
     const { t } = useI18n();
@@ -3048,6 +3062,25 @@ export function StoryFlowCanvas({
                         </div>
                     )}
 
+                    {/* Outside-author change badges, above the cards they label */}
+                    {nodeChanges && nodesList.map((node) => {
+                        const change = nodeChanges.get(node.id);
+                        if (!change) return null;
+                        const pos = getNodePos(node);
+                        return (
+                            <span
+                                key={`change-${node.id}`}
+                                className={cn(
+                                    "pointer-events-none absolute z-[21] -translate-y-1/2 rounded-full px-2 py-0.5 type-label-s shadow-elev-2",
+                                    NODE_CHANGE_BADGE[change],
+                                )}
+                                style={{ left: pos.x + 16, top: pos.y }}
+                            >
+                                {t(`page.storyMaker.agent.change.${change}`)}
+                            </span>
+                        );
+                    })}
+
                     {/* Node Cards Layer */}
                     {nodesList.map((node) => {
                         const pos = getNodePos(node);
@@ -3056,6 +3089,8 @@ export function StoryFlowCanvas({
                         const isVisited = isReadonly && !isActive && visitedNodeSet.has(node.id);
                         const isReachable = reachableNodeSet.has(node.id);
                         const diagSummary = nodeDiags.get(node.id);
+                        const change = nodeChanges?.get(node.id);
+                        const changeRing = !isActive && change && NODE_CHANGE_RING[change];
                         const isValidConnectTarget = isEdit
                             && activeWireSource !== null
                             && canConnectNodes(doc, activeWireSource.fromNodeId, activeWireSource.fromPortId, node.id).ok;
@@ -3084,6 +3119,7 @@ export function StoryFlowCanvas({
                                     style={{ left: pos.x, top: pos.y }}
                                     className={cn(
                                         "pointer-events-auto absolute z-[5] w-[196px] rounded-md3-xl border bg-primary text-on-primary shadow-elev-2 transition-shadow",
+                                        changeRing,
                                         isActive ? "z-[8] border-on-primary ring-2 ring-primary shadow-elev-3" : "border-primary",
                                         isDragging && "z-20 shadow-elev-4",
                                     )}
@@ -3135,6 +3171,7 @@ export function StoryFlowCanvas({
                                     style={{ left: pos.x, top: pos.y }}
                                     className={cn(
                                         "pointer-events-auto absolute z-[5] w-[216px] rounded-md3-xl border bg-surface-container-high text-on-surface shadow-elev-1 transition-shadow",
+                                        changeRing,
                                         isActive && "z-[8] border-primary ring-2 ring-primary shadow-elev-2",
                                         isVisited && "border-primary/55 bg-primary-container/30",
                                         !isActive && !isVisited && "border-outline-variant/80",
@@ -3215,6 +3252,7 @@ export function StoryFlowCanvas({
                                     style={{ left: pos.x, top: pos.y }}
                                     className={cn(
                                         "pointer-events-auto absolute z-[5] w-[272px] rounded-md3-xl border bg-surface-card shadow-elev-1 transition-shadow",
+                                        changeRing,
                                         isActive && "z-[8] border-primary ring-2 ring-primary shadow-elev-2",
                                         isVisited && "border-primary/55 bg-primary-container/25",
                                         !isActive && !isVisited && "border-tertiary/55",
@@ -3351,6 +3389,7 @@ export function StoryFlowCanvas({
                                     style={{ left: pos.x, top: pos.y }}
                                     className={cn(
                                         "pointer-events-auto absolute z-[5] w-[272px] rounded-md3-xl border bg-surface-card shadow-elev-1 transition-shadow",
+                                        changeRing,
                                         isActive && "z-[8] border-primary ring-2 ring-primary shadow-elev-2",
                                         isVisited && "border-primary/55 bg-primary-container/25",
                                         !isActive && !isVisited && "border-secondary/60",
@@ -3507,6 +3546,7 @@ export function StoryFlowCanvas({
                                 style={{ left: pos.x, top: pos.y }}
                                 className={cn(
                                     "group/scene pointer-events-auto absolute z-[5] w-[292px] rounded-md3-xl border bg-surface-card shadow-elev-1 transition-shadow",
+                                    changeRing,
                                     isActive && "z-[8] border-primary ring-2 ring-primary shadow-elev-2",
                                     isVisited && "border-primary/55 bg-primary-container/20",
                                     !isActive && !isVisited && "border-outline-variant/85",

@@ -1,7 +1,7 @@
 {
   "name": "@moesekai/story-editor",
   "version": "0.3.2",
-  "description": "MoeSekai Story Studio React editor, player, Live2D stage, MD3 Expressive primitives, and 5-locale dictionaries",
+  "description": "MoeSekai Story Studio React editor, player, Live2D stage, browser story agent panel, MD3 Expressive primitives, and 5-locale dictionaries",
   "type": "module",
   "license": "MPL-2.0",
   "sideEffects": [
@@ -26,6 +26,10 @@
     "./live2d": {
       "types": "./dist/live2d/index.d.ts",
       "import": "./dist/live2d/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "import": "./dist/agent/index.js"
     },
     "./messages": {
       "types": "./dist/messages/index.d.ts",
@@ -96,22 +100,37 @@
     "node": ">=20"
   },
   "peerDependencies": {
+    "@moesekai/story-agent": "^0.3.2",
     "@moesekai/story-core": "^0.3.2",
     "framer-motion": "^12.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "peerDependenciesMeta": {
     "@moesekai/story-core": {
       "optional": true
+    },
+    "@moesekai/story-agent": {
+      "optional": true
+    },
+    "react-markdown": {
+      "optional": true
+    },
+    "remark-gfm": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@moesekai/story-agent": "workspace:*",
     "@moesekai/story-core": "workspace:*",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "framer-motion": "^12.34.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   }
 }

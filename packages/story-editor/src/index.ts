@@ -27,6 +27,7 @@ export type {
     EditorTopBarSlotContext,
     ReloadFromDocOptions,
     ReloadFromScriptOptions,
+    StoryNodeChange,
     StoryEditorSaveStatus,
     StoryEditorWorkspaceMode,
     StoryStudioEditorHandle,

@@ -148,6 +148,7 @@ import type {
     ReloadFromScriptOptions,
     StoryEditorSaveStatus,
     StoryEditorWorkspaceMode,
+    StoryNodeChange,
     StoryStudioEditorHandle,
     StoryStudioEditorProps,
 } from "./editorTypes";
@@ -507,6 +508,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             return firstNode?.type === "scene" ? (firstNode.beats[0]?.id ?? null) : null;
         });
         const [saveStatus, setSaveStatus] = useState<StoryEditorSaveStatus>("saved");
+        const [nodeChanges, setNodeChanges] = useState<ReadonlyMap<string, StoryNodeChange> | null>(null);
 
         const [workspaceMode, setWorkspaceMode] = useState<StoryEditorWorkspaceMode>("edit");
         const [immersive, setImmersive] = useState<boolean>(initialImmersive);
@@ -1991,6 +1993,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             openExportDialog: () => {
                 handleExportAction();
             },
+            showNodeChanges: setNodeChanges,
         }), [
             activeBeatId,
             activeNodeId,
@@ -4341,6 +4344,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                         <StoryFlowCanvas
                             key="desktop-flow-canvas"
                             doc={doc}
+                            nodeChanges={nodeChanges}
                             mode={isPlaytest ? "play" : "edit"}
                             activeNodeId={isPlaytest ? (playActiveFrame?.nodeId ?? null) : activeNodeId}
                             activeBeatId={isPlaytest ? (playActiveFrame?.beatId ?? null) : activeBeatId}
@@ -4479,6 +4483,7 @@ export const StoryStudioEditor = forwardRef<StoryStudioEditorHandle, StoryStudio
     function StoryStudioEditor(props, ref) {
         const {
             enforceDesktopViewport = false,
+            narrowViewport,
             draftId = null,
             backToDraftsHref = "/story-maker",
             onBackToDrafts,
@@ -4487,33 +4492,27 @@ export const StoryStudioEditor = forwardRef<StoryStudioEditorHandle, StoryStudio
         const isDesktop = useDesktopViewport();
 
         if (enforceDesktopViewport) {
+            const notice = (
+                <DesktopOnlyNotice
+                    draftId={draftId}
+                    backToDraftsHref={backToDraftsHref}
+                    onBackToDrafts={onBackToDrafts}
+                    getDraftPlayHref={getDraftPlayHref}
+                />
+            );
+            const loading = <PageContainer wide><LoadingState /></PageContainer>;
             if (isDesktop === null) {
+                // The host's narrow view is interactive, so it mounts only once the viewport is
+                // known; the static notice can show early and be hidden by CSS on wide screens.
+                if (narrowViewport) return loading;
                 return (
                     <>
-                        <div className="lg:hidden">
-                            <DesktopOnlyNotice
-                                draftId={draftId}
-                                backToDraftsHref={backToDraftsHref}
-                                onBackToDrafts={onBackToDrafts}
-                                getDraftPlayHref={getDraftPlayHref}
-                            />
-                        </div>
-                        <div className="hidden lg:block">
-                            <PageContainer wide><LoadingState /></PageContainer>
-                        </div>
+                        <div className="lg:hidden">{notice}</div>
+                        <div className="hidden lg:block">{loading}</div>
                     </>
                 );
             }
-            if (!isDesktop) {
-                return (
-                    <DesktopOnlyNotice
-                        draftId={draftId}
-                        backToDraftsHref={backToDraftsHref}
-                        onBackToDrafts={onBackToDrafts}
-                        getDraftPlayHref={getDraftPlayHref}
-                    />
-                );
-            }
+            if (!isDesktop) return narrowViewport ?? notice;
         }
 
         return <StoryStudioEditorInner ref={ref} {...props} />;

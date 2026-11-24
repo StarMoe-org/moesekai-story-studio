@@ -48,6 +48,7 @@ const UI_CLIENT_BARRELS = new Set([
     path.normalize(path.join(distDir, "md3/index.js")),
     path.normalize(path.join(distDir, "md3/icons.js")),
     path.normalize(path.join(distDir, "live2d/index.js")),
+    path.normalize(path.join(distDir, "agent/index.js")),
 ]);
 
 console.log("[story-editor] Rewriting relative ESM specifiers to explicit .js paths...");
