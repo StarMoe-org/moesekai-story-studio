@@ -1,5 +1,3 @@
-import { readdir } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
 import {
     PJSK_CHARACTER_SPEECH_HINTS,
     STORY_VOICE_MANIFEST_SCHEMA_VERSION,
@@ -26,15 +24,15 @@ import {
     type UiLocale,
     type VoiceManifestMatchSummary,
 } from "@moesekai/story-core";
+import type { StoryWorkspaceFiles } from "./files";
 import type { StoryTtsCandidateLine } from "./types";
 import {
     DEFAULT_STORY_FILE,
     normalizeLineEndings,
-    readLocalePackFromDisk,
-    readVoiceManifestFromDisk,
-    resolveSafeWorkspacePath,
-    writeLocalePackToDisk,
-    writeVoiceManifestToDisk,
+    readLocalePack,
+    readVoiceManifest,
+    writeLocalePack,
+    writeVoiceManifest,
 } from "./workspace";
 
 // ==================== Cue-Sheet / Voice Candidate Extraction ====================
@@ -145,15 +143,12 @@ export function extractTtsCandidateLines(
 
 // ==================== Workspace Translation Helpers ====================
 
-async function loadParsedStoryDoc(workspaceDir: string, storyFile: string): Promise<StoryDocument> {
-    const abs = resolveSafeWorkspacePath(workspaceDir, storyFile);
-    let raw: string;
-    try {
-        raw = normalizeLineEndings(await readFile(abs, "utf8"));
-    } catch {
+async function loadParsedStoryDoc(files: StoryWorkspaceFiles, storyFile: string): Promise<StoryDocument> {
+    const stored = await files.readText(storyFile);
+    if (stored === null) {
         throw new Error(`Story file "${storyFile}" not found in workspace.`);
     }
-    const parsed = parseStoryScript(raw);
+    const parsed = parseStoryScript(normalizeLineEndings(stored));
     if (!parsed.ok) {
         const first = parsed.diagnostics[0];
         throw new Error(
@@ -186,7 +181,7 @@ export interface PrepareTranslationResult {
 }
 
 export async function prepareStoryTranslation(
-    workspaceDir: string,
+    files: StoryWorkspaceFiles,
     storyFile = DEFAULT_STORY_FILE,
     options: {
         targetLocale: UiLocale;
@@ -198,7 +193,7 @@ export async function prepareStoryTranslation(
     if (!isUiLocale(options.targetLocale)) {
         throw new Error(`Unsupported targetLocale "${String(options.targetLocale)}".`);
     }
-    const doc = await loadParsedStoryDoc(workspaceDir, storyFile);
+    const doc = await loadParsedStoryDoc(files, storyFile);
     const sourceLocale = inferStorySourceLocale(doc);
     if (options.targetLocale === sourceLocale) {
         throw new Error(
@@ -206,7 +201,7 @@ export async function prepareStoryTranslation(
         );
     }
 
-    const existingPack = await readLocalePackFromDisk(workspaceDir, options.targetLocale);
+    const existingPack = await readLocalePack(files, options.targetLocale);
     const outdated = detectOutdatedBeats(doc, existingPack);
 
     let onlyBeatIds: string[] | undefined;
@@ -255,7 +250,7 @@ export interface ApplyTranslationResult {
 }
 
 export async function applyStoryTranslation(
-    workspaceDir: string,
+    files: StoryWorkspaceFiles,
     storyFile = DEFAULT_STORY_FILE,
     options: {
         targetLocale: UiLocale;
@@ -270,8 +265,8 @@ export async function applyStoryTranslation(
     if (!isUiLocale(options.targetLocale)) {
         throw new Error(`Unsupported targetLocale "${String(options.targetLocale)}".`);
     }
-    const doc = await loadParsedStoryDoc(workspaceDir, storyFile);
-    const existingPack = await readLocalePackFromDisk(workspaceDir, options.targetLocale);
+    const doc = await loadParsedStoryDoc(files, storyFile);
+    const existingPack = await readLocalePack(files, options.targetLocale);
 
     const validation = parseAndValidateLocalePack(options.rawJson, doc, options.targetLocale, {
         importSource: "ai_paste",
@@ -287,7 +282,7 @@ export async function applyStoryTranslation(
         return { ok: false, filePath: null, validation };
     }
 
-    const filePath = await writeLocalePackToDisk(workspaceDir, options.targetLocale, validation.pack);
+    const filePath = await writeLocalePack(files, options.targetLocale, validation.pack);
     return { ok: true, filePath, validation };
 }
 
@@ -301,22 +296,14 @@ export interface LocalAudioScanResult {
 }
 
 export async function scanLocalVoiceAudioFiles(
-    workspaceDir: string,
+    files: StoryWorkspaceFiles,
     doc: StoryDocument,
     audioDir = "voices",
 ): Promise<LocalAudioScanResult> {
-    const absDir = resolveSafeWorkspacePath(workspaceDir, audioDir);
-    let names: string[] = [];
-    try {
-        names = await readdir(absDir);
-    } catch {
-        return { audioDir, matched: [], unmatched: [], unsupported: [] };
-    }
-
     // Ignore manifest.json itself when scanning voices/
-    const candidateFiles = names
-        .filter((name) => name !== "manifest.json" && !name.startsWith("."))
-        .map((name) => ({ name }));
+    const candidateFiles = (await files.list(audioDir))
+        .filter(({ name }) => name !== "manifest.json" && !name.startsWith("."))
+        .map(({ name }) => ({ name }));
 
     const talkBeats = extractTalkBeatsForVoice(doc);
     const res = matchAudioFilesToTalkBeats(candidateFiles, talkBeats);
@@ -346,7 +333,7 @@ export interface PrepareVoiceCueSheetResult {
 }
 
 export async function prepareVoiceCueSheet(
-    workspaceDir: string,
+    files: StoryWorkspaceFiles,
     storyFile = DEFAULT_STORY_FILE,
     options: {
         targetLocale?: UiLocale;
@@ -354,16 +341,16 @@ export async function prepareVoiceCueSheet(
         audioDir?: string;
     } = {},
 ): Promise<PrepareVoiceCueSheetResult> {
-    const doc = await loadParsedStoryDoc(workspaceDir, storyFile);
+    const doc = await loadParsedStoryDoc(files, storyFile);
     const sourceLocale = inferStorySourceLocale(doc);
     const targetLocale = options.targetLocale && isUiLocale(options.targetLocale)
         ? options.targetLocale
         : sourceLocale;
 
     const localePack = targetLocale !== sourceLocale
-        ? await readLocalePackFromDisk(workspaceDir, targetLocale)
+        ? await readLocalePack(files, targetLocale)
         : null;
-    const loadedManifest = await readVoiceManifestFromDisk(workspaceDir);
+    const loadedManifest = await readVoiceManifest(files);
     const existingManifest = loadedManifest?.manifest ?? null;
 
     const candidateLines = extractTtsCandidateLines(doc, {
@@ -373,7 +360,7 @@ export async function prepareVoiceCueSheet(
         existingManifest,
     });
 
-    const localAudioScan = await scanLocalVoiceAudioFiles(workspaceDir, doc, options.audioDir ?? "voices");
+    const localAudioScan = await scanLocalVoiceAudioFiles(files, doc, options.audioDir ?? "voices");
     const existingSummary = existingManifest ? matchVoiceManifestToDoc(doc, existingManifest) : null;
 
     return {
@@ -395,7 +382,7 @@ export interface ApplyVoiceManifestResult {
 }
 
 export async function applyVoiceManifest(
-    workspaceDir: string,
+    files: StoryWorkspaceFiles,
     storyFile = DEFAULT_STORY_FILE,
     options: {
         rawManifestJson?: string;
@@ -406,7 +393,7 @@ export async function applyVoiceManifest(
         overrideOfficialVoice?: boolean;
     },
 ): Promise<ApplyVoiceManifestResult> {
-    const doc = await loadParsedStoryDoc(workspaceDir, storyFile);
+    const doc = await loadParsedStoryDoc(files, storyFile);
     let candidateRaw: unknown;
 
     if (options.rawManifestJson !== undefined && options.rawManifestJson.trim()) {
@@ -422,7 +409,7 @@ export async function applyVoiceManifest(
             };
         }
     } else if (options.autoMatchAudioDir !== undefined) {
-        const scan = await scanLocalVoiceAudioFiles(workspaceDir, doc, options.autoMatchAudioDir || "voices");
+        const scan = await scanLocalVoiceAudioFiles(files, doc, options.autoMatchAudioDir || "voices");
         const talkBeats = extractTalkBeatsForVoice(doc);
         const speakerByBeat = new Map(talkBeats.map((b) => [b.beatId, b.speakerName]));
         const trimmedBaseUrl = options.baseUrl?.trim() || undefined;
@@ -470,7 +457,7 @@ export async function applyVoiceManifest(
         };
     }
 
-    const filePath = await writeVoiceManifestToDisk(workspaceDir, validated);
+    const filePath = await writeVoiceManifest(files, validated);
     const matchSummary = matchVoiceManifestToDoc(doc, validated);
     return {
         ok: true,

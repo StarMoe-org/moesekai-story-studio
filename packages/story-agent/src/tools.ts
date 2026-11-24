@@ -1,6 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { Type, type TSchema } from "typebox";
 import type { StoryImportableTranslationOrigin, StoryRegion, UiLocale } from "@moesekai/story-core";
 import {
     applyStoryTranslation,
@@ -8,9 +7,12 @@ import {
     prepareStoryTranslation,
     prepareVoiceCueSheet,
 } from "./i18n-tools";
+import type { StoryWorkspaceFiles } from "./files";
 import {
     formatMineResultForAgent,
     mineOfficialStory,
+    type BrotliDecoder,
+    type OfficialStoryCache,
     type OfficialStoryMineRequest,
 } from "./official-story";
 import { tagWrappedFetch } from "./live2d-core";
@@ -29,12 +31,11 @@ import {
     normalizeLineEndings,
     patchStoryScript,
     readStoryWorkspace,
-    resolveSafeWorkspacePath,
     writeStoryScript,
 } from "./workspace";
 
 export interface StoryMakerToolsRuntime {
-    getWorkspaceDir: () => string;
+    getWorkspace: () => StoryWorkspaceFiles;
     getStoryFile: () => string;
     getAssetLine?: () => "main" | "backup";
     getSelectedNodeId?: () => string | null | undefined;
@@ -42,7 +43,8 @@ export interface StoryMakerToolsRuntime {
     isPlanApprovalRequired?: () => boolean;
     isMutationBlockedByPlan?: () => boolean;
     fetchImpl?: typeof fetch;
-    cacheDir?: string;
+    officialStoryCache?: OfficialStoryCache;
+    decodeBrotli?: BrotliDecoder;
     noCache?: boolean;
     onSnapshotCreated?: (snapshot: StorySnapshotMeta) => void;
     onMskDiff?: (diff: StoryMskDiff, storyFile: string) => void;
@@ -87,6 +89,24 @@ const WORKFLOW_STAGE_UNION = Type.Union([
     Type.Literal("patch"),
 ]);
 
+/**
+ * A Story Maker tool. It is a plain `pi-agent-core` tool, which the browser agent runs as is, and
+ * it also satisfies the coding agent's tool definition (whose extra `execute` context it ignores),
+ * which the desktop session registers.
+ */
+export interface StoryMakerTool<TParams extends TSchema = TSchema, TDetails = unknown>
+    extends AgentTool<TParams, TDetails> {
+    /** The tool's line in the coding agent's system prompt. */
+    promptSnippet?: string;
+    promptGuidelines?: string[];
+}
+
+function defineTool<TParams extends TSchema, TDetails = unknown>(
+    tool: StoryMakerTool<TParams, TDetails>,
+): StoryMakerTool<TParams, TDetails> {
+    return tool;
+}
+
 let planSeq = 0;
 
 function generatePlanId(): string {
@@ -114,7 +134,7 @@ function wrapFetchWithAbortSignal(
     return tagWrappedFetch(wrapped, underlying);
 }
 
-export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefinition<any, any, any>[] {
+export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): StoryMakerTool<any, any>[] {
     const getStory = () => runtime.getStoryFile() || DEFAULT_STORY_FILE;
     const getLine = () => runtime.getAssetLine?.() ?? "main";
     const getMode = (): StoryAuthoringMode => runtime.getAuthoringMode?.() ?? "edit";
@@ -290,7 +310,7 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
         }),
         async execute(_toolCallId, params) {
             const selectedNodeId = params.selectedNodeId ?? runtime.getSelectedNodeId?.() ?? undefined;
-            const snapshot = await readStoryWorkspace(runtime.getWorkspaceDir(), getStory(), {
+            const snapshot = await readStoryWorkspace(runtime.getWorkspace(), getStory(), {
                 includeScript: params.includeScript ?? true,
                 startLine: params.startLine,
                 endLine: params.endLine,
@@ -476,7 +496,8 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
             const result = await mineOfficialStory(req, {
                 line: getLine(),
                 fetchImpl: wrapFetchWithAbortSignal(runtime.fetchImpl, signal),
-                cacheDir: runtime.cacheDir,
+                cache: runtime.officialStoryCache,
+                decodeBrotli: runtime.decodeBrotli,
                 noCache: runtime.noCache,
             });
             return {
@@ -519,7 +540,7 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
                 };
             }
 
-            const result = await writeStoryScript(runtime.getWorkspaceDir(), getStory(), params.script, {
+            const result = await writeStoryScript(runtime.getWorkspace(), getStory(), params.script, {
                 reason: params.reason ?? "story_write_msk",
                 toolName: "story_write_msk",
             });
@@ -599,7 +620,7 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
             }
 
             const result = await patchStoryScript(
-                runtime.getWorkspaceDir(),
+                runtime.getWorkspace(),
                 getStory(),
                 {
                     edits: params.edits,
@@ -648,8 +669,11 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
             regionOverride: Type.Optional(REGIONS_UNION),
         }),
         async execute(_toolCallId, params, signal) {
-            const absStory = resolveSafeWorkspacePath(runtime.getWorkspaceDir(), getStory());
-            const source = normalizeLineEndings(await readFile(absStory, "utf8"));
+            const stored = await runtime.getWorkspace().readText(getStory());
+            if (stored === null) {
+                throw new Error(`"${getStory()}" does not exist yet. Write it with story_write_msk first.`);
+            }
+            const source = normalizeLineEndings(stored);
             const report = await validateAndSimulateStory(source, {
                 strict: params.strict ?? true,
                 simulate: params.simulate ?? true,
@@ -687,7 +711,7 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
                 if (!params.targetLocale) {
                     throw new Error("story_i18n_prepare with mode='translate' requires targetLocale.");
                 }
-                const res = await prepareStoryTranslation(runtime.getWorkspaceDir(), getStory(), {
+                const res = await prepareStoryTranslation(runtime.getWorkspace(), getStory(), {
                     targetLocale: params.targetLocale as UiLocale,
                     chunkIndex: params.chunkIndex,
                     maxBeatsPerChunk: params.maxBeatsPerChunk,
@@ -702,7 +726,7 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
                 return { content: [{ type: "text", text }], details: res as unknown };
             }
 
-            const res = await prepareVoiceCueSheet(runtime.getWorkspaceDir(), getStory(), {
+            const res = await prepareVoiceCueSheet(runtime.getWorkspace(), getStory(), {
                 targetLocale: params.targetLocale as UiLocale | undefined,
                 onlyMissingOfficialVoice: params.onlyMissingOfficialVoice,
                 audioDir: params.audioDir,
@@ -752,7 +776,7 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
                 if (!params.targetLocale || !params.rawJson) {
                     throw new Error("story_i18n_apply with mode='locale_pack' requires targetLocale and rawJson.");
                 }
-                const res = await applyStoryTranslation(runtime.getWorkspaceDir(), getStory(), {
+                const res = await applyStoryTranslation(runtime.getWorkspace(), getStory(), {
                     targetLocale: params.targetLocale as UiLocale,
                     rawJson: params.rawJson,
                     chunkIndex: params.chunkIndex,
@@ -779,7 +803,7 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
                 };
             }
 
-            const res = await applyVoiceManifest(runtime.getWorkspaceDir(), getStory(), {
+            const res = await applyVoiceManifest(runtime.getWorkspace(), getStory(), {
                 rawManifestJson: params.rawJson,
                 autoMatchAudioDir: params.autoMatchAudioDir,
                 baseUrl: params.baseUrl,

@@ -6,11 +6,11 @@ import {
     listStorySnapshots,
     patchStoryScript,
     readStoryWorkspace,
-    resolveSafeWorkspacePath,
     rollbackStorySnapshot,
     writeStoryScript,
 } from "../src/workspace";
 import { validateAndSimulateStory } from "../src/validator";
+import { createNodeWorkspaceFiles, resolveSafeWorkspacePath } from "../src/node";
 
 const VALID_STORY_MSK = `@story "After-School Mini Practice" region=jp id="demo_story" author="Moesekai" summary="A short branching demo."
 
@@ -101,7 +101,7 @@ describe("workspace snapshots, diff, patch & rollback", () => {
         const dir = await makeTempWorkspace();
 
         // 1. Initial write creates story.msk (no prior snapshot)
-        const writeRes = await writeStoryScript(dir, "story.msk", VALID_STORY_MSK, {
+        const writeRes = await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", VALID_STORY_MSK, {
             reason: "initial draft",
         });
         expect(writeRes.parseOk).toBe(true);
@@ -112,7 +112,7 @@ describe("workspace snapshots, diff, patch & rollback", () => {
         expect(writeRes.diff.addedVarIds).toEqual(["harmony", "invited"]);
 
         // 2. Read workspace outline + selected node context
-        const ws = await readStoryWorkspace(dir, "story.msk", { selectedNodeId: "scene_cafe" });
+        const ws = await readStoryWorkspace(createNodeWorkspaceFiles(dir), "story.msk", { selectedNodeId: "scene_cafe" });
         expect(ws.exists).toBe(true);
         expect(ws.parseOk).toBe(true);
         expect(ws.endings.length).toBe(2);
@@ -120,7 +120,7 @@ describe("workspace snapshots, diff, patch & rollback", () => {
         expect(ws.selectedNodeContext?.mskSnippet).toContain("Strawberry parfait time!");
 
         // 3. Patch via exact edit (creates pre-mutation snapshot #1)
-        const patch1 = await patchStoryScript(dir, "story.msk", {
+        const patch1 = await patchStoryScript(createNodeWorkspaceFiles(dir), "story.msk", {
             edits: [
                 {
                     find: 'talk saki "Strawberry parfait time!"',
@@ -138,7 +138,7 @@ describe("workspace snapshots, diff, patch & rollback", () => {
         expect(patch1.diff.unifiedDiffPreview).toContain("+  talk saki \"Matcha parfait time!\"");
 
         // 4. Patch via replaceNode (creates snapshot #2)
-        const patch2 = await patchStoryScript(dir, "story.msk", {
+        const patch2 = await patchStoryScript(createNodeWorkspaceFiles(dir), "story.msk", {
             replaceNode: {
                 nodeId: "end_cafe",
                 msk: 'end end_cafe "Parfait Ending" subtitle="Sweet treat! (Harmony: {{harmony}})"',
@@ -148,11 +148,11 @@ describe("workspace snapshots, diff, patch & rollback", () => {
         expect(patch2.parseOk).toBe(true);
         expect(patch2.diff.modifiedNodeIds).toEqual(["end_cafe"]);
 
-        const snapshots = await listStorySnapshots(dir);
+        const snapshots = await listStorySnapshots(createNodeWorkspaceFiles(dir));
         expect(snapshots.length).toBe(2);
 
         // 5. Rollback to snapshot #1 (original VALID_STORY_MSK)
-        const rolled = await rollbackStorySnapshot(dir, "story.msk", patch1.snapshot!.id);
+        const rolled = await rollbackStorySnapshot(createNodeWorkspaceFiles(dir), "story.msk", patch1.snapshot!.id);
         expect(rolled.ok).toBe(true);
         expect(rolled.safetySnapshotId).not.toBeNull();
         expect(rolled.diff.beatCountDelta).toBe(-1);
@@ -222,8 +222,8 @@ end end_unreachable "Never Reached"
 
         // Self-heal by setting explicit slots, distinct actor slots, and making flag reachable
         const dir = await makeTempWorkspace();
-        await writeStoryScript(dir, "story.msk", broken);
-        await patchStoryScript(dir, "story.msk", {
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", broken);
+        await patchStoryScript(createNodeWorkspaceFiles(dir), "story.msk", {
             edits: [
                 {
                     find: 'opt1: "Left" -> scene_merge',

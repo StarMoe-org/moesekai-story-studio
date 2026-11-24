@@ -25,6 +25,7 @@ import {
     validateAndSimulateStory,
 } from "../src/index";
 import { patchStoryScript, readStoryWorkspace, writeStoryScript } from "../src/workspace";
+import { createNodeWorkspaceFiles } from "../src/node";
 
 const STARTER_MSK = `@story "Starter" region=jp id="starter"
 @cast ichika "Ichika" model="v2_01ichika_casual" char=1
@@ -80,7 +81,7 @@ describe("Auto-retry events & transient network timeout recovery (#100)", () => 
 
     test("forwards Pi SDK auto_retry_start / auto_retry_end on transient UND_ERR_CONNECT_TIMEOUT -> clean recovery without terminal error", async () => {
         const dir = await makeTempDir();
-        await writeStoryScript(dir, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", STARTER_MSK);
 
         const faux = fauxProvider({
             provider: "faux-retry-recover",
@@ -163,7 +164,7 @@ describe("Auto-retry events & transient network timeout recovery (#100)", () => 
 
     test("exhausted retries emit retry_end { success: false } + single terminal non-recoverable error", async () => {
         const dir = await makeTempDir();
-        await writeStoryScript(dir, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", STARTER_MSK);
 
         const faux = fauxProvider({
             provider: "faux-retry-exhaust",
@@ -227,7 +228,7 @@ describe("Auto-retry events & transient network timeout recovery (#100)", () => 
 
     test("outer transient-network retry guard recovers from UND_ERR_SOCKET without duplicating user messages", async () => {
         const dir = await makeTempDir();
-        await writeStoryScript(dir, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", STARTER_MSK);
 
         const observedUserMsgCounts: number[] = [];
         const faux = fauxProvider({
@@ -289,7 +290,7 @@ describe("Auto-retry events & transient network timeout recovery (#100)", () => 
 
     test("abort during retry backoff cancels immediately without waiting for full delay", async () => {
         const dir = await makeTempDir();
-        await writeStoryScript(dir, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", STARTER_MSK);
 
         const faux = fauxProvider({
             provider: "faux-retry-abort",
@@ -349,7 +350,7 @@ describe("Auto-retry events & transient network timeout recovery (#100)", () => 
 
     test("settles any in-flight tool call on abort so UI never stays stuck at running", async () => {
         const dir = await makeTempDir();
-        await writeStoryScript(dir, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", STARTER_MSK);
 
         // Slow fetch inside story_validate_and_simulate(verifyAssets=true) so we can abort mid-tool execution
         const hangingFetch = ((_input: string | URL | Request, init?: RequestInit) =>
@@ -427,8 +428,8 @@ describe("Persistent per-project Pi sessions, resume & strict isolation (#107)",
     test("persists JSONL + UI sidecar lazily, isolates projects, resumes with full LLM context, and supports newSession/deleteSession", async () => {
         const dirA = await makeTempDir("moesekai-proj-a-");
         const dirB = await makeTempDir("moesekai-proj-b-");
-        await writeStoryScript(dirA, "story.msk", STARTER_MSK);
-        await writeStoryScript(dirB, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dirA), "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dirB), "story.msk", STARTER_MSK);
 
         let resumedPromptSeenMessages: string[] = [];
 
@@ -545,7 +546,7 @@ describe("Persistent per-project Pi sessions, resume & strict isolation (#107)",
 
     test("worker IPC supports list_sessions, new_session, resume_session, delete_session & get_state.activeSessionId", async () => {
         const dir = await makeTempDir("moesekai-ipc-sess-");
-        await writeStoryScript(dir, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", STARTER_MSK);
 
         const faux = fauxProvider({
             provider: "faux-ipc-sess",
@@ -623,7 +624,7 @@ describe("Live2D Z-layer prompt & tool guidance (#105)", () => {
         expect(authorPreset).toContain("z=<int>");
 
         const tools = createStoryMakerTools({
-            getWorkspaceDir: () => tmpdir(),
+            getWorkspace: () => createNodeWorkspaceFiles(tmpdir()),
             getStoryFile: () => "story.msk",
         });
         const writeTool = tools.find((t) => t.name === "story_write_msk");
@@ -664,15 +665,15 @@ scene scene_z "Huddle" {
 } -> end_z
 end end_z "Done"
 `;
-        await writeStoryScript(dir, "story.msk", zMsk);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", zMsk);
 
-        const ws = await readStoryWorkspace(dir, "story.msk", { selectedNodeId: "scene_z" });
+        const ws = await readStoryWorkspace(createNodeWorkspaceFiles(dir), "story.msk", { selectedNodeId: "scene_z" });
         expect(ws.parseOk).toBe(true);
         const previews = ws.selectedNodeContext?.beatsPreview?.map((b) => b.summary) ?? [];
         expect(previews.some((p) => p.includes("move saki @ right z=5"))).toBe(true);
         expect(previews.some((p) => p.includes("pose ichika z=2"))).toBe(true);
 
-        const patched = await patchStoryScript(dir, "story.msk", {
+        const patched = await patchStoryScript(createNodeWorkspaceFiles(dir), "story.msk", {
             edits: [{ find: "stage move saki to right dur=0.4 z=5", replace: "stage move saki to right dur=0.4 z=12" }],
             reason: "raise saki foreground layer",
         });

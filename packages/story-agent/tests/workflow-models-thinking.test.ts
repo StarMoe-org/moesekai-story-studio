@@ -25,6 +25,7 @@ import {
     type StoryWorkflowPlan,
 } from "../src/index";
 import { writeStoryScript } from "../src/workspace";
+import { createNodeWorkspaceFiles } from "../src/node";
 
 const STARTER_MSK = `@story "Existing Starter" region=jp id="starter_existing"
 @cast ichika "Ichika" model="v2_01ichika_casual" char=1
@@ -229,7 +230,7 @@ describe("2026 frontier models & live /models discovery", () => {
 describe("thinkingLevel propagation, create vs edit prompts & zero user-facing 'Pi' wording", () => {
     test("propagates default 'medium' and live setThinkingLevel('high') to Pi SDK requests", async () => {
         const dir = await makeTempDir();
-        await writeStoryScript(dir, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", STARTER_MSK);
 
         const observedReasonings: Array<string | undefined> = [];
         const faux = fauxProvider({
@@ -297,7 +298,7 @@ describe("thinkingLevel propagation, create vs edit prompts & zero user-facing '
             buildPresetPrompt("prepare_tts_manifest"),
         ];
         const tools = createStoryMakerTools({
-            getWorkspaceDir: () => tmpdir(),
+            getWorkspace: () => createNodeWorkspaceFiles(tmpdir()),
             getStoryFile: () => "story.msk",
         });
         for (const t of tools) {
@@ -312,7 +313,7 @@ describe("thinkingLevel propagation, create vs edit prompts & zero user-facing '
 describe("staged workflow: story_report_stage, story_submit_plan & approvePlan gate", () => {
     test("halts before .msk mutation on plan_proposed, blocks unapproved writes, then executes full workflow on approvePlan", async () => {
         const dir = await makeTempDir();
-        await writeStoryScript(dir, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", STARTER_MSK);
 
         const mockFetch = (async (input: string | URL | Request) => {
             const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -472,7 +473,7 @@ describe("staged workflow: story_report_stage, story_submit_plan & approvePlan g
 
     test("hard mutation guard blocks story_write_msk when planFirst=true before approval", async () => {
         const dir = await makeTempDir();
-        await writeStoryScript(dir, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", STARTER_MSK);
 
         const faux = fauxProvider({
             provider: "faux-guard",
@@ -517,7 +518,7 @@ describe("staged workflow: story_report_stage, story_submit_plan & approvePlan g
 
     test("worker IPC handles set_thinking_level, set_authoring_mode, set_plan_first, fetch_models, and approve_plan", async () => {
         const dir = await makeTempDir();
-        await writeStoryScript(dir, "story.msk", STARTER_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", STARTER_MSK);
 
         const mockFetch = (async () =>
             new Response(JSON.stringify({ data: [{ id: "gpt-6.2-astra" }] }), { status: 200 })) as unknown as typeof fetch;

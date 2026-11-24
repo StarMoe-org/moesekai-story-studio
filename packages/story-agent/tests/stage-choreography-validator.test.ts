@@ -10,9 +10,10 @@ import {
     readStoryWorkspace,
     writeStoryScript,
 } from "../src/workspace";
-import { buildStoryAgentSystemPrompt } from "../src/session";
+import { buildStoryAgentSystemPrompt } from "../src/prompt";
 import { buildPresetPrompt } from "../src/presets";
 import { createStoryMakerTools } from "../src/tools";
+import { createNodeWorkspaceFiles } from "../src/node";
 
 const CHOREOGRAPHY_STORY_MSK = `@story "Stage Choreography Showcase" region=jp id="stage_choreo_showcase" author="Moesekai"
 
@@ -252,14 +253,14 @@ end end_1 "Done"
 
     test("readStoryWorkspace beatsPreview formats telop modifiers and grouped stage sync choreography cleanly", async () => {
         const dir = await makeTempWorkspace();
-        await writeStoryScript(dir, "story.msk", CHOREOGRAPHY_STORY_MSK);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", CHOREOGRAPHY_STORY_MSK);
 
-        const wsOpen = await readStoryWorkspace(dir, "story.msk", { selectedNodeId: "scene_opening" });
+        const wsOpen = await readStoryWorkspace(createNodeWorkspaceFiles(dir), "story.msk", { selectedNodeId: "scene_opening" });
         expect(wsOpen.parseOk).toBe(true);
         const openPreviews = wsOpen.selectedNodeContext?.beatsPreview?.map((b) => b.summary) ?? [];
         expect(openPreviews.some((p) => p.includes("actors=hide") && p.includes("pos=top"))).toBe(true);
 
-        const wsSync = await readStoryWorkspace(dir, "story.msk", { selectedNodeId: "scene_sync" });
+        const wsSync = await readStoryWorkspace(createNodeWorkspaceFiles(dir), "story.msk", { selectedNodeId: "scene_sync" });
         expect(wsSync.parseOk).toBe(true);
         const syncPreviews = wsSync.selectedNodeContext?.beatsPreview?.map((b) => b.summary) ?? [];
         expect(syncPreviews.some((p) => p.includes("sync [") && p.includes("enter saki") && p.includes("enter honami") && p.includes("mirror") && p.includes("delay=0.1"))).toBe(true);
@@ -281,7 +282,7 @@ end end_1 "Done"
         }
 
         const tools = createStoryMakerTools({
-            getWorkspaceDir: () => tmpdir(),
+            getWorkspace: () => createNodeWorkspaceFiles(tmpdir()),
             getStoryFile: () => "story.msk",
         });
         const writeTool = tools.find((t) => t.name === "story_write_msk");

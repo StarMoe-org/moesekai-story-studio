@@ -9,7 +9,7 @@ import type {
     StoryAuthoringMode,
     StoryWorkflowPlan,
 } from "./types";
-import { resolveSafeWorkspacePath } from "./workspace";
+import { resolveSafeWorkspacePath } from "./node";
 
 export const SESSIONS_DIR_REL = ".moesekai-studio/sessions";
 const SIDECAR_SUFFIX = ".ui.json";

@@ -310,6 +310,15 @@ export type StoryAgentEvent =
         timestamp: number;
     }
     | {
+        /** Older turns being replaced by a summary; `end` carries `tokensAfter` or `error`. */
+        type: "compaction";
+        phase: "start" | "end";
+        tokensBefore: number;
+        tokensAfter?: number;
+        error?: string;
+        timestamp: number;
+    }
+    | {
         type: "error";
         message: string;
         code?: string;
@@ -504,7 +513,8 @@ export interface StoryWorkspaceVoiceSummary {
 }
 
 export interface StoryWorkspaceSnapshot {
-    workspaceDir: string;
+    /** Where the workspace lives (`StoryWorkspaceFiles.label`): a folder path or a draft title. */
+    workspace: string;
     storyFile: string;
     exists: boolean;
     byteLength: number;

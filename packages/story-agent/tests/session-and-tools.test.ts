@@ -19,6 +19,7 @@ import {
     type StoryAgentEvent,
     type StoryAgentWorkerResponse,
 } from "../src/index";
+import { createNodeWorkspaceFiles } from "../src/node";
 
 const INITIAL_STORY = `@story "Starter" region=jp id="starter"
 @cast ichika "Ichika" model="v2_01ichika_casual" char=1
@@ -122,7 +123,7 @@ describe("Pi SDK session controller, streaming events & worker IPC", () => {
     test("exercises story_mine_official, story_i18n_prepare/apply, and all story_editor_action kinds via Pi SDK", async () => {
         const dir = await makeTempDir();
         const { writeStoryScript } = await import("../src/workspace");
-        await writeStoryScript(dir, "story.msk", INITIAL_STORY);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", INITIAL_STORY);
 
         const mockFetch = (async (input: string | URL | Request) => {
             const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -243,7 +244,7 @@ describe("Pi SDK session controller, streaming events & worker IPC", () => {
 
         // Seed initial workspace story
         const { writeStoryScript } = await import("../src/workspace");
-        await writeStoryScript(dir, "story.msk", INITIAL_STORY);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", INITIAL_STORY);
 
         const faux = fauxProvider({
             provider: "faux-story-test",
@@ -353,7 +354,7 @@ describe("Pi SDK session controller, streaming events & worker IPC", () => {
     test("utilityProcess worker handler processes init, run_preset, list_snapshots & dispose", async () => {
         const dir = await makeTempDir();
         const { writeStoryScript } = await import("../src/workspace");
-        await writeStoryScript(dir, "story.msk", INITIAL_STORY);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", INITIAL_STORY);
 
         const faux = fauxProvider({
             provider: "faux-worker-test",

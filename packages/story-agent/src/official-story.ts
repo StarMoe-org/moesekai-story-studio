@@ -6,11 +6,6 @@
  *
  * Public Asset Attribution: Moesekai (pjsk.moe)
  */
-import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { brotliDecompressSync } from "node:zlib";
 import {
     fetchLive2DModels,
     fetchMotionBundleClips,
@@ -37,7 +32,6 @@ const STORAGE_DOMAINS: Record<"main" | "backup", string[]> = {
 const STORY_SEARCH_BASE = "https://assets.pjsk.moe/sekai-extra-assets/sekai-story-search";
 const TRANSLATION_BASE = "https://translation.exmeaning.com";
 
-const DEFAULT_CACHE_DIR = join(tmpdir(), "moesekai-story-agent-cache");
 const HTTP_TIMEOUT_MS = 20_000;
 const CORPUS_TIMEOUT_MS = 60_000;
 
@@ -176,11 +170,28 @@ const SIDE_TO_MSK_SLOT: Record<number, string | null> = {
 
 // ==================== Public Types ====================
 
+/**
+ * Keeps fetched master data, scenarios and corpus text between calls. Best effort: an
+ * implementation reports a failed read as a miss and never throws from `write`.
+ */
+export interface OfficialStoryCache {
+    /** The text stored under `key`, unless it is older than `maxAgeMs` (0: any age). */
+    read(key: string, maxAgeMs: number): Promise<string | null>;
+    write(key: string, text: string): Promise<void>;
+}
+
+/** Decodes a brotli stream (the story-search corpus chunks are bare `.br` files). */
+export type BrotliDecoder = (compressed: Uint8Array<ArrayBuffer>) => Uint8Array | Promise<Uint8Array>;
+
 export interface OfficialStoryRuntimeOptions {
     region?: StoryRegion;
     line?: "main" | "backup";
+    /** Neither read nor write any cache, including story-core's in-memory ones. */
     noCache?: boolean;
-    cacheDir?: string;
+    /** Where fetched data is kept; without one every call fetches. */
+    cache?: OfficialStoryCache;
+    /** Defaults to the platform's `DecompressionStream("brotli")` where it exists. */
+    decodeBrotli?: BrotliDecoder;
     fetchImpl?: typeof fetch;
 }
 
@@ -898,50 +909,38 @@ export function filterAndRankCatalogModels(
     return scored.map((s) => s.model);
 }
 
-// ==================== HTTP & Disk Cache ====================
+// ==================== HTTP & Cache ====================
 
 interface ResolvedNetOpts {
     region: StoryRegion;
     line: "main" | "backup";
     noCache: boolean;
-    cacheDir: string;
+    cache: OfficialStoryCache | null;
+    decodeBrotli: BrotliDecoder;
     fetchImpl: typeof fetch;
 }
 
 function resolveNetOpts(opts?: OfficialStoryRuntimeOptions): ResolvedNetOpts {
+    const noCache = Boolean(opts?.noCache);
     return {
         region: opts?.region ?? "jp",
         line: opts?.line ?? "main",
-        noCache: Boolean(opts?.noCache),
-        cacheDir: opts?.cacheDir ?? DEFAULT_CACHE_DIR,
+        noCache,
+        cache: noCache ? null : opts?.cache ?? null,
+        decodeBrotli: opts?.decodeBrotli ?? decodeBrotliWithStreams,
         fetchImpl: opts?.fetchImpl ?? globalThis.fetch,
     };
 }
 
-function cacheFilePath(cacheDir: string, namespace: string, key: string, ext = "json"): string {
-    const safeKey = createHash("sha256").update(`${namespace}:${key}`).digest("hex").slice(0, 24);
-    const prefix = namespace.replace(/[^A-Za-z0-9_-]+/g, "_");
-    return join(cacheDir, `${prefix}_${safeKey}.${ext}`);
-}
-
-async function readCacheFile(filePath: string, ttlMs: number, noCache: boolean): Promise<Buffer | null> {
-    if (noCache) return null;
+async function decodeBrotliWithStreams(compressed: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
+    let stream: DecompressionStream;
     try {
-        const info = await stat(filePath);
-        if (ttlMs > 0 && Date.now() - info.mtimeMs > ttlMs) return null;
-        return await readFile(filePath);
+        stream = new DecompressionStream("brotli" as CompressionFormat);
     } catch {
-        return null;
+        throw new Error("This platform cannot decode brotli; pass `decodeBrotli` to read the story-search corpus.");
     }
-}
-
-async function writeCacheFile(cacheDir: string, filePath: string, data: string | Buffer): Promise<void> {
-    try {
-        await mkdir(cacheDir, { recursive: true });
-        await writeFile(filePath, data);
-    } catch {
-        // Non-fatal
-    }
+    const decoded = new Blob([compressed]).stream().pipeThrough(stream);
+    return new Uint8Array(await new Response(decoded).arrayBuffer());
 }
 
 async function fetchJsonWithFallback(
@@ -951,9 +950,9 @@ async function fetchJsonWithFallback(
     ttlMs: number,
     net: ResolvedNetOpts,
 ): Promise<any> {
-    const filePath = cacheFilePath(net.cacheDir, cacheNs, cacheKey, "json");
-    const cached = await readCacheFile(filePath, ttlMs, net.noCache);
-    if (cached) return JSON.parse(cached.toString("utf8"));
+    const key = `${cacheNs}:${cacheKey}`;
+    const cached = await net.cache?.read(key, ttlMs);
+    if (cached) return JSON.parse(cached);
 
     let lastErr: Error | null = null;
     for (const url of urls) {
@@ -965,7 +964,7 @@ async function fetchJsonWithFallback(
             if (res.ok) {
                 const text = await res.text();
                 const parsed = JSON.parse(text);
-                if (!net.noCache) await writeCacheFile(net.cacheDir, filePath, text);
+                await net.cache?.write(key, text);
                 return parsed;
             }
             lastErr = new Error(`${url}: HTTP ${res.status}`);
@@ -2003,21 +2002,17 @@ export async function searchOfficialStoryText(
     const sha: string = serverEntry.chunks?.sha256 ?? serverEntry.version ?? chunkPath ?? net.region;
     if (!chunkPath) throw new Error(`No chunks path found in manifest for '${net.region}'.`);
 
-    const corpusCacheFile = cacheFilePath(net.cacheDir, "corpus-jsonl", `${net.region}:${sha}`, "jsonl");
-    let rawText: string;
-    const cachedBuf = await readCacheFile(corpusCacheFile, 0, net.noCache);
-    if (cachedBuf) {
-        rawText = cachedBuf.toString("utf8");
-    } else {
+    const corpusKey = `corpus-jsonl:${net.region}:${sha}`;
+    let rawText = await net.cache?.read(corpusKey, 0) ?? null;
+    if (rawText === null) {
         const url = chunkPath.startsWith("http")
             ? chunkPath
             : `${STORY_SEARCH_BASE}/${chunkPath.replace(/^\/+/, "")}`;
         const res = await net.fetchImpl(url, { signal: AbortSignal.timeout(CORPUS_TIMEOUT_MS) });
         if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-        const compressed = Buffer.from(await res.arrayBuffer());
-        const decompressed = url.endsWith(".br") ? brotliDecompressSync(compressed) : compressed;
-        rawText = decompressed.toString("utf8");
-        if (!net.noCache) await writeCacheFile(net.cacheDir, corpusCacheFile, decompressed);
+        const body = new Uint8Array(await res.arrayBuffer());
+        rawText = new TextDecoder().decode(url.endsWith(".br") ? await net.decodeBrotli(body) : body);
+        await net.cache?.write(corpusKey, rawText);
     }
 
     const charIds = opts.char ? resolveCharacterIds(opts.char) : [];

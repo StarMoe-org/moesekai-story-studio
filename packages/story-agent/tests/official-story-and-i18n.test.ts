@@ -12,7 +12,8 @@ import {
     prepareVoiceCueSheet,
 } from "../src/i18n-tools";
 import { mineOfficialStory } from "../src/official-story";
-import { readVoiceManifestFromDisk, writeStoryScript } from "../src/workspace";
+import { readVoiceManifest, writeStoryScript } from "../src/workspace";
+import { createNodeWorkspaceFiles } from "../src/node";
 
 const SAMPLE_EN_STORY = `@story "Nightcord Late Call" region=jp id="niigo_call" author="Test" summary="Kanade and Mafuyu talk."
 
@@ -355,10 +356,10 @@ describe("official story miner (offline mock fetch)", () => {
 describe("i18n chunking, locale validation & user voice cue-sheet / manifest", () => {
     test("prepares translation prompt, rejects broken placeholders, persists valid pack, and matches local voice files", async () => {
         const dir = await makeTempDir();
-        await writeStoryScript(dir, "story.msk", SAMPLE_EN_STORY);
+        await writeStoryScript(createNodeWorkspaceFiles(dir), "story.msk", SAMPLE_EN_STORY);
 
         // 1. Prepare ja-JP translation chunk
-        const prep = await prepareStoryTranslation(dir, "story.msk", { targetLocale: "ja-JP" });
+        const prep = await prepareStoryTranslation(createNodeWorkspaceFiles(dir), "story.msk", { targetLocale: "ja-JP" });
         expect(prep.sourceLocale).toBe("en-US");
         expect(prep.totalChunks).toBe(1);
         expect(prep.beatIds.length).toBe(2);
@@ -379,7 +380,7 @@ describe("i18n chunking, locale validation & user voice cue-sheet / manifest", (
                 [beat2]: { srcHash: payloadBeats[beat2].srcHash, body: "…うん。新しいデモを聴こう。" },
             },
         });
-        const badRes = await applyStoryTranslation(dir, "story.msk", {
+        const badRes = await applyStoryTranslation(createNodeWorkspaceFiles(dir), "story.msk", {
             targetLocale: "ja-JP",
             rawJson: badPack,
         });
@@ -401,7 +402,7 @@ describe("i18n chunking, locale validation & user voice cue-sheet / manifest", (
             },
             ends: { end_night: { title: "静かな夜", subtitle: "最終絆：{{bond}}" } },
         });
-        const goodRes = await applyStoryTranslation(dir, "story.msk", {
+        const goodRes = await applyStoryTranslation(createNodeWorkspaceFiles(dir), "story.msk", {
             targetLocale: "ja-JP",
             rawJson: goodPack,
         });
@@ -428,12 +429,12 @@ describe("i18n chunking, locale validation & user voice cue-sheet / manifest", (
         await writeFile(join(dir, "voices", `${beat2}.mp3`), Buffer.from("ID3-mock"));
         await writeFile(join(dir, "voices", "unused_clip.wav"), Buffer.from("RIFF-mock"));
 
-        const cue = await prepareVoiceCueSheet(dir, "story.msk", { targetLocale: "ja-JP" });
+        const cue = await prepareVoiceCueSheet(createNodeWorkspaceFiles(dir), "story.msk", { targetLocale: "ja-JP" });
         expect(cue.candidateLines).toHaveLength(2);
         expect(cue.localAudioScan.matched).toHaveLength(2);
         expect(cue.localAudioScan.unmatched).toEqual(["unused_clip.wav"]);
 
-        const appliedManifest = await applyVoiceManifest(dir, "story.msk", {
+        const appliedManifest = await applyVoiceManifest(createNodeWorkspaceFiles(dir), "story.msk", {
             autoMatchAudioDir: "voices",
             locale: "ja-JP",
             title: "User Local Voices",
@@ -451,12 +452,12 @@ describe("i18n chunking, locale validation & user voice cue-sheet / manifest", (
         expect(appliedManifest.manifest?.lines[beat2]?.objectKey).toBe(`voices/${beat2}.mp3`);
 
         // Reading back from disk succeeds with allowLocalWorkspaceUrls enabled
-        const loadedFromDisk = await readVoiceManifestFromDisk(dir);
+        const loadedFromDisk = await readVoiceManifest(createNodeWorkspaceFiles(dir));
         expect(loadedFromDisk?.manifest?.lines[beat1]?.url).toBe(`voices/${beat1}.ogg`);
         expect(loadedFromDisk?.manifest?.overrideOfficialVoice).toBe(true);
 
         // Passing rawManifestJson with portable relative workspace paths validates cleanly
-        const rawLocalRes = await applyVoiceManifest(dir, "story.msk", {
+        const rawLocalRes = await applyVoiceManifest(createNodeWorkspaceFiles(dir), "story.msk", {
             rawManifestJson: JSON.stringify({
                 schema: "moesekai-story-voice/1",
                 storyId: "niigo_call",
@@ -478,7 +479,7 @@ describe("i18n chunking, locale validation & user voice cue-sheet / manifest", (
             "https://127.0.0.1/bad.ogg",
             "voices/../secret.ogg",
         ]) {
-            const rejected = await applyVoiceManifest(dir, "story.msk", {
+            const rejected = await applyVoiceManifest(createNodeWorkspaceFiles(dir), "story.msk", {
                 rawManifestJson: JSON.stringify({
                     schema: "moesekai-story-voice/1",
                     storyId: "niigo_call",

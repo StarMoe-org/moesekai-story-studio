@@ -1,11 +1,7 @@
-import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
     compileStoryGraph,
     detectOutdatedBeats,
     getStageActionItems,
-    isUiLocale,
     matchVoiceManifestToDoc,
     parseStoryScript,
     parseStoryVoiceManifest,
@@ -28,6 +24,7 @@ import type {
     StoryWorkspaceSnapshot,
     StoryWorkspaceVoiceSummary,
 } from "./types";
+import { sha256Hex, utf8ByteLength, type StoryWorkspaceFiles } from "./files";
 
 export const DEFAULT_STORY_FILE = "story.msk";
 export const LOCALES_DIR = "locales";
@@ -39,38 +36,11 @@ const SAFE_SNAPSHOT_ID_RE = /^[A-Za-z0-9._-]{1,120}$/;
 const MAX_SNAPSHOTS_RETAINED = 100;
 const MAX_DIFF_PREVIEW_LINES = 160;
 
-// ==================== Path-Jail & Text Utilities ====================
-
-export function resolveSafeWorkspacePath(workspaceDir: string, relPath: string): string {
-    if (!workspaceDir || !workspaceDir.trim()) {
-        throw new Error("workspaceDir must be a non-empty path");
-    }
-    if (!relPath || relPath.includes("\0")) {
-        throw new Error(`Invalid relative workspace path: "${relPath}"`);
-    }
-    const normalizedRel = relPath.replace(/\\/g, "/").trim();
-    if (isAbsolute(normalizedRel) || /^[A-Za-z]:/.test(normalizedRel)) {
-        throw new Error(`Path must be relative to workspaceDir: "${relPath}"`);
-    }
-    const root = resolve(workspaceDir);
-    const target = resolve(root, normalizedRel);
-    const rel = relative(root, target);
-    if (!rel || rel === "." || rel.startsWith("..") || isAbsolute(rel)) {
-        if (rel === "" || rel === ".") {
-            return root;
-        }
-        throw new Error(`Path escapes workspace root: "${relPath}"`);
-    }
-    return target;
-}
+// ==================== Text Utilities ====================
 
 export function normalizeLineEndings(text: string): string {
     const stripped = text.startsWith("\uFEFF") ? text.slice(1) : text;
     return stripped.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-function sha256Short(text: string): string {
-    return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 export function countDocumentBeats(doc: StoryDocument | null | undefined): number {
@@ -381,11 +351,9 @@ function generateSnapshotId(): string {
     return `${stamp}-${seq}`;
 }
 
-async function readSnapshotIndex(workspaceDir: string): Promise<StorySnapshotMeta[]> {
-    const indexPath = resolveSafeWorkspacePath(workspaceDir, SNAPSHOTS_INDEX_REL);
+async function readSnapshotIndex(files: StoryWorkspaceFiles): Promise<StorySnapshotMeta[]> {
     try {
-        const raw = await readFile(indexPath, "utf8");
-        const parsed = JSON.parse(raw);
+        const parsed = JSON.parse((await files.readText(SNAPSHOTS_INDEX_REL)) ?? "[]");
         if (Array.isArray(parsed)) {
             return parsed.filter(
                 (item): item is StorySnapshotMeta =>
@@ -393,108 +361,81 @@ async function readSnapshotIndex(workspaceDir: string): Promise<StorySnapshotMet
             );
         }
     } catch {
-        // Missing or unreadable index; caller can reconcile from disk.
+        // Unreadable index; listStorySnapshots reconciles from the snapshot files.
     }
     return [];
 }
 
-async function writeSnapshotIndex(workspaceDir: string, entries: StorySnapshotMeta[]): Promise<void> {
-    const indexPath = resolveSafeWorkspacePath(workspaceDir, SNAPSHOTS_INDEX_REL);
-    await mkdir(dirname(indexPath), { recursive: true });
-    await writeFile(indexPath, `${JSON.stringify(entries.slice(0, MAX_SNAPSHOTS_RETAINED), null, 2)}\n`, "utf8");
+async function writeSnapshotIndex(files: StoryWorkspaceFiles, entries: StorySnapshotMeta[]): Promise<void> {
+    await files.writeText(SNAPSHOTS_INDEX_REL, `${JSON.stringify(entries.slice(0, MAX_SNAPSHOTS_RETAINED), null, 2)}
+`);
+}
+
+async function describeSnapshot(
+    script: string,
+    fields: Pick<StorySnapshotMeta, "id" | "createdAt" | "reason" | "storyFile"> & { toolName?: string },
+): Promise<StorySnapshotMeta> {
+    const parsed = script.trim() ? parseStoryScript(script) : null;
+    const doc = parsed?.ok ? parsed.doc : null;
+    return {
+        ...fields,
+        nodeCount: doc ? Object.keys(doc.nodes).length : 0,
+        beatCount: countDocumentBeats(doc),
+        byteLength: utf8ByteLength(script),
+        sha256: await sha256Hex(script),
+    };
 }
 
 export async function createStorySnapshot(
-    workspaceDir: string,
+    files: StoryWorkspaceFiles,
     storyFile: string,
     options: { reason: string; toolName?: string; content?: string },
 ): Promise<StorySnapshotMeta | null> {
-    const storyAbs = resolveSafeWorkspacePath(workspaceDir, storyFile);
-    let content = options.content;
-    if (content === undefined) {
-        try {
-            content = await readFile(storyAbs, "utf8");
-        } catch {
-            return null;
-        }
-    }
+    const content = options.content ?? (await files.readText(storyFile));
+    if (content === null) return null;
 
     const normalized = normalizeLineEndings(content);
     const id = generateSnapshotId();
-    const snapDir = resolveSafeWorkspacePath(workspaceDir, SNAPSHOTS_DIR_REL);
-    await mkdir(snapDir, { recursive: true });
-    const snapPath = resolveSafeWorkspacePath(workspaceDir, `${SNAPSHOTS_DIR_REL}/${id}.msk`);
-    await writeFile(snapPath, normalized, "utf8");
+    await files.writeText(`${SNAPSHOTS_DIR_REL}/${id}.msk`, normalized);
 
-    const parsed = normalized.trim() ? parseStoryScript(normalized) : null;
-    const doc = parsed?.ok ? parsed.doc : null;
-    const meta: StorySnapshotMeta = {
+    const meta = await describeSnapshot(normalized, {
         id,
         createdAt: new Date().toISOString(),
         reason: options.reason,
         ...(options.toolName ? { toolName: options.toolName } : {}),
         storyFile,
-        nodeCount: doc ? Object.keys(doc.nodes).length : 0,
-        beatCount: countDocumentBeats(doc),
-        byteLength: Buffer.byteLength(normalized, "utf8"),
-        sha256: sha256Short(normalized),
-    };
-
-    const existing = await readSnapshotIndex(workspaceDir);
-    const updated = [meta, ...existing.filter((item) => item.id !== id)].slice(0, MAX_SNAPSHOTS_RETAINED);
-    await writeSnapshotIndex(workspaceDir, updated);
+    });
+    const existing = await readSnapshotIndex(files);
+    await writeSnapshotIndex(files, [meta, ...existing.filter((item) => item.id !== id)]);
     return meta;
 }
 
-export async function listStorySnapshots(workspaceDir: string): Promise<StorySnapshotMeta[]> {
-    const snapDir = resolveSafeWorkspacePath(workspaceDir, SNAPSHOTS_DIR_REL);
-    const indexed = await readSnapshotIndex(workspaceDir);
-    const byId = new Map(indexed.map((m) => [m.id, m]));
-
-    let files: string[] = [];
-    try {
-        files = await readdir(snapDir);
-    } catch {
-        return indexed;
-    }
-
-    const presentIds = new Set<string>();
-    for (const file of files) {
-        if (!file.endsWith(".msk")) continue;
-        const id = file.slice(0, -4);
+export async function listStorySnapshots(files: StoryWorkspaceFiles): Promise<StorySnapshotMeta[]> {
+    const byId = new Map((await readSnapshotIndex(files)).map((m) => [m.id, m]));
+    const present: StorySnapshotMeta[] = [];
+    for (const entry of await files.list(SNAPSHOTS_DIR_REL)) {
+        if (!entry.name.endsWith(".msk")) continue;
+        const id = entry.name.slice(0, -4);
         if (!SAFE_SNAPSHOT_ID_RE.test(id)) continue;
-        presentIds.add(id);
-        if (!byId.has(id)) {
-            try {
-                const abs = join(snapDir, file);
-                const [raw, st] = await Promise.all([readFile(abs, "utf8"), stat(abs)]);
-                const parsed = raw.trim() ? parseStoryScript(raw) : null;
-                const doc = parsed?.ok ? parsed.doc : null;
-                byId.set(id, {
-                    id,
-                    createdAt: st.mtime.toISOString(),
-                    reason: "snapshot",
-                    storyFile: DEFAULT_STORY_FILE,
-                    nodeCount: doc ? Object.keys(doc.nodes).length : 0,
-                    beatCount: countDocumentBeats(doc),
-                    byteLength: Buffer.byteLength(raw, "utf8"),
-                    sha256: sha256Short(raw),
-                });
-            } catch {
-                // Skip unreadable file
-            }
+        const indexed = byId.get(id);
+        if (indexed) {
+            present.push(indexed);
+            continue;
         }
+        const raw = await files.readText(`${SNAPSHOTS_DIR_REL}/${entry.name}`);
+        if (raw === null) continue;
+        present.push(await describeSnapshot(raw, {
+            id,
+            createdAt: entry.modifiedAt.toISOString(),
+            reason: "snapshot",
+            storyFile: DEFAULT_STORY_FILE,
+        }));
     }
-
-    const result = [...byId.values()]
-        .filter((m) => presentIds.has(m.id))
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-
-    return result;
+    return present.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
 }
 
 export async function rollbackStorySnapshot(
-    workspaceDir: string,
+    files: StoryWorkspaceFiles,
     storyFile: string,
     snapshotId: string,
 ): Promise<StoryRollbackResult> {
@@ -502,49 +443,35 @@ export async function rollbackStorySnapshot(
     if (!SAFE_SNAPSHOT_ID_RE.test(cleanId)) {
         throw new Error(`Invalid snapshotId: "${snapshotId}"`);
     }
-    const snapPath = resolveSafeWorkspacePath(workspaceDir, `${SNAPSHOTS_DIR_REL}/${cleanId}.msk`);
-    let restoredContent: string;
-    try {
-        restoredContent = normalizeLineEndings(await readFile(snapPath, "utf8"));
-    } catch {
+    const saved = await files.readText(`${SNAPSHOTS_DIR_REL}/${cleanId}.msk`);
+    if (saved === null) {
         throw new Error(`Snapshot "${cleanId}" not found in ${SNAPSHOTS_DIR_REL}`);
     }
-
-    const storyAbs = resolveSafeWorkspacePath(workspaceDir, storyFile);
-    let currentContent = "";
-    try {
-        currentContent = normalizeLineEndings(await readFile(storyAbs, "utf8"));
-    } catch {
-        currentContent = "";
-    }
+    const restoredContent = normalizeLineEndings(saved);
+    const currentContent = normalizeLineEndings((await files.readText(storyFile)) ?? "");
 
     const safetySnap = currentContent
-        ? await createStorySnapshot(workspaceDir, storyFile, {
+        ? await createStorySnapshot(files, storyFile, {
             reason: `pre-rollback to ${cleanId}`,
             toolName: "rollback",
             content: currentContent,
         })
         : null;
 
-    await mkdir(dirname(storyAbs), { recursive: true });
-    await writeFile(storyAbs, restoredContent, "utf8");
+    await files.writeText(storyFile, restoredContent);
 
     const diff = computeMskDiff(currentContent, restoredContent, storyFile, safetySnap?.id ?? null);
-    const snapshots = await listStorySnapshots(workspaceDir);
-    const snapshotMeta = snapshots.find((s) => s.id === cleanId) ?? {
-        id: cleanId,
-        createdAt: new Date().toISOString(),
-        reason: "snapshot",
-        storyFile,
-        nodeCount: diff.nodeCountAfter,
-        beatCount: diff.beatCountAfter,
-        byteLength: Buffer.byteLength(restoredContent, "utf8"),
-        sha256: sha256Short(restoredContent),
-    };
+    const snapshot = (await listStorySnapshots(files)).find((s) => s.id === cleanId)
+        ?? await describeSnapshot(restoredContent, {
+            id: cleanId,
+            createdAt: new Date().toISOString(),
+            reason: "snapshot",
+            storyFile,
+        });
 
     return {
         ok: true,
-        snapshot: snapshotMeta,
+        snapshot,
         diff,
         safetySnapshotId: safetySnap?.id ?? null,
     };
@@ -690,41 +617,42 @@ export function findMskNodeSpan(source: string, targetNodeId: string): MskNodeSp
 
 // ==================== Workspace Read / Write / Patch ====================
 
-export async function readLocalePackFromDisk(
-    workspaceDir: string,
+function localePackPath(locale: UiLocale): string {
+    return `${LOCALES_DIR}/${locale}.i18n.json`;
+}
+
+export async function readLocalePack(
+    files: StoryWorkspaceFiles,
     locale: UiLocale,
 ): Promise<StoryLocalePack | null> {
-    const filePath = resolveSafeWorkspacePath(workspaceDir, `${LOCALES_DIR}/${locale}.i18n.json`);
     try {
-        const raw = await readFile(filePath, "utf8");
-        const parsed = JSON.parse(raw) as StoryLocalePack;
+        const parsed = JSON.parse((await files.readText(localePackPath(locale))) ?? "null") as StoryLocalePack | null;
         if (parsed && typeof parsed === "object" && parsed.locale === locale && parsed.beats) {
             return parsed;
         }
     } catch {
-        return null;
+        // Not JSON: treated as absent.
     }
     return null;
 }
 
-export async function writeLocalePackToDisk(
-    workspaceDir: string,
+export async function writeLocalePack(
+    files: StoryWorkspaceFiles,
     locale: UiLocale,
     pack: StoryLocalePack,
 ): Promise<string> {
-    const relPath = `${LOCALES_DIR}/${locale}.i18n.json`;
-    const absPath = resolveSafeWorkspacePath(workspaceDir, relPath);
-    await mkdir(dirname(absPath), { recursive: true });
-    await writeFile(absPath, `${JSON.stringify(pack, null, 2)}\n`, "utf8");
-    return relPath;
+    const path = localePackPath(locale);
+    await files.writeText(path, `${JSON.stringify(pack, null, 2)}
+`);
+    return path;
 }
 
-export async function readVoiceManifestFromDisk(
-    workspaceDir: string,
+export async function readVoiceManifest(
+    files: StoryWorkspaceFiles,
 ): Promise<{ raw: unknown; manifest: ReturnType<typeof parseStoryVoiceManifest> } | null> {
-    const absPath = resolveSafeWorkspacePath(workspaceDir, VOICES_MANIFEST_REL);
+    const text = await files.readText(VOICES_MANIFEST_REL);
+    if (text === null) return null;
     try {
-        const text = await readFile(absPath, "utf8");
         const raw = JSON.parse(text);
         return { raw, manifest: parseStoryVoiceManifest(raw, { allowLocalWorkspaceUrls: true }) };
     } catch {
@@ -732,18 +660,17 @@ export async function readVoiceManifestFromDisk(
     }
 }
 
-export async function writeVoiceManifestToDisk(
-    workspaceDir: string,
+export async function writeVoiceManifest(
+    files: StoryWorkspaceFiles,
     manifest: NonNullable<ReturnType<typeof parseStoryVoiceManifest>>,
 ): Promise<string> {
-    const absPath = resolveSafeWorkspacePath(workspaceDir, VOICES_MANIFEST_REL);
-    await mkdir(dirname(absPath), { recursive: true });
-    await writeFile(absPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await files.writeText(VOICES_MANIFEST_REL, `${JSON.stringify(manifest, null, 2)}
+`);
     return VOICES_MANIFEST_REL;
 }
 
 export async function readStoryWorkspace(
-    workspaceDir: string,
+    files: StoryWorkspaceFiles,
     storyFile = DEFAULT_STORY_FILE,
     options?: {
         includeScript?: boolean;
@@ -752,15 +679,9 @@ export async function readStoryWorkspace(
         selectedNodeId?: string | null;
     },
 ): Promise<StoryWorkspaceSnapshot> {
-    const absStory = resolveSafeWorkspacePath(workspaceDir, storyFile);
-    let rawScript = "";
-    let exists = false;
-    try {
-        rawScript = normalizeLineEndings(await readFile(absStory, "utf8"));
-        exists = true;
-    } catch {
-        exists = false;
-    }
+    const stored = await files.readText(storyFile);
+    const exists = stored !== null;
+    const rawScript = normalizeLineEndings(stored ?? "");
 
     const lines = rawScript ? rawScript.split("\n") : [];
     const parsed = rawScript.trim() ? parseStoryScript(rawScript) : null;
@@ -854,12 +775,12 @@ export async function readStoryWorkspace(
     // Scan locales/*.i18n.json
     const locales: StoryWorkspaceLocaleSummary[] = [];
     for (const loc of SUPPORTED_UI_LOCALES) {
-        const pack = await readLocalePackFromDisk(workspaceDir, loc);
+        const pack = await readLocalePack(files, loc);
         if (!pack) continue;
         const report = doc ? detectOutdatedBeats(doc, pack) : null;
         locales.push({
             locale: loc,
-            filePath: `${LOCALES_DIR}/${loc}.i18n.json`,
+            filePath: localePackPath(loc),
             origin: pack.translationMeta?.origin ?? "unknown",
             translatedBeats: report?.translatedCount ?? Object.keys(pack.beats).length,
             outdatedBeats: report?.outdatedBeatIds.length ?? 0,
@@ -869,35 +790,9 @@ export async function readStoryWorkspace(
         });
     }
 
-    // Also inspect any unexpected *.i18n.json filenames inside locales/ if valid UI locale
-    try {
-        const locDir = resolveSafeWorkspacePath(workspaceDir, LOCALES_DIR);
-        const dirEntries = await readdir(locDir);
-        const seen = new Set(locales.map((l) => l.locale));
-        for (const f of dirEntries) {
-            if (!f.endsWith(".i18n.json")) continue;
-            const candidate = f.slice(0, -".i18n.json".length);
-            if (!isUiLocale(candidate) || seen.has(candidate)) continue;
-            const pack = await readLocalePackFromDisk(workspaceDir, candidate);
-            if (!pack) continue;
-            const report = doc ? detectOutdatedBeats(doc, pack) : null;
-            locales.push({
-                locale: candidate,
-                filePath: `${LOCALES_DIR}/${f}`,
-                origin: pack.translationMeta?.origin ?? "unknown",
-                translatedBeats: report?.translatedCount ?? Object.keys(pack.beats).length,
-                outdatedBeats: report?.outdatedBeatIds.length ?? 0,
-                missingBeats: report?.missingBeatIds.length ?? 0,
-                totalBeats: report?.totalCount ?? Object.keys(pack.beats).length,
-            });
-        }
-    } catch {
-        // locales/ dir optional
-    }
-
     // Scan voices/manifest.json
     let voiceManifest: StoryWorkspaceVoiceSummary | null = null;
-    const loadedVoice = await readVoiceManifestFromDisk(workspaceDir);
+    const loadedVoice = await readVoiceManifest(files);
     if (loadedVoice?.manifest) {
         const m = loadedVoice.manifest;
         const match = doc ? matchVoiceManifestToDoc(doc, m) : null;
@@ -913,7 +808,7 @@ export async function readStoryWorkspace(
         };
     }
 
-    const snapshots = await listStorySnapshots(workspaceDir);
+    const snapshots = await listStorySnapshots(files);
 
     let script: string | undefined;
     if (options?.includeScript !== false) {
@@ -927,10 +822,10 @@ export async function readStoryWorkspace(
     }
 
     return {
-        workspaceDir: resolve(workspaceDir),
+        workspace: files.label,
         storyFile,
         exists,
-        byteLength: Buffer.byteLength(rawScript, "utf8"),
+        byteLength: utf8ByteLength(rawScript),
         lineCount: lines.length,
         parseOk: Boolean(doc),
         parseDiagnostics,
@@ -960,32 +855,24 @@ export interface StoryMutationResult {
 }
 
 export async function writeStoryScript(
-    workspaceDir: string,
+    files: StoryWorkspaceFiles,
     storyFile: string,
     nextScript: string,
     options?: { reason?: string; toolName?: string },
 ): Promise<StoryMutationResult> {
-    const absStory = resolveSafeWorkspacePath(workspaceDir, storyFile);
-    let beforeContent = "";
-    let existed = false;
-    try {
-        beforeContent = normalizeLineEndings(await readFile(absStory, "utf8"));
-        existed = true;
-    } catch {
-        beforeContent = "";
-    }
+    const stored = await files.readText(storyFile);
+    const beforeContent = normalizeLineEndings(stored ?? "");
 
     const normalizedNext = normalizeLineEndings(nextScript);
-    const snapshot = existed
-        ? await createStorySnapshot(workspaceDir, storyFile, {
+    const snapshot = stored !== null
+        ? await createStorySnapshot(files, storyFile, {
             reason: options?.reason ?? "before write",
             toolName: options?.toolName ?? "story_write_msk",
             content: beforeContent,
         })
         : null;
 
-    await mkdir(dirname(absStory), { recursive: true });
-    await writeFile(absStory, normalizedNext, "utf8");
+    await files.writeText(storyFile, normalizedNext);
 
     const parsed = parseStoryScript(normalizedNext);
     const compiled = parsed.ok ? compileStoryGraph(parsed.doc) : null;
@@ -1022,18 +909,16 @@ export interface StoryPatchRequest {
 }
 
 export async function patchStoryScript(
-    workspaceDir: string,
+    files: StoryWorkspaceFiles,
     storyFile: string,
     patch: StoryPatchRequest,
     options?: { toolName?: string },
 ): Promise<StoryMutationResult> {
-    const absStory = resolveSafeWorkspacePath(workspaceDir, storyFile);
-    let current: string;
-    try {
-        current = normalizeLineEndings(await readFile(absStory, "utf8"));
-    } catch {
+    const stored = await files.readText(storyFile);
+    if (stored === null) {
         throw new Error(`Cannot patch "${storyFile}": file does not exist yet. Use story_write_msk to create it.`);
     }
+    const current = normalizeLineEndings(stored);
 
     const hasEdits = Array.isArray(patch.edits) && patch.edits.length > 0;
     const hasReplaceNode = Boolean(patch.replaceNode);
@@ -1080,7 +965,7 @@ export async function patchStoryScript(
         }
     }
 
-    return writeStoryScript(workspaceDir, storyFile, next, {
+    return writeStoryScript(files, storyFile, next, {
         reason: patch.reason ?? (patch.replaceNode ? `patch node ${patch.replaceNode.nodeId}` : "patch .msk"),
         toolName: options?.toolName ?? "story_patch_msk",
     });

@@ -21,7 +21,17 @@ const entrypoints = [
     resolve(pkgDir, "src/models.ts"),
 ];
 
-const buildResult = await Bun.build({
+const external = [
+    "@moesekai/story-core",
+    "@moesekai/story-core/*",
+    "@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-agent-core",
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-ai/*",
+    "typebox",
+];
+
+const nodeBuild = await Bun.build({
     entrypoints,
     root: resolve(pkgDir, "src"),
     outdir: distDir,
@@ -30,22 +40,29 @@ const buildResult = await Bun.build({
     splitting: true,
     sourcemap: "linked",
     minify: false,
-    external: [
-        "@moesekai/story-core",
-        "@moesekai/story-core/*",
-        "@earendil-works/pi-coding-agent",
-        "@earendil-works/pi-agent-core",
-        "@earendil-works/pi-ai",
-        "@earendil-works/pi-ai/*",
-        "typebox",
-    ],
+    external,
 });
 
-if (!buildResult.success) {
-    for (const log of buildResult.logs) {
-        console.error(log);
+// The browser entry is bundled on its own for the browser, so no chunk it loads is shared with
+// (or resolved like) the Node-only session modules.
+const browserBuild = await Bun.build({
+    entrypoints: [resolve(pkgDir, "src/browser.ts")],
+    root: resolve(pkgDir, "src"),
+    outdir: distDir,
+    format: "esm",
+    target: "browser",
+    sourcemap: "linked",
+    minify: false,
+    external,
+});
+
+for (const result of [nodeBuild, browserBuild]) {
+    if (!result.success) {
+        for (const log of result.logs) {
+            console.error(log);
+        }
+        process.exit(1);
     }
-    process.exit(1);
 }
 
 const tsc = Bun.spawnSync(
@@ -61,4 +78,4 @@ if (tsc.exitCode !== 0) {
     process.exit(tsc.exitCode ?? 1);
 }
 
-console.log(`Built @moesekai/story-agent (${buildResult.outputs.length} JS/map artifacts + .d.ts) -> ${distDir}`);
+console.log(`Built @moesekai/story-agent (${nodeBuild.outputs.length + browserBuild.outputs.length} JS/map artifacts + .d.ts) -> ${distDir}`);
