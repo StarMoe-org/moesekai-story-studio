@@ -4,6 +4,13 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-25
+
+### Changed
+- **Auto-Collapse Agent Tool Call Errors (`apps/desktop`)**:
+  - Updated `groupToolCalls`, `tool_end`, `settleUnfinishedTools`, and session hydration in `agent-panel-state.ts` and `PiAgentPanel.tsx` so occasional failed tool calls auto-collapse by default and fold cleanly into the same contiguous finished-tool summary group instead of splitting the activity timeline with expanded error cards.
+  - Added a subtle failed-call count badge (`agentToolsErrorBadge` across all 5 locales: `zh-CN`, `zh-TW`, `en-US`, `ja-JP`, `ko-KR`) on collapsed tool groups while preserving click-to-expand access to full error summaries and JSON arguments/details on individual rows.
+
 ## [0.3.0] - 2026-11-24
 
 ### Added
