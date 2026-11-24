@@ -12,7 +12,7 @@
     },
     "apps/desktop": {
       "name": "@moesekai/story-studio-desktop",
-      "version": "0.3.2",
+      "version": "0.4.0",
       "dependencies": {
         "@moesekai/story-agent": "workspace:*",
         "@moesekai/story-core": "workspace:*",
@@ -39,7 +39,7 @@
     },
     "packages/story-agent": {
       "name": "@moesekai/story-agent",
-      "version": "0.3.2",
+      "version": "0.4.0",
       "dependencies": {
         "@earendil-works/pi-agent-core": "^1.6.0",
         "@earendil-works/pi-ai": "^1.6.0",
@@ -50,11 +50,11 @@
     },
     "packages/story-core": {
       "name": "@moesekai/story-core",
-      "version": "0.3.2",
+      "version": "0.4.0",
     },
     "packages/story-editor": {
       "name": "@moesekai/story-editor",
-      "version": "0.3.2",
+      "version": "0.4.0",
       "devDependencies": {
         "@moesekai/story-agent": "workspace:*",
         "@moesekai/story-core": "workspace:*",
@@ -67,8 +67,8 @@
         "remark-gfm": "^4.0.1",
       },
       "peerDependencies": {
-        "@moesekai/story-agent": "^0.3.2",
-        "@moesekai/story-core": "^0.3.2",
+        "@moesekai/story-agent": "^0.4.0",
+        "@moesekai/story-core": "^0.4.0",
         "framer-motion": "^12.0.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",

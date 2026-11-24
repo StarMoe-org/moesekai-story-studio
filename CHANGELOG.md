@@ -4,6 +4,34 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-25
+
+### Added
+- **Browser Story Agent (`@moesekai/story-agent/browser`)**:
+  - Added `createBrowserStoryAgent`, which runs the Story Maker tools in the page over an in-memory workspace (`createMemoryWorkspaceFiles`) and calls the model provider directly with the user's own API key; requests never pass through a server. DeepSeek V4.1 Flash is the offered model (`listBrowserAgentModels`).
+  - Each listed model reports the thinking levels it accepts (`thinkingLevels`) and its default (`defaultThinkingLevel`); requested levels are fitted to the nearest accepted one, and `setThinkingLevel` changes the level from the next model call.
+  - A conversation can be continued from a stored transcript (`transcript` option, `transcript()`), and `contextTokens()` estimates the size of the next request.
+- **Conversation Compaction (`@moesekai/story-agent`)**:
+  - Once a transcript is estimated above 96k tokens, the older turns are replaced by a model-written summary before the next request, keeping about 16k tokens of recent turns verbatim (`CompactionSettings`). `compact()` summarizes everything before the latest request on demand. Both emit `compaction` events.
+- **Story Agent Panel & Phone Screen (`@moesekai/story-editor/agent`)**:
+  - Added `StoryAgentPanel`, a chat panel docked beside the editor whose edits apply to the open draft as they happen, with added/modified node rings and badges on the flow canvas, per-turn undo, an edit/create mode switch, a context meter with manual compaction, and a thinking effort setting.
+  - Added `StoryAgentDraftScreen`, a full-screen chat over a stored draft for viewports below `1024px`, with player preview from the start or from any changed node.
+  - Conversations belong to the draft rather than the panel: they are kept in IndexedDB (`moesekai-story-agent`) with a per-draft history, and survive reloads and switching between the editor and the phone layout (`StoryAgentDesk`, `useStoryAgentDesk`).
+  - Agent replies render as GitHub-flavoured Markdown; inline code naming a story node becomes a chip that jumps to it. Links and images are shown as text only.
+  - All agent strings ship in 5 locales (`zh-CN`, `zh-TW`, `en-US`, `ja-JP`, `ko-KR`). The entry has optional peers `@moesekai/story-agent`, `react-markdown` and `remark-gfm`; the root `@moesekai/story-editor` entry does not load them.
+- **Editor Integration Points (`@moesekai/story-editor`)**:
+  - Added the `narrowViewport` prop, shown below `1024px` in place of the desktop-only notice when `enforceDesktopViewport` is set; it mounts only once the viewport width is known.
+  - Added `showNodeChanges` on `StoryStudioEditorHandle` and the `StoryNodeChange` type for marking changed nodes on the canvas.
+
+### Changed
+- **Workspace File Interface (`@moesekai/story-agent`)** — breaking:
+  - Workspace, snapshot, translation and voice functions (`writeStoryScript`, `readStoryWorkspace`, `patchStoryScript`, `listStorySnapshots`, `rollbackStorySnapshot`, `prepareStoryTranslation`, `applyStoryTranslation`, `prepareVoiceCueSheet`, `applyVoiceManifest`, and related helpers) take a `StoryWorkspaceFiles` instead of a directory path. Node callers wrap a folder with `createNodeWorkspaceFiles(dir)`, which keeps rejecting absolute paths and paths that leave the folder; snapshots stay under `.moesekai-studio/snapshots`.
+  - `readVoiceManifestFromDisk(dir)` is now `readVoiceManifest(files)`, the tools runtime option `getWorkspaceDir` is now `getWorkspace`, and `createStoryMakerTools` returns `StoryMakerTool[]`.
+  - Official story mining takes a pluggable cache and Brotli decoder (`OfficialStoryCache`, `BrotliDecoder`), defaulting to `DecompressionStream("brotli")` where available; Node provides `createDiskOfficialStoryCache` and `decodeBrotliWithZlib`.
+  - `createStoryAgentSession({ workspaceDir, ... })` is unchanged. System prompt builders live in `prompt.ts` and are still exported from the package root.
+- **Release Tooling**:
+  - Lockstep version bumps also update sibling `@moesekai/*` peer ranges, and packages build and publish in dependency order (`story-core`, `story-agent`, `story-editor`).
+
 ## [0.3.2] - 2026-11-25
 
 ### Fixed
