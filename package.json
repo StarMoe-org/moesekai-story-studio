@@ -26,7 +26,7 @@
     "build:core": "bun run --cwd packages/story-core build",
     "build:editor": "bun run --cwd packages/story-editor build",
     "build:agent": "bun run --cwd packages/story-agent build",
-    "build:packages": "bun run build:core && bun run build:editor && bun run build:agent",
+    "build:packages": "bun run build:core && bun run build:agent && bun run build:editor",
     "build:skill": "bun skills/moesekai-story-script/scripts/build-skill-core.ts",
     "dev:desktop": "bun run --cwd apps/desktop dev",
     "build:desktop": "bun run --cwd apps/desktop build",

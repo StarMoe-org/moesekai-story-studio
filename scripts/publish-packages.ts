@@ -2,8 +2,8 @@
 /**
  * Topological npm publish orchestrator for `@moesekai/*` public packages:
  *   1. `@moesekai/story-core`
- *   2. `@moesekai/story-editor`
- *   3. `@moesekai/story-agent`
+ *   2. `@moesekai/story-agent`
+ *   3. `@moesekai/story-editor` (its `./agent` entry peers on story-agent)
  *
  * Guarantees:
  * - Verifies lockstep versions (`scripts/version.ts check`) before publishing.
@@ -23,8 +23,8 @@ import { checkLockstepVersions, getDefaultRepoRoot } from "./version";
 
 export const PUBLISH_PACKAGES = [
     { dir: "packages/story-core", name: "@moesekai/story-core", buildScript: "build:core" },
-    { dir: "packages/story-editor", name: "@moesekai/story-editor", buildScript: "build:editor" },
     { dir: "packages/story-agent", name: "@moesekai/story-agent", buildScript: "build:agent" },
+    { dir: "packages/story-editor", name: "@moesekai/story-editor", buildScript: "build:editor" },
 ] as const;
 
 export const DEFAULT_NPM_REGISTRY = "https://registry.npmjs.org";

@@ -5,7 +5,7 @@
  * Keeps a single strict semver (`X.Y.Z`) synchronized across all 5 manifests:
  * - `package.json`
  * - `packages/story-core/package.json`
- * - `packages/story-editor/package.json` (plus `peerDependencies["@moesekai/story-core"] = "^X.Y.Z"`)
+ * - `packages/story-editor/package.json` (plus every `@moesekai/*` peer range, `"^X.Y.Z"`)
  * - `packages/story-agent/package.json`
  * - `apps/desktop/package.json`
  *
@@ -28,6 +28,12 @@ export const LOCKSTEP_MANIFEST_PATHS = [
 ] as const;
 
 export const STORY_EDITOR_MANIFEST_PATH = "packages/story-editor/package.json" as const;
+
+/** story-editor's sibling peers (`@moesekai/*`), each pinned to the lockstep version. */
+function siblingPeerNames(pkg: Record<string, unknown>): string[] {
+    const peers = pkg.peerDependencies as Record<string, unknown> | undefined;
+    return Object.keys(peers ?? {}).filter(name => name.startsWith("@moesekai/"));
+}
 
 export const STRICT_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
@@ -126,7 +132,7 @@ export function checkLockstepVersions(
     const versions: Record<string, string | null> = {};
     const errors: string[] = [];
     let canonicalVersion: string | null = null;
-    let storyEditorPeerRange: string | null = null;
+    const storyEditorPeerRanges: Record<string, string | null> = {};
 
     for (const relPath of LOCKSTEP_MANIFEST_PATHS) {
         const fullPath = resolve(repoRoot, relPath);
@@ -156,19 +162,23 @@ export function checkLockstepVersions(
         }
 
         if (relPath === STORY_EDITOR_MANIFEST_PATH) {
-            const peers = pkg.peerDependencies as Record<string, unknown> | undefined;
-            storyEditorPeerRange = typeof peers?.["@moesekai/story-core"] === "string"
-                ? peers["@moesekai/story-core"].trim()
-                : null;
+            const peers = (pkg.peerDependencies ?? {}) as Record<string, unknown>;
+            for (const name of new Set(["@moesekai/story-core", ...siblingPeerNames(pkg)])) {
+                const range = peers[name];
+                storyEditorPeerRanges[name] = typeof range === "string" ? range.trim() : null;
+            }
         }
     }
 
     const expectedPeerRange = canonicalVersion ? `^${canonicalVersion}` : null;
-    if (expectedPeerRange && storyEditorPeerRange !== expectedPeerRange) {
-        errors.push(
-            `${STORY_EDITOR_MANIFEST_PATH}: peerDependencies["@moesekai/story-core"] is "${storyEditorPeerRange ?? "(missing)"}", expected "${expectedPeerRange}"`,
-        );
+    for (const [name, range] of Object.entries(storyEditorPeerRanges)) {
+        if (expectedPeerRange && range !== expectedPeerRange) {
+            errors.push(
+                `${STORY_EDITOR_MANIFEST_PATH}: peerDependencies["${name}"] is "${range ?? "(missing)"}", expected "${expectedPeerRange}"`,
+            );
+        }
     }
+    const storyEditorPeerRange = storyEditorPeerRanges["@moesekai/story-core"] ?? null;
 
     if (options.expectedTag) {
         const cleanTag = options.expectedTag.trim();
@@ -257,7 +267,9 @@ export function bumpLockstepVersions(
             const peers = (pkg.peerDependencies && typeof pkg.peerDependencies === "object" && !Array.isArray(pkg.peerDependencies))
                 ? { ...(pkg.peerDependencies as Record<string, unknown>) }
                 : {};
-            peers["@moesekai/story-core"] = nextPeerRange;
+            for (const name of new Set(["@moesekai/story-core", ...siblingPeerNames(pkg)])) {
+                peers[name] = nextPeerRange;
+            }
             pkg.peerDependencies = peers;
         }
 
