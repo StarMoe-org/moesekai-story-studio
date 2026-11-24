@@ -4,6 +4,14 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-11-25
+
+### Fixed
+- **Code Mode Auto-Save & Persistent Document Identity (`@moesekai/story-editor`, `apps/desktop`)**:
+  - Added `mergeIncomingStoryDoc` in `StoryStudioEditor` so applying Code mode edits, applying & playtesting, importing `.msk` scripts, and hot-reloading external script edits always preserve the active document `id` (and attached locale packs when applicable) instead of adopting a random/foreign parsed header `id` that previously caused Desktop `handleSaveDoc` to silently drop all subsequent saves while leaving the top bar permanently stuck on Unsaved.
+  - Added debounced live Code mode auto-sync and auto-save (without rewriting `<textarea>` contents or jumping the cursor), serialized `flushSave` queuing, `resolveEffectiveSaveStatus` (so uncommitted Code edits immediately reflect in the top bar and `beforeunload`), `Ctrl/Cmd+S` support inside `<input>`/`<textarea>` without duplicating host shortcuts, `saveNow()` returning `Promise<boolean>` with 5-locale `codeBlockedSave` feedback when script errors block saving, and `hasUnsavedChanges()` on `StoryStudioEditorHandle`.
+  - Replaced Desktop `handleSaveDoc`'s fragile `doc.id` mismatch bailout with session-scoped isolation (`projectSessionSeq` + `project.id`) and `docVersionRef` race protection, made save errors propagate truthfully so `handleManualSave` never flashes a false saved toast on failure, fixed `DesktopEditorTopBar` to show localized `saveFailed` labels and keep unsaved/error indicators visible alongside compiler warnings/errors, and added pre-switch / pre-theater / graceful Electron window-close save flushing with a 5-locale native unsaved-changes confirmation dialog.
+
 ## [0.3.1] - 2026-11-25
 
 ### Changed
