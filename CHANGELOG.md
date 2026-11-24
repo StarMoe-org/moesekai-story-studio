@@ -4,6 +4,26 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-24
+
+### Added
+- **Live2D Stage Choreography, Enter/Exit Timing & Telop Layering (`@moesekai/story-core`, `@moesekai/story-editor`, `@moesekai/story-agent`, Skill)**:
+  - Added scene cast enter timing (`enterTiming: "immediate" | "afterTelop"` compiling to `enterScene(deferStageCast)` + `applyStageCast`), configurable `enterDelay` / `enterDuration` / `enterTransition` (`"fade" | "instant"`), scene `layoutMode: "auto" | "fixed"`, per-actor fine placement (`x`, `lockX`, `mirror`), and telop presentation controls (`actorVisibility: "keep" | "dim" | "hide"` and `position: "center" | "top" | "bottom"`).
+  - Added simultaneous multi-actor choreography waves via `StageActionBeat.group` (`stage sync [ ...; ... ]`) and `parallel: true` beat chaining, backed by `choreographyRunner.ts` and a refactored `StoryStageController` with an arriving-actor load barrier, lockstep `Promise.all` leaving/moving/arriving animations, cancellable per-actor delays, and `actorAlphaScale` fading/restoration.
+  - Added lossless `.msk` parser/serializer support (including explicit `fade`/`instant`, `lock=false`/`mirror=false`, and cross-wave `actorDuplicate` checking), updated agent prompts/presets/tools/validator (`getStageActionItems`), and rebuilt the standalone `skills/moesekai-story-script` validator bundle (`msk-core.mjs`).
+- **Workbench Fine-Tuning Sliders & Direct Stage Dragging (`@moesekai/story-editor`)**:
+  - Upgraded `NodeInspector` with visible fine-tune (`mdTune`) toggles, `X` / `Y` / `scale` / `z` sliders + numeric inputs + resets, `lockX` / `mirror` / `allowOverlap` switches, scene cast timing & telop layering controls (plus 1-click `deferStageCastAfterTelop` banner), and multi-actor `group[]` editing with full 5-locale parity (`zh-CN`, `zh-TW`, `en-US`, `ja-JP`, `ko-KR`).
+  - Added Edit-mode direct pointer dragging on the stage (`StoryStageView` 5-slot guides + draggable actor pills + `commitStageActorDrag` in `StoryStudioEditor`), multi-actor beat summaries in `StoryFlowCanvas` & `LivePhasePanel`, and an Exit Stage Action quick-drop tile in `StoryEditorBin`.
+- **Voice Track Cue Sheets, Local Preview & Desktop Voice Manager (`@moesekai/story-core`, `@moesekai/story-editor`, `@moesekai/story-agent`, `apps/desktop`)**:
+  - Added CSV/TXT/JSON voice cue-sheet builders (`buildVoiceCueSheetCsv`, `buildVoiceCueSheetText`, `buildVoiceCueSheetJson`), `overrideOfficialVoice` playback precedence, and safe local workspace / `blob:` URL opt-ins in `StoryVoiceManifest` parsing and preloading.
+  - Added `<VoiceCueSheetExportBar>`, upgraded `<StoryVoiceManifestDialog>` and `<AssetPreloadPanel>` with mid-scene voice playback/override reconciliation, and added Desktop `<DesktopVoiceManagerPanel>` with batch voice file/folder/buffer import IPC (`importVoiceFiles`, `listVoiceFiles`, `saveVoiceManifest`, `openVoicesDir`) and workspace/ZIP exporter bundling.
+
+### Fixed
+- **Stable Incremental Anti-Overlap Layout (`@moesekai/story-core`)**:
+  - Replaced full-stage re-centering on every stage action with incremental layout (`applyStageActionWave` + weighted PAV Phase 2 fallback respecting hard-pinned `lockX` / explicit `x` actors) so stationary actors remain completely fixed (`Δx === 0`) when other actors enter, exit, or pose, and audited overlaps against actual resolved `actor.x`.
+- **Story Hub Draft Creation & Dialog History Sync (`@moesekai/story-editor`)**:
+  - Added `prependStoryDraft` deduplication in `StoryStudioHub` and disabled history popstate syncing (`syncHistory={false}`) on Hub create/import dialogs (`StoryMetaDialog`, `StoryImportDialog`) so closing modals after draft creation never unwinds router navigation.
+
 ## [0.2.2] - 2026-11-24
 
 ### Added
