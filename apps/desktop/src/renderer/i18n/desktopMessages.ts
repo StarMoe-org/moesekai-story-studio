@@ -117,6 +117,7 @@ export interface DesktopMessageTable {
     agentToolDone: string;
     agentToolError: string;
     agentToolsSummary: string;
+    agentToolsErrorBadge: string;
     agentToolLabelReadWorkspace: string;
     agentToolLabelMineOfficial: string;
     agentToolLabelWriteMsk: string;
@@ -441,6 +442,7 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         agentToolDone: "完成",
         agentToolError: "失败",
         agentToolsSummary: "已调用 {count} 项工具 · {duration}",
+        agentToolsErrorBadge: "{count} 失败",
         agentToolLabelReadWorkspace: "读取工作区",
         agentToolLabelMineOfficial: "检索官方剧情",
         agentToolLabelWriteMsk: "写入 .msk 剧本",
@@ -759,6 +761,7 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         agentToolDone: "完成",
         agentToolError: "失敗",
         agentToolsSummary: "已呼叫 {count} 項工具 · {duration}",
+        agentToolsErrorBadge: "{count} 失敗",
         agentToolLabelReadWorkspace: "讀取工作區",
         agentToolLabelMineOfficial: "檢索官方劇情",
         agentToolLabelWriteMsk: "寫入 .msk 劇本",
@@ -1077,6 +1080,7 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         agentToolDone: "Done",
         agentToolError: "Failed",
         agentToolsSummary: "Used {count} tools · {duration}",
+        agentToolsErrorBadge: "{count} failed",
         agentToolLabelReadWorkspace: "Read Workspace",
         agentToolLabelMineOfficial: "Mine Official Stories",
         agentToolLabelWriteMsk: "Write .msk Script",
@@ -1395,6 +1399,7 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         agentToolDone: "完了",
         agentToolError: "エラー",
         agentToolsSummary: "ツール {count} 件を実行 · {duration}",
+        agentToolsErrorBadge: "{count} エラー",
         agentToolLabelReadWorkspace: "ワークスペース読込",
         agentToolLabelMineOfficial: "公式ストーリー参照",
         agentToolLabelWriteMsk: ".msk スクリプト書込",
@@ -1713,6 +1718,7 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         agentToolDone: "완료",
         agentToolError: "실패",
         agentToolsSummary: "도구 {count}개 호출 · {duration}",
+        agentToolsErrorBadge: "{count} 실패",
         agentToolLabelReadWorkspace: "워크스페이스 읽기",
         agentToolLabelMineOfficial: "공식 스토리 참조",
         agentToolLabelWriteMsk: ".msk 스크립트 작성",

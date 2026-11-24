@@ -148,7 +148,7 @@ function hydratePersistedTurns(persisted: AgentPersistedTurn[]): AgentChatTurn[]
         tools: (turn.tools ?? []).map(tool => ({
             ...tool,
             status: tool.status === "running" ? "done" : tool.status,
-            collapsed: tool.status !== "error",
+            collapsed: true,
         })),
         retries: (turn.retries ?? []).map(entry => ({
             ...entry,
@@ -1037,10 +1037,12 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
             <div
                 key={tool.toolCallId}
                 data-testid={`agent-tool-row-${tool.toolName}`}
+                data-status={tool.status}
+                data-collapsed={isOpen ? "false" : "true"}
                 className={cn(
                     "overflow-hidden rounded-md3-md border transition-colors",
                     isError
-                        ? "border-error/60 bg-error-container/30"
+                        ? "border-error/40 bg-error-container/20"
                         : isRunning
                             ? "border-primary/45 bg-surface-container"
                             : compactInGroup
@@ -1105,29 +1107,34 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
                     </div>
                 </button>
 
-                {/* Error tools show their error summary right away even before expanding full payload */}
-                {isError && tool.summary && !isOpen ? (
-                    <div className="type-body-s border-t border-error/30 px-2.5 py-1.5 text-on-error-container">
-                        {tool.summary}
-                    </div>
-                ) : null}
-
                 {isOpen ? (
                     <div className="flex flex-col gap-1.5 border-t border-outline-variant/60 px-2.5 py-2">
                         <div className="flex items-center justify-between gap-2">
                             <span className="font-mono type-label-s text-on-surface-variant">
                                 {tool.toolName}
                             </span>
-                            <span className="type-label-s text-on-surface-variant">
+                            <span
+                                className={cn(
+                                    "type-label-s tabular-nums",
+                                    isError ? "text-error font-medium" : "text-on-surface-variant",
+                                )}
+                            >
                                 {isRunning
                                     ? t("agentToolRunning")
                                     : isError
-                                        ? t("agentToolError")
+                                        ? `${t("agentToolError")} · ${formatElapsedSeconds(durationMs)}`
                                         : t("agentToolDone")}
                             </span>
                         </div>
                         {tool.summary ? (
-                            <p className="type-body-s text-on-surface">{tool.summary}</p>
+                            <p
+                                className={cn(
+                                    "type-body-s whitespace-pre-wrap break-words",
+                                    isError ? "text-on-error-container" : "text-on-surface",
+                                )}
+                            >
+                                {tool.summary}
+                            </p>
                         ) : null}
                         <pre className="type-label-s max-h-40 overflow-auto rounded-md3-xs bg-surface-container-lowest p-2 font-mono text-on-surface-variant">
                             {JSON.stringify({ args: tool.args, details: tool.details }, null, 2)}
@@ -1829,7 +1836,7 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
                                             </div>
                                         ) : null}
 
-                                        {/* Tool-Call Activity Timeline: auto-collapsed & grouped completed calls + live running + visible error tools */}
+                                        {/* Tool-Call Activity Timeline: auto-collapsed & grouped finished calls (including occasional tool errors) + live running calls */}
                                         {groupedTools.length > 0 ? (
                                             <div className="flex flex-col gap-1.5">
                                                 {groupedTools.map(item => {
@@ -1838,12 +1845,20 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
                                                     }
                                                     const groupKey = `${turn.id}_${item.id}`;
                                                     const isGroupOpen = Boolean(expandedToolGroups[groupKey]);
+                                                    const hasErrors = item.errorCount > 0;
+                                                    const allFailed = item.errorCount === item.tools.length;
                                                     return (
                                                         <div
                                                             key={groupKey}
                                                             data-testid="agent-tool-group"
                                                             data-collapsed={isGroupOpen ? "false" : "true"}
-                                                            className="overflow-hidden rounded-md3-md border border-outline-variant/60 bg-surface-container/70"
+                                                            data-error-count={item.errorCount}
+                                                            className={cn(
+                                                                "overflow-hidden rounded-md3-md border",
+                                                                allFailed
+                                                                    ? "border-error/40 bg-error-container/20"
+                                                                    : "border-outline-variant/60 bg-surface-container/70",
+                                                            )}
                                                         >
                                                             <button
                                                                 type="button"
@@ -1858,9 +1873,12 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
                                                             >
                                                                 <span className="type-label-m inline-flex min-w-0 items-center gap-1.5 text-on-surface-variant">
                                                                     <Icon
-                                                                        path={mdCheckCircle}
+                                                                        path={allFailed ? mdErrorFill : mdCheckCircle}
                                                                         size={14}
-                                                                        className="shrink-0 text-success"
+                                                                        className={cn(
+                                                                            "shrink-0",
+                                                                            allFailed ? "text-error" : "text-success",
+                                                                        )}
                                                                     />
                                                                     <span className="truncate font-medium tabular-nums">
                                                                         {t("agentToolsSummary", {
@@ -1869,11 +1887,26 @@ export const PiAgentPanel = forwardRef<PiAgentPanelHandle, PiAgentPanelProps>(fu
                                                                         })}
                                                                     </span>
                                                                 </span>
-                                                                <Icon
-                                                                    path={isGroupOpen ? mdKeyboardArrowUp : mdKeyboardArrowDown}
-                                                                    size={15}
-                                                                    className="shrink-0 text-on-surface-variant"
-                                                                />
+                                                                <span className="flex shrink-0 items-center gap-1.5">
+                                                                    {hasErrors ? (
+                                                                        <span
+                                                                            data-testid="agent-tool-group-error-badge"
+                                                                            className={cn(
+                                                                                "rounded-md3-full px-1.5 py-0.5 type-label-s tabular-nums",
+                                                                                allFailed
+                                                                                    ? "bg-error-container/60 text-on-error-container"
+                                                                                    : "bg-surface-container-highest text-on-surface-variant",
+                                                                            )}
+                                                                        >
+                                                                            {t("agentToolsErrorBadge", { count: item.errorCount })}
+                                                                        </span>
+                                                                    ) : null}
+                                                                    <Icon
+                                                                        path={isGroupOpen ? mdKeyboardArrowUp : mdKeyboardArrowDown}
+                                                                        size={15}
+                                                                        className="shrink-0 text-on-surface-variant"
+                                                                    />
+                                                                </span>
                                                             </button>
                                                             {isGroupOpen ? (
                                                                 <div className="flex flex-col gap-1.5 border-t border-outline-variant/50 p-2">

@@ -186,7 +186,7 @@ export interface AgentToolCallEntry {
     durationMs?: number;
     summary?: string;
     details?: unknown;
-    /** Auto-collapsed on successful completion; errors stay expanded/flagged. */
+    /** Auto-collapsed once finished (both succeeded and errored calls collapse by default). */
     collapsed: boolean;
 }
 
@@ -238,48 +238,54 @@ export type GroupedToolDisplayItem =
         id: string;
         tools: AgentToolCallEntry[];
         totalDurationMs: number;
+        errorCount: number;
     };
 
 /**
- * Groups consecutive completed non-error tool calls (`status === "done"`) into a single
- * collapsible summary pill when there are 2 or more consecutive completed calls,
- * while keeping `running` and `error` tool calls standalone and clearly visible.
+ * Groups consecutive finished tool calls (`status === "done" || status === "error"`) into a single
+ * auto-collapsed summary pill when there are 2 or more consecutive finished calls,
+ * while keeping actively `running` tool calls standalone and clearly visible.
  */
 export function groupToolCalls(tools: AgentToolCallEntry[]): GroupedToolDisplayItem[] {
     if (!tools || tools.length === 0) return [];
 
     const result: GroupedToolDisplayItem[] = [];
-    let completedRun: AgentToolCallEntry[] = [];
+    let settledRun: AgentToolCallEntry[] = [];
 
-    const flushCompleted = () => {
-        if (completedRun.length === 0) return;
-        if (completedRun.length === 1) {
-            const single = completedRun[0];
+    const flushSettled = () => {
+        if (settledRun.length === 0) return;
+        if (settledRun.length === 1) {
+            const single = settledRun[0];
             result.push({
                 kind: "single",
                 id: single.toolCallId,
                 tool: single,
             });
         } else {
-            const totalDurationMs = completedRun.reduce(
+            const totalDurationMs = settledRun.reduce(
                 (acc, item) => acc + (item.durationMs ?? (item.endedAt ? Math.max(0, item.endedAt - item.startedAt) : 0)),
+                0,
+            );
+            const errorCount = settledRun.reduce(
+                (acc, item) => acc + (item.status === "error" ? 1 : 0),
                 0,
             );
             result.push({
                 kind: "group",
-                id: `group_${completedRun[0].toolCallId}_${completedRun.length}`,
-                tools: completedRun,
+                id: `group_${settledRun[0].toolCallId}`,
+                tools: settledRun,
                 totalDurationMs,
+                errorCount,
             });
         }
-        completedRun = [];
+        settledRun = [];
     };
 
     for (const tool of tools) {
-        if (tool.status === "done") {
-            completedRun.push(tool);
+        if (tool.status !== "running") {
+            settledRun.push(tool);
         } else {
-            flushCompleted();
+            flushSettled();
             result.push({
                 kind: "single",
                 id: tool.toolCallId,
@@ -287,7 +293,7 @@ export function groupToolCalls(tools: AgentToolCallEntry[]): GroupedToolDisplayI
             });
         }
     }
-    flushCompleted();
+    flushSettled();
 
     return result;
 }
@@ -392,7 +398,7 @@ export function settleUnfinishedTools(
             status: asError ? "error" : "done",
             endedAt: timestamp,
             durationMs,
-            collapsed: !asError,
+            collapsed: true,
         };
     });
 }
@@ -560,8 +566,8 @@ export function applyAgentEventToTurns(
                     durationMs: computedDuration,
                     summary: ev.summary,
                     details: ev.details,
-                    // Auto-collapse succeeded tools; keep error tools visibly flagged
-                    collapsed: !ev.isError,
+                    // Auto-collapse finished tools (including occasional recoverable tool errors)
+                    collapsed: true,
                 };
             });
             return { ...item, tools };

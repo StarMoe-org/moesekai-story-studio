@@ -100,7 +100,7 @@ describe("agent-panel-state thinking auto-collapse and tool grouping reducer", (
         expect(turns[0].thinkingCollapsed).toBe(false);
     });
 
-    test("auto-collapses completed tools, groups consecutive done calls, and keeps error/running tools visible", () => {
+    test("auto-collapses all finished tools (including occasional errors), groups them together, and keeps running tools standalone", () => {
         let turns: AgentChatTurn[] = [];
         let activeId: string | null = null;
 
@@ -117,30 +117,66 @@ describe("agent-panel-state thinking auto-collapse and tool grouping reducer", (
         dispatch({ type: "tool_end", toolCallId: "t1", toolName: "story_read_workspace", isError: false, summary: "ok", durationMs: 400, timestamp: 1400 });
         dispatch({ type: "tool_start", toolCallId: "t2", toolName: "story_mine_official", args: {}, timestamp: 1500 });
         dispatch({ type: "tool_end", toolCallId: "t2", toolName: "story_mine_official", isError: false, summary: "ok", durationMs: 1100, timestamp: 2600 });
-        dispatch({ type: "tool_start", toolCallId: "t3", toolName: "story_validate_and_simulate", args: {}, timestamp: 2700 });
-        dispatch({ type: "tool_end", toolCallId: "t3", toolName: "story_validate_and_simulate", isError: true, summary: "broken edge", durationMs: 250, timestamp: 2950 });
-        dispatch({ type: "tool_start", toolCallId: "t4", toolName: "story_patch_msk", args: {}, timestamp: 3000 });
+        dispatch({ type: "tool_start", toolCallId: "t3", toolName: "story_mine_official", args: { action: "inspect" }, timestamp: 2700 });
+        dispatch({ type: "tool_end", toolCallId: "t3", toolName: "story_mine_official", isError: true, summary: "Unit chapter 'nightcode_01' not found on region 'jp'.", durationMs: 250, timestamp: 2950 });
+        dispatch({ type: "tool_start", toolCallId: "t4", toolName: "story_validate_and_simulate", args: {}, timestamp: 3000 });
+        dispatch({ type: "tool_end", toolCallId: "t4", toolName: "story_validate_and_simulate", isError: false, summary: "ok", durationMs: 350, timestamp: 3350 });
+        dispatch({ type: "tool_start", toolCallId: "t5", toolName: "story_patch_msk", args: {}, timestamp: 3400 });
 
         const tools = turns[0].tools ?? [];
         expect(tools[0].collapsed).toBe(true);
         expect(tools[1].collapsed).toBe(true);
-        expect(tools[2].collapsed).toBe(false); // error tool stays uncollapsed/flagged
-        expect(tools[3].status).toBe("running");
+        expect(tools[2].collapsed).toBe(true); // error tool auto-collapses cleanly too
+        expect(tools[2].status).toBe("error");
+        expect(tools[3].collapsed).toBe(true);
+        expect(tools[4].status).toBe("running");
+        expect(tools[4].collapsed).toBe(false);
 
         const grouped = groupToolCalls(tools);
-        expect(grouped).toHaveLength(3);
+        expect(grouped).toHaveLength(2);
         expect(grouped[0].kind).toBe("group");
         if (grouped[0].kind === "group") {
-            expect(grouped[0].tools).toHaveLength(2);
-            expect(grouped[0].totalDurationMs).toBe(1500);
+            expect(grouped[0].tools).toHaveLength(4);
+            expect(grouped[0].totalDurationMs).toBe(2100);
+            expect(grouped[0].errorCount).toBe(1);
+            expect(grouped[0].id).toBe("group_t1");
         }
         expect(grouped[1].kind).toBe("single");
         if (grouped[1].kind === "single") {
-            expect(grouped[1].tool.status).toBe("error");
+            expect(grouped[1].tool.status).toBe("running");
         }
-        expect(grouped[2].kind).toBe("single");
-        if (grouped[2].kind === "single") {
-            expect(grouped[2].tool.status).toBe("running");
+
+        // Consecutive pure-error calls also fold cleanly into a single group with errorCount === tools.length
+        const onlyErrors = groupToolCalls([
+            {
+                toolCallId: "e1",
+                toolName: "story_mine_official",
+                args: { action: "inspect" },
+                status: "error",
+                startedAt: 100,
+                endedAt: 250,
+                durationMs: 150,
+                summary: "not found 1",
+                collapsed: true,
+            },
+            {
+                toolCallId: "e2",
+                toolName: "story_mine_official",
+                args: { action: "inspect" },
+                status: "error",
+                startedAt: 300,
+                endedAt: 500,
+                durationMs: 200,
+                summary: "not found 2",
+                collapsed: true,
+            },
+        ]);
+        expect(onlyErrors).toHaveLength(1);
+        expect(onlyErrors[0].kind).toBe("group");
+        if (onlyErrors[0].kind === "group") {
+            expect(onlyErrors[0].tools).toHaveLength(2);
+            expect(onlyErrors[0].errorCount).toBe(2);
+            expect(onlyErrors[0].totalDurationMs).toBe(350);
         }
     });
 
@@ -187,6 +223,7 @@ describe("agent-panel-state thinking auto-collapse and tool grouping reducer", (
             timestamp: 2000,
         });
         expect(errRes.turns[0].tools?.[0].status).toBe("error");
+        expect(errRes.turns[0].tools?.[0].collapsed).toBe(true);
         expect(errRes.turns[0].error).toBe("Fatal auth error");
         expect(errRes.activeTurnId).toBeNull();
     });
