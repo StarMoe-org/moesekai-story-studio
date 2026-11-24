@@ -193,8 +193,17 @@ export const App: React.FC = () => {
     const agentResizeDragRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
     const liveAgentWidthRef = useRef<number>(DEFAULT_AGENT_PANEL_WIDTH);
     const projectRef = useRef<WorkspaceProjectData | null>(null);
+    const projectSessionSeqRef = useRef<number>(0);
+    const docVersionRef = useRef<number>(0);
+    const activeDocRef = useRef<StoryDocument | null>(null);
+    const saveStateRef = useRef<"saved" | "saving" | "dirty" | "error">("saved");
     const voiceManifestRef = useRef<StoryVoiceManifest | null>(null);
     const localeRef = useRef<DesktopUiLocale>(settings.locale);
+
+    const updateSaveState = useCallback((next: "saved" | "saving" | "dirty" | "error") => {
+        saveStateRef.current = next;
+        setSaveState(next);
+    }, []);
 
     useEffect(() => {
         const onResize = () => setViewportWidth(window.innerWidth);
@@ -243,23 +252,27 @@ export const App: React.FC = () => {
     }, [settings.assetCacheEnabled]);
 
     const applyOpenedProject = useCallback((proj: WorkspaceProjectData) => {
+        const nextSessionSeq = projectSessionSeqRef.current + 1;
+        projectSessionSeqRef.current = nextSessionSeq;
+        docVersionRef.current = 0;
         projectRef.current = proj;
         setProject(proj);
-        setProjectSessionSeq(seq => seq + 1);
+        setProjectSessionSeq(nextSessionSeq);
         setLiveScript(proj.script);
         setSnapshots(proj.snapshots);
         const normalizedManifest = normalizeWorkspaceVoiceManifest(proj.voiceManifest);
         voiceManifestRef.current = normalizedManifest;
         setVoiceManifest(normalizedManifest);
         const parsed = parseProjectDoc(proj);
+        activeDocRef.current = parsed;
         setActiveDoc(parsed);
         setSelection({ nodeId: null, beatId: null });
         setEditorMode("edit");
         setAgentStatus("idle");
-        setSaveState("saved");
+        updateSaveState("saved");
         setViewMode("editor");
         void window.moesekaiDesktop.workspace.listRecent().then(setRecentProjects).catch(() => {});
-    }, []);
+    }, [updateSaveState]);
 
     // Initial bootstrap (runs once on mount)
     useEffect(() => {
@@ -606,83 +619,136 @@ export const App: React.FC = () => {
         };
     }, [appInfo?.version, closeAllDialogs, handleOpenStarterDemo, persistSettings]);
 
+    const handleSaveDoc = useCallback(
+        async (doc: StoryDocument, expectedSessionSeq?: number, expectedProjectId?: string | null) => {
+            const currentProj = projectRef.current;
+            if (!currentProj) {
+                return;
+            }
+            if (expectedSessionSeq !== undefined && projectSessionSeqRef.current !== expectedSessionSeq) {
+                return;
+            }
+            if (expectedProjectId && currentProj.id !== expectedProjectId) {
+                return;
+            }
+            const activeSessionSeq = projectSessionSeqRef.current;
+            const savedVersion = docVersionRef.current;
+            const normalizedDoc: StoryDocument =
+                doc.id === currentProj.id ? doc : { ...doc, id: currentProj.id };
+            updateSaveState("saving");
+            try {
+                const script = serializeStoryScript(normalizedDoc);
+                const locales: Record<string, unknown> = {};
+                if (normalizedDoc.locales) {
+                    for (const [k, pack] of Object.entries(normalizedDoc.locales)) {
+                        if (pack) locales[k] = pack;
+                    }
+                }
+                await window.moesekaiDesktop.workspace.save({
+                    script,
+                    locales,
+                    voiceManifest: voiceManifestRef.current,
+                });
+                if (projectSessionSeqRef.current !== activeSessionSeq || projectRef.current?.id !== currentProj.id) {
+                    return;
+                }
+                if (docVersionRef.current === savedVersion) {
+                    activeDocRef.current = normalizedDoc;
+                    setActiveDoc(normalizedDoc);
+                    setLiveScript(script);
+                    updateSaveState("saved");
+                }
+            } catch (err) {
+                if (projectSessionSeqRef.current === activeSessionSeq && projectRef.current?.id === currentProj.id) {
+                    updateSaveState("error");
+                    setSnack(err instanceof Error ? err.message : String(err));
+                }
+                throw err;
+            }
+        },
+        [updateSaveState],
+    );
+
+    const flushBeforeProjectSwitch = useCallback(async (): Promise<boolean> => {
+        if (editorRef.current) {
+            if (!editorRef.current.hasUnsavedChanges() && saveStateRef.current === "saved") {
+                return true;
+            }
+            return editorRef.current.saveNow();
+        }
+        if (saveStateRef.current !== "saved" && activeDocRef.current && projectRef.current) {
+            try {
+                await handleSaveDoc(activeDocRef.current, projectSessionSeqRef.current, projectRef.current.id);
+                return true;
+            } catch {
+                return false;
+            }
+        }
+        return true;
+    }, [handleSaveDoc]);
+
     const handleOpenFolder = useCallback(async () => {
         try {
+            await flushBeforeProjectSwitch();
             const opened = await window.moesekaiDesktop.workspace.openFolderDialog();
             if (opened) applyOpenedProject(opened);
         } catch (err) {
             setSnack(err instanceof Error ? err.message : String(err));
         }
-    }, [applyOpenedProject]);
+    }, [applyOpenedProject, flushBeforeProjectSwitch]);
 
     const handleOpenMskFile = useCallback(async () => {
         try {
+            await flushBeforeProjectSwitch();
             const opened = await window.moesekaiDesktop.workspace.openMskDialog();
             if (opened) applyOpenedProject(opened);
         } catch (err) {
             setSnack(err instanceof Error ? err.message : String(err));
         }
-    }, [applyOpenedProject]);
+    }, [applyOpenedProject, flushBeforeProjectSwitch]);
 
     const handleOpenPath = useCallback(
         async (targetPath: string) => {
             try {
+                await flushBeforeProjectSwitch();
                 const opened = await window.moesekaiDesktop.workspace.openPath(targetPath);
                 applyOpenedProject(opened);
             } catch (err) {
                 setSnack(err instanceof Error ? err.message : String(err));
             }
         },
-        [applyOpenedProject],
+        [applyOpenedProject, flushBeforeProjectSwitch],
     );
 
-    const handleSaveDoc = useCallback(async (doc: StoryDocument) => {
-        const currentProj = projectRef.current;
-        if (!currentProj || (doc.id && doc.id !== currentProj.id)) {
-            return;
-        }
-        setSaveState("saving");
-        try {
-            const script = serializeStoryScript(doc);
-            const locales: Record<string, unknown> = {};
-            if (doc.locales) {
-                for (const [k, pack] of Object.entries(doc.locales)) {
-                    if (pack) locales[k] = pack;
-                }
-            }
-            await window.moesekaiDesktop.workspace.save({
-                script,
-                locales,
-                voiceManifest: voiceManifestRef.current,
-            });
-            if (projectRef.current?.id !== currentProj.id) return;
-            setActiveDoc(doc);
-            setLiveScript(script);
-            setSaveState("saved");
-        } catch (err) {
-            if (projectRef.current?.id !== currentProj.id) return;
-            setSaveState("error");
-            setSnack(err instanceof Error ? err.message : String(err));
-        }
-    }, []);
-
-    const handleManualSave = useCallback(async () => {
+    const handleManualSave = useCallback(async (): Promise<boolean> => {
         if (editorRef.current) {
-            await editorRef.current.saveNow();
-            setSnack(formatDesktopMessage(localeRef.current, "saveSuccessNotice"));
-            return;
+            const saved = await editorRef.current.saveNow();
+            if (saved) {
+                setSnack(formatDesktopMessage(localeRef.current, "saveSuccessNotice"));
+            }
+            return saved;
         }
-        if (activeDoc) {
-            await handleSaveDoc(activeDoc);
-            setSnack(formatDesktopMessage(localeRef.current, "saveSuccessNotice"));
+        if (activeDocRef.current && projectRef.current) {
+            try {
+                await handleSaveDoc(activeDocRef.current, projectSessionSeqRef.current, projectRef.current.id);
+                setSnack(formatDesktopMessage(localeRef.current, "saveSuccessNotice"));
+                return true;
+            } catch {
+                return false;
+            }
         }
-    }, [activeDoc, handleSaveDoc]);
+        return false;
+    }, [handleSaveDoc]);
 
     const handleCloseProject = useCallback(async () => {
+        await flushBeforeProjectSwitch();
+        projectSessionSeqRef.current += 1;
+        docVersionRef.current = 0;
         projectRef.current = null;
         await window.moesekaiDesktop.workspace.close();
         setProject(null);
-        setProjectSessionSeq(seq => seq + 1);
+        setProjectSessionSeq(projectSessionSeqRef.current);
+        activeDocRef.current = null;
         setActiveDoc(null);
         setLiveScript("");
         setVoiceManifest(null);
@@ -690,13 +756,15 @@ export const App: React.FC = () => {
         setSelection({ nodeId: null, beatId: null });
         setEditorMode("edit");
         setAgentStatus("idle");
+        updateSaveState("saved");
         setViewMode("welcome");
         const recent = await window.moesekaiDesktop.workspace.listRecent();
         setRecentProjects(recent);
-    }, []);
+    }, [flushBeforeProjectSwitch, updateSaveState]);
 
     const handleRollbackSnapshot = useCallback(async (snapshotId: string) => {
         const updated = await window.moesekaiDesktop.agent.rollbackSnapshot(snapshotId);
+        docVersionRef.current += 1;
         setProject(updated);
         setLiveScript(updated.script);
         setSnapshots(updated.snapshots);
@@ -704,15 +772,18 @@ export const App: React.FC = () => {
         voiceManifestRef.current = normalizedManifest;
         setVoiceManifest(normalizedManifest);
         const parsed = parseProjectDoc(updated);
-        if (parsed) setActiveDoc(parsed);
+        if (parsed) {
+            activeDocRef.current = parsed;
+            setActiveDoc(parsed);
+        }
         editorRef.current?.reloadFromScript(updated.script, {
             preserveSelection: true,
             markSaved: true,
             silent: true,
         });
-        setSaveState("saved");
+        updateSaveState("saved");
         setSnack(formatDesktopMessage(localeRef.current, "rollbackSuccessNotice"));
-    }, []);
+    }, [updateSaveState]);
 
     const handleVoiceManifestChange = useCallback((next: StoryVoiceManifest | null) => {
         voiceManifestRef.current = next;
@@ -758,25 +829,63 @@ export const App: React.FC = () => {
                     : prev,
             );
             const parsed = parseStoryScript(change.script);
+            docVersionRef.current += 1;
             if (parsed.ok) {
-                setActiveDoc({
+                const nextDoc: StoryDocument = {
                     ...parsed.doc,
                     id: currentProj.id,
                     locales: {
                         ...(parsed.doc.locales ?? {}),
                         ...(change.locales as Partial<Record<UiLocale, StoryLocalePack>>),
                     },
-                });
+                };
+                activeDocRef.current = nextDoc;
+                setActiveDoc(nextDoc);
             }
             editorRef.current?.reloadFromScript(change.script, {
                 preserveSelection: true,
                 markSaved: true,
                 silent: true,
             });
-            setSaveState("saved");
+            updateSaveState("saved");
             setSnack(formatDesktopMessage(localeRef.current, "externalReloadNotice"));
         });
-    }, []);
+    }, [updateSaveState]);
+
+    // Flush pending editor/code saves cleanly when the Electron window is about to close.
+    useEffect(() => {
+        if (typeof window.moesekaiDesktop.app.onBeforeClose !== "function") return;
+        return window.moesekaiDesktop.app.onBeforeClose(requestId => {
+            void (async () => {
+                if (!projectRef.current) {
+                    window.moesekaiDesktop.app.respondBeforeClose({
+                        requestId,
+                        saved: true,
+                        hasUnsavedChanges: false,
+                    });
+                    return;
+                }
+                try {
+                    const saved = await flushBeforeProjectSwitch();
+                    const stillUnsaved =
+                        !saved
+                        || Boolean(editorRef.current?.hasUnsavedChanges())
+                        || saveStateRef.current !== "saved";
+                    window.moesekaiDesktop.app.respondBeforeClose({
+                        requestId,
+                        saved: !stillUnsaved,
+                        hasUnsavedChanges: stillUnsaved,
+                    });
+                } catch {
+                    window.moesekaiDesktop.app.respondBeforeClose({
+                        requestId,
+                        saved: false,
+                        hasUnsavedChanges: true,
+                    });
+                }
+            })();
+        });
+    }, [flushBeforeProjectSwitch]);
 
     // MoeSekai Agent status & live editor_action dispatch
     useEffect(() => {
@@ -826,8 +935,10 @@ export const App: React.FC = () => {
         const unsubCmd = window.moesekaiDesktop.menu.onCommand((cmd: MenuCommand) => {
             switch (cmd.type) {
                 case "new-project":
-                    setViewMode("welcome");
-                    setCreateDialogOpen(true);
+                    void flushBeforeProjectSwitch().finally(() => {
+                        setViewMode("welcome");
+                        setCreateDialogOpen(true);
+                    });
                     break;
                 case "open-folder":
                     void handleOpenFolder();
@@ -899,6 +1010,7 @@ export const App: React.FC = () => {
             unsubOpen();
         };
     }, [
+        flushBeforeProjectSwitch,
         handleManualSave,
         handleOpenCacheDialog,
         handleOpenFolder,
@@ -939,14 +1051,29 @@ export const App: React.FC = () => {
         () =>
             createElectronStoryStorageAdapter(window.moesekaiDesktop, {
                 onSaved: (_savedAt, doc) => {
+                    activeDocRef.current = doc;
                     setActiveDoc(doc);
                     setLiveScript(serializeStoryScript(doc));
-                    setSaveState("saved");
+                    updateSaveState("saved");
                 },
                 getVoiceManifest: () => voiceManifestRef.current,
             }),
-        [],
+        [updateSaveState],
     );
+
+    const handleSaveCurrentSessionDoc = useMemo(() => {
+        const boundSessionSeq = projectSessionSeq;
+        const boundProjectId = project?.id ?? null;
+        return async (doc: StoryDocument) => {
+            await handleSaveDoc(doc, boundSessionSeq, boundProjectId);
+        };
+    }, [handleSaveDoc, project?.id, projectSessionSeq]);
+
+    const handleEnterTheater = useCallback(async () => {
+        const saved = await flushBeforeProjectSwitch();
+        if (!saved) return;
+        setViewMode("player");
+    }, [flushBeforeProjectSwitch]);
 
     const exportAdapter = useMemo(
         () =>
@@ -1001,9 +1128,11 @@ export const App: React.FC = () => {
     const showWelcome = viewMode === "welcome" || !project || !activeDoc;
     const projectSessionKey = project ? `${project.id}:${project.mskFilePath}:${projectSessionSeq}` : "none";
     const handleOpenNewProject = useCallback(() => {
-        setViewMode("welcome");
-        setCreateDialogOpen(true);
-    }, []);
+        void flushBeforeProjectSwitch().finally(() => {
+            setViewMode("welcome");
+            setCreateDialogOpen(true);
+        });
+    }, [flushBeforeProjectSwitch]);
     const handleOpenExportMsk = useCallback(() => {
         setExportDialogMode("msk");
         setExportDialogOpen(true);
@@ -1203,10 +1332,14 @@ export const App: React.FC = () => {
                                 ref={editorRef}
                                 externalDoc={activeDoc}
                                 externalDocKey={projectSessionKey}
-                                onSaveDoc={handleSaveDoc}
-                                onDocChange={nextDoc => {
+                                onSaveDoc={handleSaveCurrentSessionDoc}
+                                onDocChange={(nextDoc, meta) => {
+                                    docVersionRef.current += 1;
+                                    activeDocRef.current = nextDoc;
                                     setActiveDoc(nextDoc);
-                                    setSaveState("dirty");
+                                    if (meta?.dirty !== false) {
+                                        updateSaveState("dirty");
+                                    }
                                 }}
                                 onSelectionChange={setSelection}
                                 onModeChange={setEditorMode}
@@ -1246,7 +1379,7 @@ export const App: React.FC = () => {
                                             onSave={() => void handleManualSave()}
                                             onOpenExport={handleOpenExportMsk}
                                             onOpenExportBundle={handleOpenExportBundle}
-                                            onEnterTheater={() => setViewMode("player")}
+                                            onEnterTheater={() => void handleEnterTheater()}
                                             onRevealProject={handleRevealProject}
                                             onOpenSettings={handleOpenSettings}
                                             onOpenCacheDialog={handleOpenCacheDialog}

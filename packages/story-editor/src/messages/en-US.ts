@@ -843,6 +843,7 @@ export const storyMakerMessages = {
             "code": "Code",
             "codeSyncedToast": "Synced .msk changes to canvas",
             "codeBlockedSwitch": "Fix or reset script errors before switching modes",
+            "codeBlockedSave": "Fix script errors before saving",
             "editBadge": "Edit Preview · Live Sync",
             "playtestBadge": "Playtesting · Read-only",
             "playtestReadonlyBanner": "Playtest mode is active (read-only). Exit playtest to edit.",

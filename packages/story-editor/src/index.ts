@@ -17,7 +17,11 @@ export {
     type StoryStudioHubSlots,
 } from "./studio/StoryStudioHub";
 
-export { StoryStudioEditor } from "./studio/StoryStudioEditor";
+export {
+    StoryStudioEditor,
+    mergeIncomingStoryDoc,
+    resolveEffectiveSaveStatus,
+} from "./studio/StoryStudioEditor";
 export type {
     EditorSlotContext,
     EditorTopBarSlotContext,

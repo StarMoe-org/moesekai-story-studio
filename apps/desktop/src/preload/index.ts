@@ -27,6 +27,11 @@ const api: MoesekaiDesktopApi = {
         openExternal: url => ipcRenderer.invoke(IPC_CHANNELS.APP_OPEN_EXTERNAL, url),
         onFullscreenChange: listener =>
             subscribeChannel<boolean>(IPC_CHANNELS.EVENT_WINDOW_FULLSCREEN_CHANGED, listener),
+        onBeforeClose: listener =>
+            subscribeChannel<string>(IPC_CHANNELS.EVENT_APP_BEFORE_CLOSE, listener),
+        respondBeforeClose: result => {
+            ipcRenderer.send(IPC_CHANNELS.APP_BEFORE_CLOSE_RESULT, result);
+        },
     },
     workspace: {
         getActive: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_GET_ACTIVE),

@@ -83,6 +83,7 @@ export const IPC_CHANNELS = {
     SETTINGS_UPDATE: "settings:update",
     APP_GET_INFO: "app:get-info",
     APP_OPEN_EXTERNAL: "app:open-external",
+    APP_BEFORE_CLOSE_RESULT: "app:before-close-result",
 
     // Desktop Updates (CNB Primary + GitHub Fallback)
     UPDATES_CHECK: "updates:check",
@@ -103,6 +104,7 @@ export const IPC_CHANNELS = {
     EVENT_OPEN_FILE_REQUEST: "event:open-file-request",
     EVENT_WINDOW_FULLSCREEN_CHANGED: "window:fullscreen-changed",
     EVENT_UPDATE_AVAILABLE: "event:update-available",
+    EVENT_APP_BEFORE_CLOSE: "event:app-before-close",
 } as const;
 
 export interface WorkspaceSnapshotInfo {
@@ -606,6 +608,12 @@ export type MenuCommand =
     | { type: "check-for-updates" }
     | { type: "open-notices" };
 
+export interface BeforeCloseResult {
+    requestId: string;
+    saved: boolean;
+    hasUnsavedChanges: boolean;
+}
+
 export type UnsubscribeFn = () => void;
 
 /**
@@ -618,6 +626,8 @@ export interface MoesekaiDesktopApi {
         updateSettings(patch: Partial<DesktopAppSettings>): Promise<DesktopAppSettings>;
         openExternal(url: string): Promise<void>;
         onFullscreenChange(listener: (isFullscreen: boolean) => void): UnsubscribeFn;
+        onBeforeClose(listener: (requestId: string) => void): UnsubscribeFn;
+        respondBeforeClose(result: BeforeCloseResult): void;
     };
     workspace: {
         getActive(): Promise<WorkspaceProjectData | null>;

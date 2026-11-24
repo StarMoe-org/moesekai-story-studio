@@ -1,10 +1,13 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, protocol, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, protocol, safeStorage } from "electron";
 import {
     IPC_CHANNELS,
+    type BeforeCloseResult,
     type DesktopAppInfo,
+    type DesktopUiLocale,
     type MenuCommand,
 } from "../shared/ipc.ts";
 import {
@@ -49,6 +52,57 @@ const captureUiDir = captureArg
         ? path.resolve(process.env.MOESEKAI_CAPTURE_UI_DIR)
         : null;
 const isAutomatedRun = isSmokeTest || Boolean(captureUiDir);
+
+function getUnsavedCloseDialogStrings(locale: DesktopUiLocale): {
+    title: string;
+    message: string;
+    detail: string;
+    backToEdit: string;
+    closeWithoutSaving: string;
+} {
+    switch (locale) {
+        case "zh-TW":
+            return {
+                title: "尚未儲存的變更",
+                message: "目前劇情仍有尚未儲存的變更",
+                detail: "程式碼可能存在語法或編譯錯誤，或本機寫入失敗。直接關閉將會遺失未儲存的進度。",
+                backToEdit: "返回編輯",
+                closeWithoutSaving: "不儲存並關閉",
+            };
+        case "en-US":
+            return {
+                title: "Unsaved Changes",
+                message: "Your story still has unsaved changes",
+                detail: "The script may contain syntax/compile errors or failed to write to disk. Closing now will discard unsaved progress.",
+                backToEdit: "Return to Editor",
+                closeWithoutSaving: "Close Without Saving",
+            };
+        case "ja-JP":
+            return {
+                title: "未保存の変更",
+                message: "ストーリーに未保存の変更があります",
+                detail: "スクリプトに構文・コンパイルエラーがあるか、保存に失敗しました。このまま閉じると未保存の変更は失われます。",
+                backToEdit: "編集に戻る",
+                closeWithoutSaving: "保存せずに閉じる",
+            };
+        case "ko-KR":
+            return {
+                title: "저장되지 않은 변경 사항",
+                message: "스토리에 저장되지 않은 변경 사항이 있습니다",
+                detail: "스크립트에 문법/컴파일 오류가 있거나 저장에 실패했습니다. 지금 닫으면 저장되지 않은 내용이 사라집니다.",
+                backToEdit: "편집으로 돌아가기",
+                closeWithoutSaving: "저장하지 않고 닫기",
+            };
+        default:
+            return {
+                title: "未保存的更改",
+                message: "当前剧情仍有未保存的更改",
+                detail: "代码可能存在语法或编译错误，或本地写入失败。直接关闭将会丢失未保存的进度。",
+                backToEdit: "返回编辑",
+                closeWithoutSaving: "不保存并关闭",
+            };
+    }
+}
 
 function resolveLive2DDir(): string {
     const candidates = [
@@ -304,6 +358,86 @@ async function bootstrap(): Promise<void> {
 
         mainWindow = win;
 
+        let allowWindowClose = false;
+        let closeFlushInFlight = false;
+        let pendingCloseCleanup: (() => void) | null = null;
+
+        win.webContents.on("will-prevent-unload", event => {
+            if (allowWindowClose || isAutomatedRun) {
+                event.preventDefault();
+            }
+        });
+
+        win.on("close", event => {
+            if (allowWindowClose || isAutomatedRun || win.webContents.isDestroyed()) {
+                return;
+            }
+            event.preventDefault();
+            if (closeFlushInFlight) return;
+            closeFlushInFlight = true;
+
+            const requestId = crypto.randomBytes(6).toString("hex");
+            const waitForFlush = new Promise<BeforeCloseResult>(resolve => {
+                let settled = false;
+                const finish = (res: BeforeCloseResult) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    ipcMain.removeListener(IPC_CHANNELS.APP_BEFORE_CLOSE_RESULT, onResult);
+                    if (pendingCloseCleanup === cleanup) {
+                        pendingCloseCleanup = null;
+                    }
+                    resolve(res);
+                };
+                const onResult = (_ev: Electron.IpcMainEvent, payload: BeforeCloseResult) => {
+                    if (!payload || payload.requestId !== requestId) return;
+                    finish(payload);
+                };
+                const cleanup = () => {
+                    finish({ requestId, saved: true, hasUnsavedChanges: false });
+                };
+                const timer = setTimeout(() => {
+                    finish({ requestId, saved: true, hasUnsavedChanges: false });
+                }, 3000);
+                pendingCloseCleanup = cleanup;
+                ipcMain.on(IPC_CHANNELS.APP_BEFORE_CLOSE_RESULT, onResult);
+                try {
+                    win.webContents.send(IPC_CHANNELS.EVENT_APP_BEFORE_CLOSE, requestId);
+                } catch {
+                    finish({ requestId, saved: true, hasUnsavedChanges: false });
+                }
+            });
+
+            void waitForFlush.then(async result => {
+                if (win.isDestroyed()) return;
+                if (!result.hasUnsavedChanges) {
+                    allowWindowClose = true;
+                    closeFlushInFlight = false;
+                    win.close();
+                    return;
+                }
+                const strings = getUnsavedCloseDialogStrings(settingsStore.getAppSettings().locale);
+                const choice = await dialog.showMessageBox(win, {
+                    type: "warning",
+                    buttons: [strings.backToEdit, strings.closeWithoutSaving],
+                    defaultId: 0,
+                    cancelId: 0,
+                    noLink: true,
+                    title: strings.title,
+                    message: strings.message,
+                    detail: strings.detail,
+                });
+                if (win.isDestroyed()) return;
+                if (choice.response === 1) {
+                    allowWindowClose = true;
+                    closeFlushInFlight = false;
+                    win.close();
+                } else {
+                    closeFlushInFlight = false;
+                }
+            });
+        });
+
         win.on("enter-full-screen", () => {
             sendToRenderer(IPC_CHANNELS.EVENT_WINDOW_FULLSCREEN_CHANGED, true);
         });
@@ -313,6 +447,8 @@ async function bootstrap(): Promise<void> {
         });
 
         win.on("closed", () => {
+            pendingCloseCleanup?.();
+            pendingCloseCleanup = null;
             if (mainWindow === win) mainWindow = null;
         });
 

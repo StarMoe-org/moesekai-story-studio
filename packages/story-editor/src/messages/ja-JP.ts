@@ -843,6 +843,7 @@ export const storyMakerMessages = {
             "code": "コード",
             "codeSyncedToast": ".msk の変更をキャンバスに反映しました",
             "codeBlockedSwitch": "スクリプトのエラーを修正またはリセットしてから切り替えてください",
+            "codeBlockedSave": "スクリプトのエラーを修正してから保存してください",
             "editBadge": "編集プレビュー · 即時反映",
             "playtestBadge": "試写再生中 · 閲覧専用",
             "playtestReadonlyBanner": "試写モード中は閲覧専用です。編集するには編集モードへ戻ってください。",

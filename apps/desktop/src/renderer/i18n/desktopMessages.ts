@@ -30,6 +30,7 @@ export interface DesktopMessageTable {
     saved: string;
     saving: string;
     unsaved: string;
+    saveFailed: string;
     exportMsk: string;
     backToWelcome: string;
     playMode: string;
@@ -357,6 +358,7 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         saved: "已保存",
         saving: "保存中",
         unsaved: "未保存",
+        saveFailed: "保存失败",
         exportMsk: "导出 .msk",
         backToWelcome: "返回欢迎页",
         playMode: "剧场预览",
@@ -676,6 +678,7 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         saved: "已儲存",
         saving: "儲存中",
         unsaved: "未儲存",
+        saveFailed: "儲存失敗",
         exportMsk: "匯出 .msk",
         backToWelcome: "返回歡迎頁",
         playMode: "劇場預覽",
@@ -995,6 +998,7 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         saved: "Saved",
         saving: "Saving",
         unsaved: "Unsaved",
+        saveFailed: "Save failed",
         exportMsk: "Export .msk",
         backToWelcome: "Welcome",
         playMode: "Theater",
@@ -1314,6 +1318,7 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         saved: "保存済み",
         saving: "保存中",
         unsaved: "未保存",
+        saveFailed: "保存失敗",
         exportMsk: ".msk 出力",
         backToWelcome: "スタート",
         playMode: "シアター",
@@ -1633,6 +1638,7 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         saved: "저장됨",
         saving: "저장 중",
         unsaved: "미저장",
+        saveFailed: "저장 실패",
         exportMsk: ".msk 내보내기",
         backToWelcome: "시작 화면",
         playMode: "극장",

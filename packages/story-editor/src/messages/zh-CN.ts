@@ -843,6 +843,7 @@ export const storyMakerMessages = {
             "code": "代码",
             "codeSyncedToast": "已将 .msk 修改同步到画布",
             "codeBlockedSwitch": "脚本存在错误，请修复或还原后再切换",
+            "codeBlockedSave": "脚本存在错误，请先修复后再保存",
             "editBadge": "编辑预览 · 修改即时同步",
             "playtestBadge": "试播运行中 · 只读",
             "playtestReadonlyBanner": "当前处于试播模式，画面与流程均为只读调试状态。",

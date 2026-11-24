@@ -66,8 +66,8 @@ export interface EditorTopBarSlotContext extends EditorSlotContext {
     redo: () => void;
     /** Localized label for `saveStatus`. */
     saveStatusLabel: string;
-    /** Flush any pending unsaved changes immediately. */
-    saveNow: () => Promise<void>;
+    /** Flush any pending unsaved changes immediately (returns `true` if persisted cleanly). */
+    saveNow: () => Promise<boolean>;
     /** Number of attached translation locale packs on `doc`. */
     attachedLocaleCount: number;
     /** Built-in dialog openers for custom top bar controls. */
@@ -156,8 +156,10 @@ export interface StoryStudioEditorHandle {
     getSelectedBeatId: () => string | null;
     /** Returns the current workspace mode. */
     getWorkspaceMode: () => StoryEditorWorkspaceMode;
-    /** Immediately flush any pending unsaved changes. */
-    saveNow: () => Promise<void>;
+    /** Returns true when there are uncommitted Code mode edits, dirty document edits, or an in-flight/failed save. */
+    hasUnsavedChanges: () => boolean;
+    /** Immediately flush any pending unsaved changes (including valid Code mode edits). Returns `true` if saved cleanly. */
+    saveNow: () => Promise<boolean>;
     /** Open the custom voice track manifest dialog. */
     openVoiceManifestDialog: (tab?: "import" | "upload") => void;
     /** Trigger export (`onRequestExport` or `exporter.exportMsk`). */
@@ -173,8 +175,8 @@ export interface StoryStudioEditorProps {
     externalDocKey?: string;
     /** Optional custom save handler (used instead of `storage.saveDraft` when provided, e.g. Electron workspace file save). */
     onSaveDoc?: (doc: StoryDocument, draftId: string | null) => Promise<void> | void;
-    /** Notifies host whenever the committed document changes in memory. */
-    onDocChange?: (doc: StoryDocument) => void;
+    /** Notifies host whenever the committed document changes in memory (`meta.dirty === false` on clean external reloads). */
+    onDocChange?: (doc: StoryDocument, meta?: { dirty?: boolean }) => void;
     /** Notifies host when selection changes (useful for Pi Agent prompt context). */
     onSelectionChange?: (selection: { nodeId: string | null; beatId: string | null }) => void;
     /** Optional initial workspace mode (`"edit"` | `"playtest"` | `"code"`). */

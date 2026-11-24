@@ -294,6 +294,46 @@ function IdeMenuTrigger({
 }
 
 /**
+ * Merges a freshly parsed or imported `StoryDocument` into the currently open draft/project
+ * without losing its persistent document identity (`id`) or (optionally) attached locale packs.
+ *
+ * Preserving `currentDoc.id` is critical: editing or pasting `.msk` code (which may omit `id=...`
+ * or carry a different header id) must never break host draft/project persistence bindings.
+ */
+export function mergeIncomingStoryDoc(
+    currentDoc: StoryDocument | null,
+    nextDoc: StoryDocument,
+    options: { preserveLocales?: boolean } = {},
+): StoryDocument {
+    if (!currentDoc) return nextDoc;
+    const preserveLocales = options.preserveLocales !== false;
+    return {
+        ...nextDoc,
+        ...(currentDoc.id ? { id: currentDoc.id } : {}),
+        ...(preserveLocales && !nextDoc.sourceLocale && currentDoc.sourceLocale
+            ? { sourceLocale: currentDoc.sourceLocale }
+            : {}),
+        ...(preserveLocales && currentDoc.locales && Object.keys(currentDoc.locales).length > 0
+            ? { locales: currentDoc.locales }
+            : {}),
+    };
+}
+
+/**
+ * Resolves the user-visible save status across both the committed graph document and any
+ * live uncommitted edits in Code mode.
+ */
+export function resolveEffectiveSaveStatus(
+    saveStatus: StoryEditorSaveStatus,
+    codeDirty: boolean,
+): StoryEditorSaveStatus {
+    if (saveStatus === "error") return "error";
+    if (saveStatus === "saving") return "saving";
+    if (saveStatus === "dirty" || codeDirty) return "dirty";
+    return "saved";
+}
+
+/**
  * Pure helper committing a stage-drag `(x, y)` adjustment back into the active scene's
  * selected `StageActionBeat` (primary or `group[]`), the latest preceding `stageAction` beat
  * targeting `castKey`, or the scene's `stageCast` slot (materializing `inherit` when needed).
@@ -543,6 +583,14 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         const flashKeyRef = useRef(0);
         const dirtyDocRef = useRef<StoryDocument | null>(null);
         const docRef = useRef<StoryDocument | null>(doc);
+        const pastRef = useRef<StoryDocument[]>(past);
+        const futureRef = useRef<StoryDocument[]>(future);
+        const saveStatusRef = useRef<StoryEditorSaveStatus>(saveStatus);
+        const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+        const codeTextRef = useRef<string>(codeText);
+        const codeSyncedBaseRef = useRef<string>(codeSyncedBase);
+        const selectedNodeIdRef = useRef<string | null>(selectedNodeId);
+        const selectedBeatIdRef = useRef<string | null>(selectedBeatId);
         const nleContainerRef = useRef<HTMLDivElement | null>(null);
         const topRowRef = useRef<HTMLDivElement | null>(null);
         const stageFullscreenRef = useRef<HTMLDivElement | null>(null);
@@ -572,6 +620,42 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         useEffect(() => {
             docRef.current = doc;
         }, [doc]);
+        useEffect(() => {
+            pastRef.current = past;
+        }, [past]);
+        useEffect(() => {
+            futureRef.current = future;
+        }, [future]);
+        useEffect(() => {
+            saveStatusRef.current = saveStatus;
+        }, [saveStatus]);
+        useEffect(() => {
+            codeTextRef.current = codeText;
+        }, [codeText]);
+        useEffect(() => {
+            codeSyncedBaseRef.current = codeSyncedBase;
+        }, [codeSyncedBase]);
+        useEffect(() => {
+            selectedNodeIdRef.current = selectedNodeId;
+        }, [selectedNodeId]);
+        useEffect(() => {
+            selectedBeatIdRef.current = selectedBeatId;
+        }, [selectedBeatId]);
+
+        const updateSaveStatus = useCallback((next: StoryEditorSaveStatus) => {
+            saveStatusRef.current = next;
+            setSaveStatus(next);
+        }, []);
+
+        const setCodeTextSynced = useCallback((next: string) => {
+            codeTextRef.current = next;
+            setCodeText(next);
+        }, []);
+
+        const setCodeSyncedBaseSynced = useCallback((next: string) => {
+            codeSyncedBaseRef.current = next;
+            setCodeSyncedBase(next);
+        }, []);
         useEffect(() => {
             onSaveDocRef.current = onSaveDoc;
             onDocChangeRef.current = onDocChange;
@@ -654,14 +738,17 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             lastExternalKeyRef.current = resolvedExternalKey;
             setLoading(false);
             setLoadError(null);
+            pastRef.current = [];
+            futureRef.current = [];
             setPast([]);
             setFuture([]);
-            setSaveStatus("saved");
+            updateSaveStatus("saved");
             dirtyDocRef.current = null;
             playGenRef.current += 1;
             voiceTokenRef.current += 1;
             skipWaitRef.current?.();
             stopAllAudio();
+            workspaceModeRef.current = "edit";
             setWorkspaceMode("edit");
             setStageWebFullscreen(false);
             setPlayHistory([]);
@@ -677,12 +764,13 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
 
             const initialNode = pickInitialNodeId(externalDoc);
             const nodeObj = externalDoc.nodes[initialNode];
+            docRef.current = externalDoc;
             setDoc(externalDoc);
             setSelectedNodeId(initialNode);
             setSelectedBeatId(nodeObj?.type === "scene" ? (nodeObj.beats[0]?.id ?? null) : null);
             const serialized = serializeStoryScript(externalDoc);
-            setCodeText(serialized);
-            setCodeSyncedBase(serialized);
+            setCodeTextSynced(serialized);
+            setCodeSyncedBaseSynced(serialized);
             setCodePreviewDoc(externalDoc);
             if (initialModeParamRef.current === "playtest" || initialModeParamRef.current === "code") {
                 const mode = initialModeParamRef.current;
@@ -692,7 +780,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     nodeId: initialNodeParamRef.current ?? externalDoc.startNodeId,
                 };
             }
-        }, [externalDoc, hasExternalDoc, resolvedExternalKey, stopAllAudio]);
+        }, [externalDoc, hasExternalDoc, resolvedExternalKey, setCodeSyncedBaseSynced, setCodeTextSynced, stopAllAudio, updateSaveStatus]);
 
         // Load from storage adapter when `draftId` is used (and `externalDoc` is not supplied).
         const loadSeqRef = useRef(0);
@@ -702,14 +790,17 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             async function load() {
                 setLoading(true);
                 setLoadError(null);
+                pastRef.current = [];
+                futureRef.current = [];
                 setPast([]);
                 setFuture([]);
-                setSaveStatus("saved");
+                updateSaveStatus("saved");
                 dirtyDocRef.current = null;
                 playGenRef.current += 1;
                 voiceTokenRef.current += 1;
                 skipWaitRef.current?.();
                 stopAllAudio();
+                workspaceModeRef.current = "edit";
                 setWorkspaceMode("edit");
                 setStageWebFullscreen(false);
                 setPlayHistory([]);
@@ -723,6 +814,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 setPlayVoiceManifest(initialVoiceManifestRef.current);
 
                 if (!draftId) {
+                    docRef.current = null;
                     setDoc(null);
                     setSelectedNodeId(null);
                     setSelectedBeatId(null);
@@ -734,6 +826,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     const draft = await storage.getDraft(draftId);
                     if (seq !== loadSeqRef.current) return;
                     if (!draft) {
+                        docRef.current = null;
                         setDoc(null);
                         setSelectedNodeId(null);
                         setSelectedBeatId(null);
@@ -741,9 +834,14 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     } else {
                         const firstNodeId = pickInitialNodeId(draft.doc);
                         const firstNode = draft.doc.nodes[firstNodeId];
+                        docRef.current = draft.doc;
                         setDoc(draft.doc);
                         setSelectedNodeId(firstNodeId);
                         setSelectedBeatId(firstNode?.type === "scene" ? (firstNode.beats[0]?.id ?? null) : null);
+                        const serialized = serializeStoryScript(draft.doc);
+                        setCodeTextSynced(serialized);
+                        setCodeSyncedBaseSynced(serialized);
+                        setCodePreviewDoc(draft.doc);
                         if (initialModeParamRef.current === "playtest" || initialModeParamRef.current === "code") {
                             const mode = initialModeParamRef.current;
                             initialModeParamRef.current = null;
@@ -755,6 +853,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     }
                 } catch (error) {
                     if (seq !== loadSeqRef.current) return;
+                    docRef.current = null;
                     setDoc(null);
                     setSelectedNodeId(null);
                     setSelectedBeatId(null);
@@ -767,7 +866,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             return () => {
                 loadSeqRef.current += 1;
             };
-        }, [draftId, hasExternalDoc, stopAllAudio, storage]);
+        }, [draftId, hasExternalDoc, setCodeSyncedBaseSynced, setCodeTextSynced, stopAllAudio, storage, updateSaveStatus]);
 
         const persistDoc = useCallback(async (id: string | null, target: StoryDocument) => {
             if (onSaveDocRef.current) {
@@ -779,23 +878,36 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             }
         }, [storage]);
 
-        const flushSave = useCallback(async (id: string | null, target: StoryDocument) => {
+        const flushSave = useCallback(async (id: string | null, target: StoryDocument): Promise<boolean> => {
             if (!id && !onSaveDocRef.current) {
-                setSaveStatus("saved");
+                updateSaveStatus("saved");
                 dirtyDocRef.current = null;
-                return;
+                return true;
             }
-            setSaveStatus("saving");
-            try {
-                await persistDoc(id, target);
-                if (dirtyDocRef.current === target) {
-                    dirtyDocRef.current = null;
-                    setSaveStatus("saved");
+            updateSaveStatus("saving");
+            const run = async (): Promise<boolean> => {
+                updateSaveStatus("saving");
+                try {
+                    await persistDoc(id, target);
+                    if (dirtyDocRef.current === target) {
+                        dirtyDocRef.current = null;
+                        updateSaveStatus("saved");
+                    } else if (dirtyDocRef.current !== null) {
+                        updateSaveStatus("dirty");
+                    } else {
+                        updateSaveStatus("saved");
+                    }
+                    return true;
+                } catch {
+                    updateSaveStatus("error");
+                    return false;
                 }
-            } catch {
-                setSaveStatus("error");
-            }
-        }, [persistDoc]);
+            };
+            const prev = saveChainRef.current;
+            const nextPromise = prev.catch(() => undefined).then(run);
+            saveChainRef.current = nextPromise.then(() => undefined, () => undefined);
+            return nextPromise;
+        }, [persistDoc, updateSaveStatus]);
 
         useEffect(() => {
             if (!doc || saveStatus !== "dirty") return;
@@ -807,10 +919,25 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             return () => window.clearTimeout(timer);
         }, [doc, draftId, flushSave, saveStatus]);
 
-        // Flush any pending unsaved changes immediately when hiding tab, closing page, or unmounting.
+        // Flush any pending unsaved changes (including valid Code mode edits) when hiding tab, closing page, or unmounting.
         useEffect(() => {
             if (!draftId && !onSaveDocRef.current) return;
             const flushPending = () => {
+                if (workspaceModeRef.current === "code" && codeTextRef.current !== codeSyncedBaseRef.current) {
+                    const snapshotText = codeTextRef.current;
+                    const parsed = parseStoryScript(snapshotText);
+                    if (parsed.ok) {
+                        const compiled = compileStoryGraph(parsed.doc);
+                        if (compiled.ok) {
+                            const mergedDoc = mergeIncomingStoryDoc(docRef.current, parsed.doc, { preserveLocales: true });
+                            docRef.current = mergedDoc;
+                            codeSyncedBaseRef.current = snapshotText;
+                            dirtyDocRef.current = null;
+                            void persistDoc(draftId, mergedDoc).catch(() => undefined);
+                            return;
+                        }
+                    }
+                }
                 const pending = dirtyDocRef.current;
                 if (!pending) return;
                 dirtyDocRef.current = null;
@@ -828,54 +955,58 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             };
         }, [draftId, persistDoc]);
 
-        useEffect(() => {
-            if (saveStatus !== "dirty" && saveStatus !== "saving") return;
-            const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-                event.preventDefault();
-                event.returnValue = "";
-            };
-            window.addEventListener("beforeunload", handleBeforeUnload);
-            return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-        }, [saveStatus]);
-
         const commit = useCallback((updater: (current: StoryDocument) => StoryDocument) => {
-            setDoc((current) => {
-                if (!current) return current;
-                const next = updater(current);
-                if (next === current) return current;
-                setPast(history => [...history.slice(-(MAX_UNDO - 1)), current]);
-                setFuture([]);
-                setSaveStatus("dirty");
-                onDocChangeRef.current?.(next);
-                return next;
-            });
-        }, []);
+            const current = docRef.current;
+            if (!current) return;
+            const next = updater(current);
+            if (next === current) return;
+            const nextPast = [...pastRef.current.slice(-(MAX_UNDO - 1)), current];
+            pastRef.current = nextPast;
+            futureRef.current = [];
+            docRef.current = next;
+            dirtyDocRef.current = next;
+            setPast(nextPast);
+            setFuture([]);
+            setDoc(next);
+            updateSaveStatus("dirty");
+            onDocChangeRef.current?.(next, { dirty: true });
+        }, [updateSaveStatus]);
 
         const undo = useCallback(() => {
-            setPast((history) => {
-                if (history.length === 0 || !docRef.current) return history;
-                const current = docRef.current;
-                const previous = history[history.length - 1];
-                setFuture(redoStack => [current, ...redoStack.slice(0, MAX_UNDO - 1)]);
-                setDoc(previous);
-                setSaveStatus("dirty");
-                onDocChangeRef.current?.(previous);
-                return history.slice(0, -1);
-            });
-        }, []);
+            const history = pastRef.current;
+            const current = docRef.current;
+            if (history.length === 0 || !current) return;
+            const previous = history[history.length - 1];
+            const nextPast = history.slice(0, -1);
+            const nextFuture = [current, ...futureRef.current.slice(0, MAX_UNDO - 1)];
+            pastRef.current = nextPast;
+            futureRef.current = nextFuture;
+            docRef.current = previous;
+            dirtyDocRef.current = previous;
+            setPast(nextPast);
+            setFuture(nextFuture);
+            setDoc(previous);
+            updateSaveStatus("dirty");
+            onDocChangeRef.current?.(previous, { dirty: true });
+        }, [updateSaveStatus]);
 
         const redo = useCallback(() => {
-            setFuture((redoStack) => {
-                if (redoStack.length === 0 || !docRef.current) return redoStack;
-                const current = docRef.current;
-                const next = redoStack[0];
-                setPast(history => [...history.slice(-(MAX_UNDO - 1)), current]);
-                setDoc(next);
-                setSaveStatus("dirty");
-                onDocChangeRef.current?.(next);
-                return redoStack.slice(1);
-            });
-        }, []);
+            const redoStack = futureRef.current;
+            const current = docRef.current;
+            if (redoStack.length === 0 || !current) return;
+            const next = redoStack[0];
+            const nextPast = [...pastRef.current.slice(-(MAX_UNDO - 1)), current];
+            const nextFuture = redoStack.slice(1);
+            pastRef.current = nextPast;
+            futureRef.current = nextFuture;
+            docRef.current = next;
+            dirtyDocRef.current = next;
+            setPast(nextPast);
+            setFuture(nextFuture);
+            setDoc(next);
+            updateSaveStatus("dirty");
+            onDocChangeRef.current?.(next, { dirty: true });
+        }, [updateSaveStatus]);
 
         // Safe derived selection that always remains valid across Undo/Redo/Delete/Code-Apply/External Reload.
         const activeNodeId = useMemo(() => {
@@ -973,6 +1104,19 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
 
         // ==================== Code Preview Mode Evaluation ====================
         const codeDirty = workspaceMode === "code" && codeText !== codeSyncedBase;
+        const effectiveSaveStatus = resolveEffectiveSaveStatus(saveStatus, codeDirty);
+
+        useEffect(() => {
+            if (effectiveSaveStatus !== "dirty" && effectiveSaveStatus !== "saving" && effectiveSaveStatus !== "error") {
+                return;
+            }
+            const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+                event.preventDefault();
+                event.returnValue = "";
+            };
+            window.addEventListener("beforeunload", handleBeforeUnload);
+            return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+        }, [effectiveSaveStatus]);
 
         const codeEval = useMemo<StoryCodeEvaluation>(() => {
             if (workspaceMode !== "code") {
@@ -991,9 +1135,12 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             return { ok: true, doc: parsed.doc, program: compiled };
         }, [workspaceMode, codeText, doc, program]);
 
-        const effectiveDoc: StoryDocument | null = workspaceMode === "code" && codeEval.ok
-            ? codeEval.doc
-            : doc;
+        const effectiveDoc = useMemo<StoryDocument | null>(() => {
+            if (workspaceMode === "code" && codeEval.ok) {
+                return mergeIncomingStoryDoc(doc, codeEval.doc, { preserveLocales: true });
+            }
+            return doc;
+        }, [workspaceMode, codeEval, doc]);
         const effectiveDocRef = useRef<StoryDocument | null>(effectiveDoc);
         useEffect(() => {
             effectiveDocRef.current = effectiveDoc;
@@ -1463,6 +1610,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             clearClipPreview();
             setActiveDragPayload(null);
             unlockAudio();
+            workspaceModeRef.current = "playtest";
             setWorkspaceMode("playtest");
             syncModeChange("playtest");
             startPlaytestFrom(fromNodeId ?? targetDoc.startNodeId, targetDoc, targetProgram);
@@ -1486,6 +1634,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     }
                 }
             }
+            workspaceModeRef.current = "edit";
             setWorkspaceMode("edit");
             syncModeChange("edit");
         }, [doc, stopPlaytestSession, syncModeChange]);
@@ -1499,8 +1648,8 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             clearClipPreview();
             setActiveDragPayload(null);
             const serialized = serializeStoryScript(targetDoc);
-            setCodeText(serialized);
-            setCodeSyncedBase(serialized);
+            setCodeTextSynced(serialized);
+            setCodeSyncedBaseSynced(serialized);
             setCodePreviewDoc(targetDoc);
             const targetNodeId = activeNodeId && targetDoc.nodes[activeNodeId]
                 ? activeNodeId
@@ -1514,35 +1663,114 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                         : (targetNode.beats[0]?.id ?? null))
                     : null,
             );
+            workspaceModeRef.current = "code";
             setWorkspaceMode("code");
             syncModeChange("code");
-        }, [activeBeatId, activeNodeId, clearClipPreview, doc, stopPlaytestSession, syncModeChange]);
+        }, [
+            activeBeatId, activeNodeId, clearClipPreview, doc, setCodeSyncedBaseSynced,
+            setCodeTextSynced, stopPlaytestSession, syncModeChange,
+        ]);
 
-        const applyCodeDoc = useCallback((nextDoc: StoryDocument, silent = false, preserveLocales = true) => {
-            const mergedDoc: StoryDocument = preserveLocales && doc
-                ? {
-                    ...nextDoc,
-                    ...(nextDoc.sourceLocale ? {} : (doc.sourceLocale ? { sourceLocale: doc.sourceLocale } : {})),
-                    ...(doc.locales && Object.keys(doc.locales).length > 0 ? { locales: doc.locales } : {}),
-                }
-                : nextDoc;
+        const syncCodeDoc = useCallback((
+            nextDoc: StoryDocument,
+            options: {
+                silent?: boolean;
+                preserveLocales?: boolean;
+                rewriteCodeText?: boolean;
+                syncedCodeText?: string;
+            } = {},
+        ): StoryDocument => {
+            const mergedDoc = mergeIncomingStoryDoc(docRef.current, nextDoc, {
+                preserveLocales: options.preserveLocales ?? true,
+            });
             commit(() => mergedDoc);
-            const serialized = serializeStoryScript(mergedDoc);
-            setCodeText(serialized);
-            setCodeSyncedBase(serialized);
+            if (options.rewriteCodeText !== false) {
+                const serialized = serializeStoryScript(mergedDoc);
+                setCodeTextSynced(serialized);
+                setCodeSyncedBaseSynced(serialized);
+            } else {
+                setCodeSyncedBaseSynced(options.syncedCodeText ?? codeTextRef.current);
+            }
             setCodePreviewDoc(mergedDoc);
-            const nextNodeId = activeNodeId && mergedDoc.nodes[activeNodeId]
-                ? activeNodeId
+            const curNodeId = selectedNodeIdRef.current;
+            const nextNodeId = curNodeId && mergedDoc.nodes[curNodeId]
+                ? curNodeId
                 : pickInitialNodeId(mergedDoc);
-            setSelectedNodeId(nextNodeId);
             const nextNode = mergedDoc.nodes[nextNodeId];
-            setSelectedBeatId(nextNode?.type === "scene" ? (nextNode.beats[0]?.id ?? null) : null);
+            const curBeatId = selectedBeatIdRef.current;
+            const nextBeatId = nextNode?.type === "scene"
+                ? (curBeatId && nextNode.beats.some(b => b.id === curBeatId)
+                    ? curBeatId
+                    : (nextNode.beats[0]?.id ?? null))
+                : null;
+            setSelectedNodeId(nextNodeId);
+            setSelectedBeatId(nextBeatId);
             setCodeSelectedNodeId(nextNodeId);
-            setCodeSelectedBeatId(nextNode?.type === "scene" ? (nextNode.beats[0]?.id ?? null) : null);
-            if (!silent) {
+            setCodeSelectedBeatId(nextBeatId);
+            if (!options.silent) {
                 setSnack(tRef.current("page.storyMaker.v2.mode.codeSyncedToast"));
             }
-        }, [activeNodeId, commit, doc]);
+            return mergedDoc;
+        }, [commit, setCodeSyncedBaseSynced, setCodeTextSynced]);
+
+        const applyCodeDoc = useCallback((nextDoc: StoryDocument, silent = false, preserveLocales = true): StoryDocument => {
+            const mergedDoc = syncCodeDoc(nextDoc, {
+                silent,
+                preserveLocales,
+                rewriteCodeText: true,
+            });
+            dirtyDocRef.current = mergedDoc;
+            void flushSave(draftId, mergedDoc);
+            return mergedDoc;
+        }, [draftId, flushSave, syncCodeDoc]);
+
+        // Live debounced auto-sync + auto-save in Code mode whenever the edited `.msk` parses & compiles cleanly.
+        // Preserves raw textarea contents (`rewriteCodeText: false`) so cursor position and formatting never jump.
+        useEffect(() => {
+            if (workspaceMode !== "code" || !codeDirty || !codeEval.ok) return;
+            const snapshotText = codeText;
+            const evaluatedDoc = codeEval.doc;
+            const timer = window.setTimeout(() => {
+                if (workspaceModeRef.current !== "code" || codeTextRef.current !== snapshotText) return;
+                const mergedDoc = syncCodeDoc(evaluatedDoc, {
+                    silent: true,
+                    preserveLocales: true,
+                    rewriteCodeText: false,
+                    syncedCodeText: snapshotText,
+                });
+                dirtyDocRef.current = mergedDoc;
+                void flushSave(draftId, mergedDoc);
+            }, AUTOSAVE_MS);
+            return () => window.clearTimeout(timer);
+        }, [codeDirty, codeEval, codeText, draftId, flushSave, syncCodeDoc, workspaceMode]);
+
+        const saveNowImpl = useCallback(async (): Promise<boolean> => {
+            if (workspaceModeRef.current === "code" && codeTextRef.current !== codeSyncedBaseRef.current) {
+                const snapshotText = codeTextRef.current;
+                const parsed = parseStoryScript(snapshotText);
+                if (!parsed.ok) {
+                    setSnack(tRef.current("page.storyMaker.v2.mode.codeBlockedSave"));
+                    return false;
+                }
+                const compiled = compileStoryGraph(parsed.doc);
+                if (!compiled.ok) {
+                    setSnack(tRef.current("page.storyMaker.v2.mode.codeBlockedSave"));
+                    return false;
+                }
+                const mergedDoc = syncCodeDoc(parsed.doc, {
+                    silent: true,
+                    preserveLocales: true,
+                    rewriteCodeText: false,
+                    syncedCodeText: snapshotText,
+                });
+                dirtyDocRef.current = mergedDoc;
+                return flushSave(draftId, mergedDoc);
+            }
+            const current = dirtyDocRef.current ?? docRef.current;
+            if (!current) return false;
+            dirtyDocRef.current = current;
+            return flushSave(draftId, current);
+        }, [draftId, flushSave, syncCodeDoc]);
 
         const handleWorkspaceModeChange = useCallback((nextMode: StoryEditorWorkspaceMode) => {
             if (!doc || nextMode === workspaceMode) return;
@@ -1554,9 +1782,8 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     setSnack(tRef.current("page.storyMaker.v2.mode.codeBlockedSwitch"));
                     return;
                 }
-                resolvedDoc = codeEval.doc;
-                resolvedProgram = codeEval.program;
-                applyCodeDoc(resolvedDoc, false);
+                resolvedDoc = applyCodeDoc(codeEval.doc, false);
+                resolvedProgram = compileStoryGraph(resolvedDoc);
             }
 
             if (nextMode === "code") {
@@ -1567,6 +1794,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 if (workspaceMode === "playtest") {
                     exitPlaytest(false);
                 } else {
+                    workspaceModeRef.current = "edit";
                     setWorkspaceMode("edit");
                     syncModeChange("edit");
                 }
@@ -1577,13 +1805,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         ]);
 
         const handleApplyCodeAndPlaytest = useCallback((nextDoc: StoryDocument) => {
-            const mergedDoc: StoryDocument = doc
-                ? {
-                    ...nextDoc,
-                    ...(nextDoc.sourceLocale ? {} : (doc.sourceLocale ? { sourceLocale: doc.sourceLocale } : {})),
-                    ...(doc.locales && Object.keys(doc.locales).length > 0 ? { locales: doc.locales } : {}),
-                }
-                : nextDoc;
+            const mergedDoc = mergeIncomingStoryDoc(docRef.current, nextDoc, { preserveLocales: true });
             const compiled = compileStoryGraph(mergedDoc);
             if (!compiled.ok) {
                 setSnack(tRef.current("page.storyMaker.v2.mode.playtestBlockedErrors", { count: compiled.errors.length }));
@@ -1593,58 +1815,68 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 applyCodeDoc(mergedDoc, true, true);
             }
             enterPlaytest(undefined, mergedDoc, compiled);
-        }, [applyCodeDoc, codeDirty, doc, enterPlaytest]);
+        }, [applyCodeDoc, codeDirty, enterPlaytest]);
 
         // Reload helper for imperative handle AND storage external change watcher.
         const reloadFromDocImpl = useCallback((nextDoc: StoryDocument, options?: ReloadFromDocOptions) => {
             const preserveSelection = options?.preserveSelection ?? true;
             const pushHistory = options?.pushHistory ?? false;
             const markSaved = options?.markSaved ?? true;
+            const resolvedDoc = docRef.current?.id && nextDoc.id !== docRef.current.id
+                ? { ...nextDoc, id: docRef.current.id }
+                : nextDoc;
 
             if (workspaceModeRef.current === "playtest") {
                 stopPlaytestSession();
+                workspaceModeRef.current = "edit";
                 setWorkspaceMode("edit");
                 syncModeChange("edit");
             }
             if (pushHistory && docRef.current) {
                 const prev = docRef.current;
-                setPast(history => [...history.slice(-(MAX_UNDO - 1)), prev]);
+                const nextPast = [...pastRef.current.slice(-(MAX_UNDO - 1)), prev];
+                pastRef.current = nextPast;
+                futureRef.current = [];
+                setPast(nextPast);
                 setFuture([]);
             }
-            setDoc(nextDoc);
+            docRef.current = resolvedDoc;
+            setDoc(resolvedDoc);
             if (markSaved) {
                 dirtyDocRef.current = null;
-                setSaveStatus("saved");
+                updateSaveStatus("saved");
             } else {
-                dirtyDocRef.current = nextDoc;
-                setSaveStatus("dirty");
+                dirtyDocRef.current = resolvedDoc;
+                updateSaveStatus("dirty");
             }
 
-            const serialized = serializeStoryScript(nextDoc);
-            setCodeText(serialized);
-            setCodeSyncedBase(serialized);
-            setCodePreviewDoc(nextDoc);
+            const serialized = serializeStoryScript(resolvedDoc);
+            setCodeTextSynced(serialized);
+            setCodeSyncedBaseSynced(serialized);
+            setCodePreviewDoc(resolvedDoc);
 
-            const nextNodeId = preserveSelection && selectedNodeId && nextDoc.nodes[selectedNodeId]
-                ? selectedNodeId
-                : pickInitialNodeId(nextDoc);
-            const nextNode = nextDoc.nodes[nextNodeId];
+            const curNodeId = selectedNodeIdRef.current;
+            const curBeatId = selectedBeatIdRef.current;
+            const nextNodeId = preserveSelection && curNodeId && resolvedDoc.nodes[curNodeId]
+                ? curNodeId
+                : pickInitialNodeId(resolvedDoc);
+            const nextNode = resolvedDoc.nodes[nextNodeId];
             const nextBeatId = preserveSelection
                 && nextNode?.type === "scene"
-                && selectedBeatId
-                && nextNode.beats.some(b => b.id === selectedBeatId)
-                ? selectedBeatId
+                && curBeatId
+                && nextNode.beats.some(b => b.id === curBeatId)
+                ? curBeatId
                 : (nextNode?.type === "scene" ? (nextNode.beats[0]?.id ?? null) : null);
 
             setSelectedNodeId(nextNodeId);
             setSelectedBeatId(nextBeatId);
             setCodeSelectedNodeId(nextNodeId);
             setCodeSelectedBeatId(nextBeatId);
-            onDocChangeRef.current?.(nextDoc);
+            onDocChangeRef.current?.(resolvedDoc, { dirty: !markSaved });
             if (!options?.silent) {
                 setSnack(tRef.current("page.storyMaker.v2.mode.codeSyncedToast"));
             }
-        }, [selectedBeatId, selectedNodeId, stopPlaytestSession, syncModeChange]);
+        }, [setCodeSyncedBaseSynced, setCodeTextSynced, stopPlaytestSession, syncModeChange, updateSaveStatus]);
 
         const reloadFromScriptImpl = useCallback((
             script: string,
@@ -1656,14 +1888,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 const message = firstErr ? `${firstErr.line}:${firstErr.col} ${firstErr.message}` : "parse_failed";
                 return { ok: false, error: message };
             }
-            const current = docRef.current;
-            const mergedDoc: StoryDocument = current
-                ? {
-                    ...parsed.doc,
-                    ...(parsed.doc.sourceLocale ? {} : (current.sourceLocale ? { sourceLocale: current.sourceLocale } : {})),
-                    ...(current.locales && Object.keys(current.locales).length > 0 ? { locales: current.locales } : {}),
-                }
-                : parsed.doc;
+            const mergedDoc = mergeIncomingStoryDoc(docRef.current, parsed.doc, { preserveLocales: true });
             reloadFromDocImpl(mergedDoc, {
                 preserveSelection: options?.preserveSelection ?? true,
                 pushHistory: true,
@@ -1747,12 +1972,19 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             getSelectedNodeId: () => activeNodeId,
             getSelectedBeatId: () => activeBeatId,
             getWorkspaceMode: () => workspaceModeRef.current,
-            saveNow: async () => {
-                const current = docRef.current;
-                if (!current) return;
-                dirtyDocRef.current = current;
-                await flushSave(draftId, current);
+            hasUnsavedChanges: () => {
+                const codeIsDirty =
+                    workspaceModeRef.current === "code"
+                    && codeTextRef.current !== codeSyncedBaseRef.current;
+                return (
+                    codeIsDirty
+                    || dirtyDocRef.current !== null
+                    || saveStatusRef.current === "dirty"
+                    || saveStatusRef.current === "saving"
+                    || saveStatusRef.current === "error"
+                );
             },
+            saveNow: saveNowImpl,
             openVoiceManifestDialog: (tab?: "import" | "upload") => {
                 openVoiceManifestDialog(tab);
             },
@@ -1762,15 +1994,14 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         }), [
             activeBeatId,
             activeNodeId,
-            draftId,
             enterPlaytest,
             exitPlaytest,
-            flushSave,
             handleExportAction,
             handleWorkspaceModeChange,
             openVoiceManifestDialog,
             reloadFromDocImpl,
             reloadFromScriptImpl,
+            saveNowImpl,
         ]);
 
         // Honor initial mode (`playtest` or `code`) once `doc` and `program` are ready.
@@ -2157,18 +2388,6 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         useEffect(() => {
             const onKeyDown = (event: KeyboardEvent) => {
                 const target = event.target as HTMLElement | null;
-                if (
-                    target
-                    && (
-                        target.tagName === "INPUT"
-                        || target.tagName === "TEXTAREA"
-                        || target.tagName === "SELECT"
-                        || target.isContentEditable
-                        || target.getAttribute("role") === "separator"
-                    )
-                ) {
-                    return;
-                }
                 const hasOpenOverlay = Boolean(
                     metaOpen
                     || i18nOpen
@@ -2181,6 +2400,38 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     || document.querySelector('[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"], [data-clip-picker-drawer]'),
                 );
                 if (hasOpenOverlay) return;
+
+                // Allow Ctrl/Cmd+S even when focused inside inputs/textareas (e.g. Code mode or dialogue fields).
+                // Skip if a host shell (such as Electron App.tsx) already handled the shortcut via preventDefault().
+                if (
+                    workspaceMode !== "playtest"
+                    && (event.ctrlKey || event.metaKey)
+                    && !event.shiftKey
+                    && !event.altKey
+                    && event.key.toLowerCase() === "s"
+                ) {
+                    if (event.defaultPrevented) return;
+                    event.preventDefault();
+                    void saveNowImpl().then((saved) => {
+                        if (saved) {
+                            setSnack(tRef.current("page.storyMaker.editor.saveStatus.saved"));
+                        }
+                    });
+                    return;
+                }
+
+                if (
+                    target
+                    && (
+                        target.tagName === "INPUT"
+                        || target.tagName === "TEXTAREA"
+                        || target.tagName === "SELECT"
+                        || target.isContentEditable
+                        || target.getAttribute("role") === "separator"
+                    )
+                ) {
+                    return;
+                }
 
                 if (event.key === "Escape") {
                     if (document.fullscreenElement) return;
@@ -2222,16 +2473,6 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                             if (uiKit?.decideSoundUrl) playSe(uiKit.decideSoundUrl);
                             handlePlayChoose(option.id, option.text || tRef.current("page.storyMaker.player.emptyOption"));
                         }
-                    }
-                    return;
-                }
-
-                if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
-                    event.preventDefault();
-                    if (doc) {
-                        dirtyDocRef.current = doc;
-                        void flushSave(draftId, doc);
-                        setSnack(tRef.current("page.storyMaker.editor.saveStatus.saved"));
                     }
                     return;
                 }
@@ -2291,7 +2532,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             playCurrentChoice, uiKit?.decideSoundUrl, playSe, handlePlayChoose,
             undo, redo, immersive, handleImmersiveChange, isSoloPreview, clearClipPreview,
             metaOpen, i18nOpen, voiceManifestOpen, externalDialogOpen, issuesOpen, importOpen, preloadOpen,
-            activeScene, activeBeatId, activeNode, doc, draftId, flushSave,
+            activeScene, activeBeatId, activeNode, doc, saveNowImpl,
             handleDeleteBeat, handleDeleteNode,
         ]);
 
@@ -2493,8 +2734,8 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             commit(() => next);
             if (workspaceMode === "code" && !codeDirty) {
                 const serialized = serializeStoryScript(next);
-                setCodeText(serialized);
-                setCodeSyncedBase(serialized);
+                setCodeTextSynced(serialized);
+                setCodeSyncedBaseSynced(serialized);
                 setCodePreviewDoc(next);
             }
             setMetaOpen(false);
@@ -2624,7 +2865,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         const isPlaytest = workspaceMode === "playtest";
         const isCodeMode = workspaceMode === "code";
         const isEditMode = workspaceMode === "edit";
-        const saveStatusLabel = t(`page.storyMaker.editor.saveStatus.${saveStatus}`);
+        const saveStatusLabel = t(`page.storyMaker.editor.saveStatus.${effectiveSaveStatus}`);
         const modelArray = models ?? [];
 
         const showLeftPane = isCodeMode || layout.showLeftPane;
@@ -2669,7 +2910,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             errorCount,
             warningCount,
             hasBlockingErrors: errorCount > 0,
-            saveStatus,
+            saveStatus: effectiveSaveStatus,
             notify: setSnack,
             openVoiceManifestDialog,
             hasVoiceManifest: hasPlayVoiceTrackManifest,
@@ -2868,10 +3109,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             undo,
             redo,
             saveStatusLabel,
-            saveNow: async () => {
-                dirtyDocRef.current = doc;
-                await flushSave(draftId, doc);
-            },
+            saveNow: saveNowImpl,
             attachedLocaleCount,
             hasVoiceManifest: hasPlayVoiceTrackManifest,
             openMetaDialog: () => setMetaOpen(true),
@@ -3101,30 +3339,29 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
 
                         <button
                             type="button"
-                            disabled={saveStatus === "saving"}
+                            disabled={effectiveSaveStatus === "saving"}
                             onClick={() => {
-                                if (saveStatus === "error" || saveStatus === "dirty") {
-                                    dirtyDocRef.current = doc;
-                                    void flushSave(draftId, doc);
+                                if (effectiveSaveStatus === "error" || effectiveSaveStatus === "dirty") {
+                                    void saveNowImpl();
                                 }
                             }}
-                            title={saveStatus === "error" ? `${saveStatusLabel} — ${t("common.action.retry")}` : saveStatusLabel}
+                            title={effectiveSaveStatus === "error" ? `${saveStatusLabel} — ${t("common.action.retry")}` : saveStatusLabel}
                             className={cn(
                                 "focus-ring inline-flex h-7 shrink-0 items-center gap-1 rounded-md3-full px-2 type-label-s transition-colors",
-                                saveStatus === "error"
+                                effectiveSaveStatus === "error"
                                     ? "state-layer cursor-pointer bg-error-container text-on-error-container"
-                                    : saveStatus === "dirty"
+                                    : effectiveSaveStatus === "dirty"
                                         ? "state-layer cursor-pointer bg-surface-container text-on-surface-variant hover:text-on-surface"
                                         : "cursor-default bg-surface-container text-on-surface-variant",
                             )}
                         >
                             <Icon
-                                path={saveStatus === "error" ? mdErrorFill : mdCloudDone}
+                                path={effectiveSaveStatus === "error" ? mdErrorFill : mdCloudDone}
                                 size={14}
-                                className={cn("shrink-0", saveStatus === "saved" && "text-primary")}
+                                className={cn("shrink-0", effectiveSaveStatus === "saved" && "text-primary")}
                             />
                             <span className="whitespace-nowrap">{saveStatusLabel}</span>
-                            {saveStatus === "error" && (
+                            {effectiveSaveStatus === "error" && (
                                 <span className="ml-0.5 underline">{t("common.action.retry")}</span>
                             )}
                         </button>
@@ -3237,13 +3474,13 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                             codeText={codeText}
                                             isDirty={codeDirty}
                                             evaluation={codeEval}
-                                            onChangeCode={setCodeText}
+                                            onChangeCode={setCodeTextSynced}
                                             onApply={nextDoc => applyCodeDoc(nextDoc, false)}
                                             onApplyAndPlaytest={handleApplyCodeAndPlaytest}
                                             onReset={() => {
                                                 const serialized = serializeStoryScript(doc);
-                                                setCodeText(serialized);
-                                                setCodeSyncedBase(serialized);
+                                                setCodeTextSynced(serialized);
+                                                setCodeSyncedBaseSynced(serialized);
                                                 setCodePreviewDoc(doc);
                                             }}
                                             onSelectDiagnostic={(nodeId, beatId) => {

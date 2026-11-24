@@ -487,11 +487,13 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                 : "bg-success";
 
     const saveLabel =
-        effectiveSaveState === "saving"
-            ? t("saving")
-            : effectiveSaveState === "dirty"
-                ? t("unsaved")
-                : t("saved");
+        effectiveSaveState === "error"
+            ? t("saveFailed")
+            : effectiveSaveState === "saving"
+                ? t("saving")
+                : effectiveSaveState === "dirty"
+                    ? t("unsaved")
+                    : t("saved");
 
     const isAgentBusy =
         agentStatus === "starting" ||
@@ -576,7 +578,9 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                         <Icon path={mdWarning} size={13} className="shrink-0" />
                         <span className="font-mono tabular-nums">{ctx.warningCount}</span>
                     </button>
-                ) : (
+                ) : null}
+
+                {(ctx.errorCount === 0 && ctx.warningCount === 0) || effectiveSaveState !== "saved" ? (
                     <button
                         type="button"
                         onClick={() => {
@@ -586,13 +590,17 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                                 ctx.openIssuesDialog();
                             }
                         }}
-                        title={`${saveLabel} · ${t("compileReady")}`}
+                        title={
+                            ctx.errorCount === 0 && ctx.warningCount === 0
+                                ? `${saveLabel} · ${t("compileReady")}`
+                                : saveLabel
+                        }
                         className="desktop-no-drag state-layer focus-ring inline-flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-md3-full bg-surface-container px-2 type-label-s text-on-surface-variant hover:text-on-surface"
                     >
                         <span className={cn("inline-block h-1.5 w-1.5 shrink-0 rounded-md3-full", saveDotColor)} />
                         <span className="hidden whitespace-nowrap xl:inline">{saveLabel}</span>
                     </button>
-                )}
+                ) : null}
             </div>
 
             <div
