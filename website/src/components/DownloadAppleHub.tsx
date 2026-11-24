@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { ArrowUpRight, Check, ChevronRight, Copy, Plus, X } from "lucide-react";
-import type { AppleCopy } from "../data/cinema-i18n";
+import { COMMUNITY_STORIES_URL, type AppleCopy } from "../data/cinema-i18n";
 import {
   GITHUB_REPO_URL,
   formatFileSize,
@@ -230,11 +230,11 @@ export const DownloadAppleHub: React.FC<DownloadAppleHubProps> = ({
               })}
             </div>
 
-            <div className="flex items-center gap-5 text-[14px]">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[14px]">
               <a
                 href={releasePageUrl}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="inline-flex items-center gap-0.5 hover:underline"
                 style={{ color: "var(--apple-link, #0066CC)" }}
               >
@@ -242,9 +242,20 @@ export const DownloadAppleHub: React.FC<DownloadAppleHubProps> = ({
                 <ChevronRight size={15} />
               </a>
               <a
+                href={COMMUNITY_STORIES_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="download-community-link"
+                className="inline-flex items-center gap-0.5 hover:underline"
+                style={{ color: "var(--apple-link, #0066CC)" }}
+              >
+                <span>{t.communityLink}</span>
+                <ChevronRight size={15} />
+              </a>
+              <a
                 href="https://pjsk.moe/story-maker"
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="inline-flex items-center gap-0.5 hover:underline"
                 style={{ color: "var(--apple-link, #0066CC)" }}
               >

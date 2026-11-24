@@ -1,5 +1,7 @@
 export type SiteLocale = "zh-CN" | "zh-HK" | "ja" | "en";
 
+export const COMMUNITY_STORIES_URL = "https://pjsk.moe/community/stories";
+
 export const LOCALE_OPTIONS: ReadonlyArray<{
   code: SiteLocale;
   nativeLabel: string;
@@ -41,6 +43,7 @@ export interface AppleCopy {
     eyebrow: string;
     title: string;
     capsuleMeta: string;
+    communityCta: string;
     capsuleCta: string;
   };
   highlights: {
@@ -68,6 +71,7 @@ export interface AppleCopy {
     github: string;
     downloadVerb: string;
     releaseLink: string;
+    communityLink: string;
     webLink: string;
     shaLabel: string;
     pkgLabel: string;
@@ -92,6 +96,7 @@ export const APPLE_COPY: Record<SiteLocale, AppleCopy> = {
       eyebrow: "MoeSekai Story Studio",
       title: "许愿，即成剧。",
       capsuleMeta: "开源免费",
+      communityCta: "社区剧情",
       capsuleCta: "下载",
     },
     highlights: {
@@ -198,6 +203,7 @@ export const APPLE_COPY: Record<SiteLocale, AppleCopy> = {
       github: "GitHub",
       downloadVerb: "下载",
       releaseLink: "发布页",
+      communityLink: "社区剧情",
       webLink: "pjsk.moe",
       shaLabel: "SHA-256",
       pkgLabel: "@moesekai/*",
@@ -221,6 +227,7 @@ export const APPLE_COPY: Record<SiteLocale, AppleCopy> = {
       eyebrow: "MoeSekai Story Studio",
       title: "許願，即成劇。",
       capsuleMeta: "開源免費",
+      communityCta: "社群劇情",
       capsuleCta: "下載",
     },
     highlights: {
@@ -327,6 +334,7 @@ export const APPLE_COPY: Record<SiteLocale, AppleCopy> = {
       github: "GitHub",
       downloadVerb: "下載",
       releaseLink: "發佈頁",
+      communityLink: "社群劇情",
       webLink: "pjsk.moe",
       shaLabel: "SHA-256",
       pkgLabel: "@moesekai/*",
@@ -350,6 +358,7 @@ export const APPLE_COPY: Record<SiteLocale, AppleCopy> = {
       eyebrow: "MoeSekai Story Studio",
       title: "願えば、舞台になる。",
       capsuleMeta: "オープンソース・無料",
+      communityCta: "コミュニティ作品",
       capsuleCta: "ダウンロード",
     },
     highlights: {
@@ -456,6 +465,7 @@ export const APPLE_COPY: Record<SiteLocale, AppleCopy> = {
       github: "GitHub",
       downloadVerb: "取得",
       releaseLink: "リリース",
+      communityLink: "コミュニティ作品",
       webLink: "pjsk.moe",
       shaLabel: "SHA-256",
       pkgLabel: "@moesekai/*",
@@ -479,6 +489,7 @@ export const APPLE_COPY: Record<SiteLocale, AppleCopy> = {
       eyebrow: "MoeSekai Story Studio",
       title: "Wish it. Stage it.",
       capsuleMeta: "Open Source & Free",
+      communityCta: "Community Stories",
       capsuleCta: "Download",
     },
     highlights: {
@@ -585,6 +596,7 @@ export const APPLE_COPY: Record<SiteLocale, AppleCopy> = {
       github: "GitHub",
       downloadVerb: "Download",
       releaseLink: "Releases",
+      communityLink: "Community Stories",
       webLink: "pjsk.moe",
       shaLabel: "SHA-256",
       pkgLabel: "@moesekai/*",
