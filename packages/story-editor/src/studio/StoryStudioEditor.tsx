@@ -25,6 +25,7 @@ import {
     applyDragPayloadToTarget,
     applyStoryLocaleOverlay,
     autoLayoutGraph,
+    clampActorX,
     clampCoord,
     compileStoryGraph,
     connectEdge,
@@ -51,16 +52,19 @@ import {
     preloadStoryAssets,
     removeBeat,
     removeNode,
-    resolveVoiceManifestLineUrl,
+    replaceBeat,
     rewireEdgeSource,
     serializeStoryScript,
+    setSceneStageCast,
     storyBgmUrl,
     storySeCandidateUrls,
-    storyVoiceCandidateUrls,
+    updateActorInSceneCast,
     upsertStoryLocalePack,
     type CompiledStoryProgram,
     type ContinueSceneOptions,
+    type SceneActorSlot,
     type SceneNode,
+    type StageActionBeat,
     type StoryCastMember,
     type StoryDocument,
     type StoryDragPayload,
@@ -101,9 +105,9 @@ import {
     metaValuesFromDoc,
     type StoryMetaValues,
 } from "../components/StoryMetaDialog";
-import { applyInstructionToStage } from "../components/StoryPlayerView";
-import { StoryStageView } from "../components/StoryStageView";
+import { StoryStageView, clampStageActorY } from "../components/StoryStageView";
 import { StoryVoiceManifestDialog } from "../components/StoryVoiceManifestDialog";
+import { executeChoreographyFrame } from "../live2d/choreographyRunner";
 import {
     DEFAULT_EDITOR_LAYOUT,
     EDITOR_LAYOUT_LIMITS,
@@ -116,6 +120,12 @@ import { useStoryAudio } from "../components/useStoryAudio";
 import { useStoryModels } from "../components/useStoryModels";
 import { useStoryStage } from "../components/useStoryStage";
 import { useStoryUiKit } from "../components/useStoryUiKit";
+import {
+    buildVoiceManifestUrlOptions,
+    resolveMidSceneManifestVoiceAction,
+    resolveTalkBeatVoicePlayback,
+    type VoiceManifestDialogTab,
+} from "../components/voiceTrackUtils";
 import { useStoryI18n, useStoryStudio } from "../context/StoryStudioContext";
 import {
     Banner, Button, Card, Dialog, EmptyState, Icon, IconButton, LoadingIndicator, LoadingState, Menu, PageContainer,
@@ -128,7 +138,7 @@ import {
     mdFullscreenExit, mdHistory, mdHome, mdInfo, mdKeyboardArrowDown, mdLeftPanelClose, mdLeftPanelOpen, mdMovie,
     mdNumbers, mdPlayArrow, mdPlayArrowFill, mdPlayCircle, mdRecordVoiceOver, mdRedo, mdReplay,
     mdRestartAlt, mdRightPanelClose, mdRightPanelOpen, mdSettings, mdSkipNext, mdSkipPrevious,
-    mdStar, mdTag, mdTranslate, mdUndo, mdUploadFile, mdViewQuilt, mdVisibility, mdVisibilityOff, mdVolumeOff,
+    mdStar, mdTag, mdTranslate, mdTune, mdUndo, mdUploadFile, mdViewQuilt, mdVisibility, mdVisibilityOff, mdVolumeOff,
     mdVolumeUp, mdWarning,
 } from "../md3/icons";
 import type {
@@ -283,6 +293,106 @@ function IdeMenuTrigger({
     );
 }
 
+/**
+ * Pure helper committing a stage-drag `(x, y)` adjustment back into the active scene's
+ * selected `StageActionBeat` (primary or `group[]`), the latest preceding `stageAction` beat
+ * targeting `castKey`, or the scene's `stageCast` slot (materializing `inherit` when needed).
+ */
+export function commitStageActorDrag(
+    doc: StoryDocument,
+    params: {
+        sceneId: string;
+        beatId: string | null;
+        castKey: string;
+        x: number;
+        y: number;
+    },
+): StoryDocument {
+    const node = doc.nodes[params.sceneId];
+    if (!node || node.type !== "scene") return doc;
+    const clampedX = clampActorX(params.x);
+    const clampedY = clampStageActorY(params.y);
+
+    const patchActionBeat = (beat: StageActionBeat): StageActionBeat | null => {
+        if (beat.castKey === params.castKey && (beat.action === "enter" || beat.action === "move")) {
+            return { ...beat, x: clampedX, y: clampedY };
+        }
+        if (beat.group && beat.group.length > 0) {
+            const idx = beat.group.findIndex(
+                item => item.castKey === params.castKey && (item.action === "enter" || item.action === "move"),
+            );
+            if (idx >= 0) {
+                const nextGroup = beat.group.map((item, i) => (
+                    i === idx ? { ...item, x: clampedX, y: clampedY } : item
+                ));
+                return { ...beat, group: nextGroup };
+            }
+        }
+        return null;
+    };
+
+    const beatIndex = params.beatId
+        ? node.beats.findIndex(b => b.id === params.beatId)
+        : -1;
+
+    // 1. If a StageActionBeat is selected and moves/enters this actor, patch it directly.
+    if (beatIndex >= 0) {
+        const currentBeat = node.beats[beatIndex];
+        if (currentBeat?.kind === "stageAction") {
+            const patched = patchActionBeat(currentBeat);
+            if (patched) {
+                return replaceBeat(doc, node.id, currentBeat.id, patched);
+            }
+        }
+        // 2. Otherwise search backward from the selected beat for the most recent enter/move of this actor.
+        for (let i = beatIndex - 1; i >= 0; i -= 1) {
+            const candidate = node.beats[i];
+            if (candidate?.kind !== "stageAction") continue;
+            const patched = patchActionBeat(candidate);
+            if (patched) {
+                return replaceBeat(doc, node.id, candidate.id, patched);
+            }
+        }
+    }
+
+    // 3. Patch matching actor in this scene's explicit `stageCast`.
+    if (node.stageCast.mode === "set" && node.stageCast.actors.some(a => a.castKey === params.castKey)) {
+        return updateActorInSceneCast(doc, node.id, params.castKey, { x: clampedX, y: clampedY });
+    }
+
+    // 4. If the scene inherits cast from an upstream scene and this actor is mounted, materialize `stageCast`.
+    if (node.stageCast.mode === "inherit") {
+        const evaluatedStage = evaluateStageAt(doc, node.id).stage;
+        const inherited = evaluatedStage.actors;
+        if (inherited.some(a => a.cast === params.castKey)) {
+            const actors: SceneActorSlot[] = inherited.slice(0, STORY_LIMITS.stageActors).map(actor => ({
+                castKey: actor.cast,
+                slot: actor.slot,
+                ...(actor.cast === params.castKey
+                    ? { x: clampedX, y: clampedY }
+                    : {
+                        ...(actor.explicitX !== undefined ? { x: actor.explicitX } : {}),
+                        ...(actor.y !== 0 ? { y: actor.y } : {}),
+                    }),
+                ...(actor.lockX ? { lockX: true } : {}),
+                ...(actor.mirror ? { mirror: true } : {}),
+                ...(actor.scale !== 1 ? { scale: actor.scale } : {}),
+                ...(actor.z !== undefined ? { z: actor.z } : {}),
+                ...(actor.allowOverlap ? { allowOverlap: true } : {}),
+                ...(actor.motion ? { motion: actor.motion } : {}),
+                ...(actor.facial ? { facial: actor.facial } : {}),
+            }));
+            return setSceneStageCast(doc, node.id, {
+                mode: "set",
+                actors,
+                ...(evaluatedStage.layoutMode !== undefined ? { layoutMode: evaluatedStage.layoutMode } : {}),
+            });
+        }
+    }
+
+    return doc;
+}
+
 const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEditorProps>(
     function StoryStudioEditorInner(props, ref) {
         const {
@@ -304,6 +414,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             onBackToDrafts,
             homeHref = "/",
             initialVoiceManifest = null,
+            onVoiceManifestChange,
             slots,
         } = props;
 
@@ -315,12 +426,21 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             resolveLive2dSources,
             sseWebScriptBase,
             defaultAutoPreload,
+            voiceWorkspaceBaseUrl,
             storage,
             exporter,
             navigate,
             showAttribution,
             openNotices,
         } = useStoryStudio();
+        const voiceManifestUrlOptions = useMemo(
+            () => buildVoiceManifestUrlOptions(voiceWorkspaceBaseUrl),
+            [voiceWorkspaceBaseUrl],
+        );
+        const voiceManifestUrlOptionsRef = useRef(voiceManifestUrlOptions);
+        useEffect(() => {
+            voiceManifestUrlOptionsRef.current = voiceManifestUrlOptions;
+        }, [voiceManifestUrlOptions]);
         const includeUiKit = Boolean(sseWebScriptBase);
         const reduced = useReducedMotion();
         const buildStarter = useStarterStory();
@@ -351,6 +471,8 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         const [workspaceMode, setWorkspaceMode] = useState<StoryEditorWorkspaceMode>("edit");
         const [immersive, setImmersive] = useState<boolean>(initialImmersive);
         const [stageWebFullscreen, setStageWebFullscreen] = useState(false);
+        const [stageAdjustMode, setStageAdjustMode] = useState(false);
+        const [stageDragPreview, setStageDragPreview] = useState<{ castKey: string; x: number; y: number } | null>(null);
         const [activeDragPayload, setActiveDragPayload] = useState<StoryDragPayload | null>(null);
 
         // Code Preview Mode state
@@ -363,7 +485,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         const [metaOpen, setMetaOpen] = useState(false);
         const [i18nOpen, setI18nOpen] = useState(false);
         const [voiceManifestOpen, setVoiceManifestOpen] = useState(false);
-        const [voiceManifestInitialTab, setVoiceManifestInitialTab] = useState<"import" | "upload">("import");
+        const [voiceManifestInitialTab, setVoiceManifestInitialTab] = useState<VoiceManifestDialogTab | undefined>(undefined);
         const [issuesOpen, setIssuesOpen] = useState(false);
         const [importOpen, setImportOpen] = useState(false);
         const [preloadOpen, setPreloadOpen] = useState(false);
@@ -376,6 +498,31 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         const [snack, setSnack] = useState<string | null>(null);
         const [flash, setFlash] = useState<{ key: number; color: StoryEffectColor; seconds: number } | null>(null);
         const playVoiceManifestRef = useRef<StoryVoiceManifest | null>(initialVoiceManifest);
+        const initialVoiceManifestRef = useRef<StoryVoiceManifest | null>(initialVoiceManifest);
+        const lastInitialVoiceManifestPropRef = useRef<StoryVoiceManifest | null>(initialVoiceManifest);
+        const onVoiceManifestChangeRef = useRef(onVoiceManifestChange);
+        useEffect(() => {
+            onVoiceManifestChangeRef.current = onVoiceManifestChange;
+        }, [onVoiceManifestChange]);
+        useEffect(() => {
+            initialVoiceManifestRef.current = initialVoiceManifest;
+            if (lastInitialVoiceManifestPropRef.current === initialVoiceManifest) return;
+            lastInitialVoiceManifestPropRef.current = initialVoiceManifest;
+            if (playVoiceManifestRef.current === initialVoiceManifest) return;
+            playVoiceManifestRef.current = initialVoiceManifest;
+            setPlayVoiceManifest(initialVoiceManifest);
+        }, [initialVoiceManifest]);
+
+        const handleApplyVoiceManifest = useCallback((next: StoryVoiceManifest | null) => {
+            playVoiceManifestRef.current = next;
+            setPlayVoiceManifest(next);
+            onVoiceManifestChangeRef.current?.(next);
+        }, []);
+
+        const openVoiceManifestDialog = useCallback((tab?: VoiceManifestDialogTab) => {
+            setVoiceManifestInitialTab(tab);
+            setVoiceManifestOpen(true);
+        }, []);
 
         // Interactive Playtest runtime state (shares the persistently mounted WebGPU stage).
         const [playHistory, setPlayHistory] = useState<PlaytestHistoryItem[]>([]);
@@ -525,7 +672,8 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             setPlayVoicePending(false);
             setPlayVoiceProgress(null);
             setPlaySelectedLocale(null);
-            setPlayVoiceManifest(initialVoiceManifest);
+            playVoiceManifestRef.current = initialVoiceManifestRef.current;
+            setPlayVoiceManifest(initialVoiceManifestRef.current);
 
             const initialNode = pickInitialNodeId(externalDoc);
             const nodeObj = externalDoc.nodes[initialNode];
@@ -544,7 +692,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     nodeId: initialNodeParamRef.current ?? externalDoc.startNodeId,
                 };
             }
-        }, [externalDoc, hasExternalDoc, initialVoiceManifest, resolvedExternalKey, stopAllAudio]);
+        }, [externalDoc, hasExternalDoc, resolvedExternalKey, stopAllAudio]);
 
         // Load from storage adapter when `draftId` is used (and `externalDoc` is not supplied).
         const loadSeqRef = useRef(0);
@@ -571,7 +719,8 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 setPlayVoicePending(false);
                 setPlayVoiceProgress(null);
                 setPlaySelectedLocale(null);
-                setPlayVoiceManifest(initialVoiceManifest);
+                playVoiceManifestRef.current = initialVoiceManifestRef.current;
+                setPlayVoiceManifest(initialVoiceManifestRef.current);
 
                 if (!draftId) {
                     setDoc(null);
@@ -618,7 +767,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             return () => {
                 loadSeqRef.current += 1;
             };
-        }, [draftId, hasExternalDoc, initialVoiceManifest, stopAllAudio, storage]);
+        }, [draftId, hasExternalDoc, stopAllAudio, storage]);
 
         const persistDoc = useCallback(async (id: string | null, target: StoryDocument) => {
             if (onSaveDocRef.current) {
@@ -948,9 +1097,11 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         const editorPreloadKey = useMemo(() => {
             if (!doc) return null;
             const castSig = [...new Set(doc.cast.map(m => m.modelId).filter(Boolean))].sort().join(",");
-            const voiceSig = playVoiceManifest ? Object.keys(playVoiceManifest.lines).length : 0;
-            return `${doc.id}|${doc.region}|${assetSource}|${castSig}|v:${voiceSig}`;
-        }, [assetSource, doc, playVoiceManifest]);
+            const voiceSig = playVoiceManifest
+                ? `${Object.keys(playVoiceManifest.lines).length}:${playVoiceManifest.overrideOfficialVoice ? "1" : "0"}`
+                : "0";
+            return `${doc.id}|${doc.region}|${assetSource}|${castSig}|v:${voiceSig}|w:${voiceWorkspaceBaseUrl ?? ""}`;
+        }, [assetSource, doc, playVoiceManifest, voiceWorkspaceBaseUrl]);
 
         useEffect(() => {
             if (!editorPreloadKey || modelList.status === "loading" || !live2dSources) return;
@@ -962,6 +1113,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 assetSource,
                 models: stageModels ?? undefined,
                 voiceManifest: playVoiceManifestRef.current,
+                voiceManifestUrlOptions,
                 live2dSources,
                 includeUiKit,
             };
@@ -1009,7 +1161,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     editorPreloadAbortRef.current = null;
                 }
             };
-        }, [assetSource, defaultAutoPreload, editorPreloadKey, includeUiKit, live2dSources, modelList.status, stageModels]);
+        }, [assetSource, defaultAutoPreload, editorPreloadKey, includeUiKit, live2dSources, modelList.status, stageModels, voiceManifestUrlOptions]);
 
         const previewTargetNodeId = workspaceMode === "code" ? effectiveCodeNodeId : activeNodeId;
         const previewTargetBeatId = workspaceMode === "code" ? effectiveCodeBeatId : activeBeatId;
@@ -1023,12 +1175,53 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
 
         const editStageState = evaluated.stage;
 
+        useEffect(() => {
+            setStageDragPreview(null);
+        }, [workspaceMode, previewTargetNodeId, previewTargetBeatId]);
+
+        const displayedEditStageState = useMemo<StoryStageState>(() => {
+            if (!stageDragPreview || workspaceMode !== "edit") return editStageState;
+            let matched = false;
+            const actors = editStageState.actors.map((actor) => {
+                if (actor.cast !== stageDragPreview.castKey) return actor;
+                matched = true;
+                return {
+                    ...actor,
+                    x: stageDragPreview.x,
+                    explicitX: stageDragPreview.x,
+                    lockX: true,
+                    y: stageDragPreview.y,
+                };
+            });
+            return matched ? { ...editStageState, actors } : editStageState;
+        }, [editStageState, stageDragPreview, workspaceMode]);
+
+        const handlePreviewStageActorCoords = useCallback((castKey: string, coords: { x: number; y: number }) => {
+            setStageDragPreview({ castKey, x: coords.x, y: coords.y });
+        }, []);
+
+        const handleCommitStageActorCoords = useCallback((castKey: string, coords: { x: number; y: number }) => {
+            setStageDragPreview(null);
+            if (!activeScene) return;
+            commit(prev => commitStageActorDrag(prev, {
+                sceneId: activeScene.id,
+                beatId: activeBeatId,
+                castKey,
+                x: coords.x,
+                y: coords.y,
+            }));
+        }, [activeBeatId, activeScene, commit]);
+
+        const handleCancelStageActorDrag = useCallback(() => {
+            setStageDragPreview(null);
+        }, []);
+
         // Always latch latest edit/code stage state into the controller (it safely queues until
         // stage & models are ready and deduplicates non-structural keystroke edits automatically).
         useEffect(() => {
             if ((workspaceMode !== "edit" && workspaceMode !== "code") || !stageDoc) return;
-            void applyStage(editStageState, { instant: true });
-        }, [workspaceMode, stageDoc, applyStage, editStageState]);
+            void applyStage(displayedEditStageState, { instant: true });
+        }, [workspaceMode, stageDoc, applyStage, displayedEditStageState]);
 
         useEffect(() => {
             if (workspaceModeRef.current !== "playtest" || stagePhase.kind !== "ready" || !models || playRunningRef.current) return;
@@ -1138,140 +1331,58 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
 
             playRunningRef.current = true;
             setPlayRunning(true);
-            let stage = baseStage;
-            let vars = baseVars;
 
-            for (const inst of frame.executedInstructions) {
-                if (playGenRef.current !== generation) return;
-                const activeDoc = playLocalizedDocRef.current ?? targetDoc;
-                const stepped = applyInstructionToStage(stage, vars, inst, activeDoc);
-                stage = stepped.stage;
-                vars = stepped.variables;
-
-                switch (inst.op) {
-                    case "enterScene": {
-                        setPlayStageState(stage);
-                        syncBgm(
-                            stage.bgm.name ? storyBgmUrl(stage.bgm.name, targetDoc.region, line) : null,
-                            stage.bgm.volume,
+            const executed = await executeChoreographyFrame(frame, baseStage, {
+                isCancelled: () => playGenRef.current !== generation,
+                getDoc: () => playLocalizedDocRef.current ?? targetDoc,
+                baseVars,
+                setStageState: setPlayStageState,
+                setVariables: setPlayLiveVariables,
+                syncBgm: bgm => syncBgm(
+                    bgm.name ? storyBgmUrl(bgm.name, targetDoc.region, line) : null,
+                    bgm.volume,
+                ),
+                setFadeSeconds: setPlayFadeSeconds,
+                setEffectActive: setPlayEffectActive,
+                triggerFlash: (color, seconds) => {
+                    flashKeyRef.current += 1;
+                    setFlash({ key: flashKeyRef.current, color, seconds });
+                },
+                applyStage,
+                shakeStage,
+                waitMs: ms => waitPlayMs(ms, generation),
+                playSe: (se, volume) => playSe(storySeCandidateUrls(se, targetDoc.region, line), volume),
+                onTalkBeat: (beat, stage, vars, activeDoc) => {
+                    const body = stage.dialogue?.body ?? interpolateStoryText(beat.body, activeDoc, vars);
+                    setPlayTypedCount(reduced ? body.length : 0);
+                    const resolvedVoice = resolveTalkBeatVoicePlayback({
+                        beat,
+                        region: targetDoc.region,
+                        line,
+                        voiceManifest: playVoiceManifestRef.current,
+                        urlOptions: voiceManifestUrlOptionsRef.current,
+                    });
+                    if (resolvedVoice) {
+                        startPlayVoice(
+                            resolvedVoice.urls,
+                            {
+                                label: resolvedVoice.label,
+                                start: resolvedVoice.start,
+                                end: resolvedVoice.end,
+                            },
+                            generation,
+                            true,
                         );
-                        if (inst.transition.kind === "fadeBlack" || inst.transition.kind === "fadeWhite") {
-                            const dur = Math.max(0.1, inst.transition.duration);
-                            const color: StoryEffectColor = inst.transition.kind === "fadeWhite" ? "white" : "black";
-                            setPlayFadeSeconds(dur);
-                            setPlayEffectActive(true);
-                            try {
-                                flashKeyRef.current += 1;
-                                setFlash({ key: flashKeyRef.current, color, seconds: dur });
-                                await Promise.all([
-                                    applyStage(stage, { instant: false, fade: true }),
-                                    waitPlayMs(dur * 1000 * 0.6, generation),
-                                ]);
-                            } finally {
-                                if (playGenRef.current === generation) setPlayEffectActive(false);
-                            }
-                        } else {
-                            setPlayFadeSeconds(0);
-                            await applyStage(stage, { instant: false, fade: false });
-                        }
-                        break;
                     }
-                    case "stageAction": {
-                        setPlayStageState(stage);
-                        const beat = inst.beat;
-                        await applyStage(stage, {
-                            instant: false,
-                            fade: beat.action === "enter" || beat.action === "exit",
-                            moveSeconds: beat.action === "move" ? (beat.duration ?? STORY_FADE_SECONDS) : undefined,
-                        });
-                        break;
-                    }
-                    case "cue": {
-                        const beat = inst.beat;
-                        setPlayStageState(stage);
-                        if (beat.cueType === "se") {
-                            if (beat.se) playSe(storySeCandidateUrls(beat.se, targetDoc.region, line), beat.seVolume);
-                        } else {
-                            setPlayEffectActive(true);
-                            try {
-                                if (beat.cueType === "flash") {
-                                    const dur = beat.duration ?? 0.4;
-                                    flashKeyRef.current += 1;
-                                    setFlash({ key: flashKeyRef.current, color: beat.color ?? "white", seconds: dur });
-                                    await waitPlayMs(Math.min(dur, 1.5) * 1000, generation);
-                                } else if (beat.cueType === "shake") {
-                                    await shakeStage(beat.duration ?? 0.4);
-                                } else if (beat.cueType === "wait") {
-                                    await waitPlayMs((beat.duration ?? 0.8) * 1000, generation);
-                                }
-                            } finally {
-                                if (playGenRef.current === generation) setPlayEffectActive(false);
-                            }
-                        }
-                        break;
-                    }
-                    case "varOp": {
-                        setPlayLiveVariables(vars);
-                        break;
-                    }
-                    case "talk": {
-                        const beat = inst.beat;
-                        setPlayStageState(stage);
-                        setPlayLiveVariables(vars);
-                        void applyStage(stage, { instant: false });
-                        const body = stage.dialogue?.body ?? interpolateStoryText(beat.body, activeDoc, vars);
-                        setPlayTypedCount(reduced ? body.length : 0);
-                        if (beat.se) {
-                            playSe(storySeCandidateUrls(beat.se, targetDoc.region, line), beat.seVolume);
-                        }
-                        if (beat.voice && beat.voice.scenarioId && beat.voice.voiceId) {
-                            const urls = storyVoiceCandidateUrls(beat.voice, targetDoc.region, line);
-                            startPlayVoice(
-                                urls,
-                                { label: beat.voice.voiceId, start: beat.voice.start, end: beat.voice.end },
-                                generation,
-                                true,
-                            );
-                        } else if (playVoiceManifestRef.current) {
-                            const trackUrls = resolveVoiceManifestLineUrl(playVoiceManifestRef.current, beat.id);
-                            if (trackUrls.length > 0) {
-                                const manifestLine = playVoiceManifestRef.current.lines[beat.id];
-                                startPlayVoice(
-                                    trackUrls,
-                                    { label: manifestLine?.speaker || beat.id },
-                                    generation,
-                                    true,
-                                );
-                            }
-                        }
-                        break;
-                    }
-                    case "narration": {
-                        const beat = inst.beat;
-                        setPlayStageState(stage);
-                        void applyStage(stage, { instant: false });
-                        if (beat.se) {
-                            playSe(storySeCandidateUrls(beat.se, targetDoc.region, line), beat.seVolume);
-                        }
-                        break;
-                    }
-                    case "telop":
-                    case "choice":
-                    case "end": {
-                        setPlayStageState(stage);
-                        void applyStage(stage, { instant: false });
-                        break;
-                    }
-                    default:
-                        break;
-                }
-            }
+                },
+                reducedMotion: Boolean(reduced),
+            });
 
-            if (playGenRef.current !== generation) return;
+            if (executed.cancelled || playGenRef.current !== generation) return;
             const finalFrame = localizeRuntimeFrame(frame, playLocalizedDocRef.current ?? targetDoc);
             setPlayStageState(finalFrame.stage);
             setPlayLiveVariables(finalFrame.variables);
-            if (finalFrame.stage.dialogue && finalFrame.stage.dialogue.body !== stage.dialogue?.body) {
+            if (finalFrame.stage.dialogue && finalFrame.stage.dialogue.body !== executed.stage.dialogue?.body) {
                 setPlayTypedCount(reduced ? finalFrame.stage.dialogue.body.length : 0);
             }
             syncBgm(
@@ -1642,9 +1753,8 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 dirtyDocRef.current = current;
                 await flushSave(draftId, current);
             },
-            openVoiceManifestDialog: (tab: "import" | "upload" = "import") => {
-                setVoiceManifestInitialTab(tab);
-                setVoiceManifestOpen(true);
+            openVoiceManifestDialog: (tab?: "import" | "upload") => {
+                openVoiceManifestDialog(tab);
             },
             openExportDialog: () => {
                 handleExportAction();
@@ -1658,6 +1768,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             flushSave,
             handleExportAction,
             handleWorkspaceModeChange,
+            openVoiceManifestDialog,
             reloadFromDocImpl,
             reloadFromScriptImpl,
         ]);
@@ -1935,12 +2046,18 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     if (node.type !== "scene") continue;
                     const found = node.beats.find(beat => beat.kind === "talk" && beat.id === stepId);
                     if (!found || found.kind !== "talk") continue;
-                    if (found.voice?.voiceId) return;
-                    const trackUrls = resolveVoiceManifestLineUrl(playVoiceManifest, stepId);
-                    const manifestLine = playVoiceManifest.lines[stepId];
-                    if (trackUrls.length === 0 || !manifestLine) return;
-                    unlockAudioRef.current();
-                    startPlayVoiceRef.current(trackUrls, { label: manifestLine.speaker || stepId }, playGenRef.current, true);
+                    const outcome = resolveMidSceneManifestVoiceAction({
+                        beat: found,
+                        previousManifest: previous,
+                        nextManifest: playVoiceManifest,
+                        urlOptions: voiceManifestUrlOptionsRef.current,
+                    });
+                    if (outcome.action === "play") {
+                        unlockAudioRef.current();
+                        startPlayVoiceRef.current(outcome.urls, { label: outcome.label }, playGenRef.current, true);
+                    } else if (outcome.action === "stop") {
+                        stopActivePlayVoiceRef.current();
+                    }
                     return;
                 }
             }, 0);
@@ -1981,25 +2098,22 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                         const body = frame.stage.dialogue?.stepId === beat.id
                             ? frame.stage.dialogue.body
                             : interpolateStoryText(beat.body, activeTargetDoc, frame.variables);
-                        const hasVoice = Boolean(beat.voice && beat.voice.scenarioId && beat.voice.voiceId);
-                        const officialUrls = hasVoice && beat.voice
-                            ? storyVoiceCandidateUrls(beat.voice, activeTargetDoc.region, line)
-                            : [];
-                        const manifestUrls = !hasVoice && playVoiceManifest
-                            ? resolveVoiceManifestLineUrl(playVoiceManifest, beat.id)
-                            : [];
-                        const voiceUrls = officialUrls.length > 0 ? officialUrls : manifestUrls;
+                        const resolvedVoice = resolveTalkBeatVoicePlayback({
+                            beat,
+                            region: activeTargetDoc.region,
+                            line,
+                            voiceManifest: playVoiceManifest,
+                            urlOptions: voiceManifestUrlOptions,
+                        });
                         items.push({
                             key: `${frameIndex}-${instIdx}-${beat.id}`,
                             kind: "talk",
                             speaker,
                             body,
-                            voiceUrls: voiceUrls.length > 0 ? voiceUrls : undefined,
-                            voiceStart: hasVoice ? beat.voice?.start : undefined,
-                            voiceEnd: hasVoice ? beat.voice?.end : undefined,
-                            voiceLabel: hasVoice
-                                ? beat.voice?.voiceId
-                                : (playVoiceManifest?.lines[beat.id]?.speaker || (manifestUrls.length > 0 ? beat.id : undefined)),
+                            voiceUrls: resolvedVoice?.urls,
+                            voiceStart: resolvedVoice?.start,
+                            voiceEnd: resolvedVoice?.end,
+                            voiceLabel: resolvedVoice?.label,
                         });
                     } else if (inst.op === "narration") {
                         const body = frame.stage.narration?.stepId === inst.beat.id
@@ -2026,7 +2140,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 }
             });
             return items;
-        }, [doc, line, playHistory, playLocalizedDoc, playVoiceManifest, workspaceMode]);
+        }, [doc, line, playHistory, playLocalizedDoc, playVoiceManifest, voiceManifestUrlOptions, workspaceMode]);
 
         const handlePlayReplayBacklogVoice = useCallback((item: LivePhaseBacklogItem) => {
             if (!item.voiceUrls || item.voiceUrls.length === 0) return;
@@ -2389,7 +2503,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
         const handleImportIntoCurrentDraft = (importedDoc: StoryDocument) => {
             if (workspaceMode === "playtest") exitPlaytest(false);
             setImportOpen(false);
-            setPlayVoiceManifest(null);
+            handleApplyVoiceManifest(null);
             setPlaySelectedLocale(null);
             applyCodeDoc(importedDoc, true, false);
             setSnack(t("page.storyMaker.landing.importedToast"));
@@ -2557,11 +2671,10 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
             hasBlockingErrors: errorCount > 0,
             saveStatus,
             notify: setSnack,
-            openVoiceManifestDialog: (tab = "import") => {
-                setVoiceManifestInitialTab(tab);
-                setVoiceManifestOpen(true);
-            },
-            applyVoiceManifest: setPlayVoiceManifest,
+            openVoiceManifestDialog,
+            hasVoiceManifest: hasPlayVoiceTrackManifest,
+            currentVoiceManifest: playVoiceManifest,
+            applyVoiceManifest: handleApplyVoiceManifest,
             commitDoc: commit,
             requestExport: handleExportAction,
             setWorkspaceMode: handleWorkspaceModeChange,
@@ -2610,10 +2723,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                 key: "load-voice-manifest",
                 label: t("page.storyMaker.voiceTrack.action"),
                 icon: mdRecordVoiceOver,
-                onSelect: () => {
-                    setVoiceManifestInitialTab("import");
-                    setVoiceManifestOpen(true);
-                },
+                onSelect: () => openVoiceManifestDialog(),
             },
             ...hostFileMenuItems,
             {
@@ -2947,10 +3057,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                             variant={hasPlayVoiceTrackManifest ? "tonal" : "standard"}
                             icon={mdRecordVoiceOver}
                             label={t("page.storyMaker.voiceTrack.action")}
-                            onClick={() => {
-                                setVoiceManifestInitialTab("import");
-                                setVoiceManifestOpen(true);
-                            }}
+                            onClick={() => openVoiceManifestDialog()}
                         />
 
                         {/* Host-injected toolbar actions (e.g. Web Publish pill or Desktop Pi Agent / Export buttons) */}
@@ -3252,7 +3359,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                         <StoryStageView
                                             key="live-stage"
                                             doc={isPlaytest ? (playLocalizedDoc ?? stageDoc) : stageDoc}
-                                            state={isPlaytest ? playDisplayState : editStageState}
+                                            state={isPlaytest ? playDisplayState : displayedEditStageState}
                                             line={line}
                                             hostRef={stageHostRef}
                                             phase={stagePhase}
@@ -3280,6 +3387,21 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                                     ? {
                                                         name: previewingCastMember.name || previewingCastMember.key,
                                                         onExit: clearClipPreview,
+                                                    }
+                                                    : null
+                                            }
+                                            stageAdjust={
+                                                workspaceMode === "edit" && stageAdjustMode && !isSoloPreview && activeScene
+                                                    ? {
+                                                        active: true,
+                                                        onPreviewActorCoords: handlePreviewStageActorCoords,
+                                                        onCommitActorCoords: handleCommitStageActorCoords,
+                                                        onCancelDrag: handleCancelStageActorDrag,
+                                                        selectedCastKey: activeBeat?.kind === "stageAction"
+                                                            ? activeBeat.castKey
+                                                            : activeBeat?.kind === "talk"
+                                                                ? (activeBeat.speakerKey ?? null)
+                                                                : null,
                                                     }
                                                     : null
                                             }
@@ -3520,7 +3642,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                                 {hasPlayVoiceTrackManifest ? (
                                                     <button
                                                         type="button"
-                                                        onClick={() => setVoiceManifestOpen(true)}
+                                                        onClick={() => openVoiceManifestDialog()}
                                                         title={t("page.storyMaker.voiceTrack.manageButton")}
                                                         className="state-layer focus-ring mr-1 inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md3-full bg-tertiary-container px-2 py-0.5 type-label-s text-on-tertiary-container"
                                                     >
@@ -3532,7 +3654,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                                         size="xs"
                                                         icon={mdRecordVoiceOver}
                                                         label={t("page.storyMaker.voiceTrack.action")}
-                                                        onClick={() => setVoiceManifestOpen(true)}
+                                                        onClick={() => openVoiceManifestDialog()}
                                                     />
                                                 )}
                                                 {audioBlocked && !playEmptyStory && !playEnded && (
@@ -3752,6 +3874,23 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                                             </div>
 
                                             <div className="flex shrink-0 items-center gap-1">
+                                                {activeScene && (
+                                                    <Button
+                                                        size="xs"
+                                                        variant={stageAdjustMode ? "filled" : "tonal"}
+                                                        icon={mdTune}
+                                                        aria-pressed={stageAdjustMode}
+                                                        aria-label={t("page.storyMaker.inspector.stageAdjustMode")}
+                                                        title={t("page.storyMaker.inspector.stageAdjustMode")}
+                                                        disabled={isSoloPreview}
+                                                        className="shrink-0 gap-1 px-2"
+                                                        onClick={() => setStageAdjustMode(prev => !prev)}
+                                                    >
+                                                        <span className="hidden @[400px]:inline">
+                                                            {t("page.storyMaker.inspector.stageAdjustMode")}
+                                                        </span>
+                                                    </Button>
+                                                )}
                                                 {replayActionInfo && (
                                                     <Button
                                                         size="xs"
@@ -4043,7 +4182,7 @@ const StoryStudioEditorInner = forwardRef<StoryStudioEditorHandle, StoryStudioEd
                     onClose={() => setVoiceManifestOpen(false)}
                     doc={doc}
                     currentManifest={playVoiceManifest}
-                    onApplyManifest={setPlayVoiceManifest}
+                    onApplyManifest={handleApplyVoiceManifest}
                     onSwitchToStoryImport={handleImportIntoCurrentDraft}
                     onApplyLocalePack={pack => commit(current => upsertStoryLocalePack(current, pack))}
                     uploadTab={voiceUploadTab}

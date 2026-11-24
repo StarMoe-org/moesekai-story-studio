@@ -4,11 +4,13 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
     compileStoryGraph,
     detectOutdatedBeats,
+    getStageActionItems,
     isUiLocale,
     matchVoiceManifestToDoc,
     parseStoryScript,
     parseStoryVoiceManifest,
     SUPPORTED_UI_LOCALES,
+    type StageActionItem,
     type StoryCompileDiagnostic,
     type StoryDocument,
     type StoryLocalePack,
@@ -724,7 +726,7 @@ export async function readVoiceManifestFromDisk(
     try {
         const text = await readFile(absPath, "utf8");
         const raw = JSON.parse(text);
-        return { raw, manifest: parseStoryVoiceManifest(raw) };
+        return { raw, manifest: parseStoryVoiceManifest(raw, { allowLocalWorkspaceUrls: true }) };
     } catch {
         return null;
     }
@@ -810,9 +812,28 @@ export async function readStoryWorkspace(
                 } else if (b.kind === "narration") {
                     summary = b.body.slice(0, 80);
                 } else if (b.kind === "telop") {
-                    summary = b.text.slice(0, 80);
+                    const mods: string[] = [];
+                    if (b.actorVisibility && b.actorVisibility !== "keep") mods.push(`actors=${b.actorVisibility}`);
+                    if (b.position && b.position !== "center") mods.push(`pos=${b.position}`);
+                    summary = `${b.text.slice(0, 80)}${mods.length > 0 ? ` [${mods.join(" ")}]` : ""}`;
                 } else if (b.kind === "stageAction") {
-                    summary = `${b.action} ${b.castKey}${b.slot ? ` @ ${b.slot}` : ""}${b.z !== undefined ? ` z=${b.z}` : ""}`;
+                    const fmtItem = (it: StageActionItem) =>
+                        `${it.action} ${it.castKey}${it.slot ? ` @ ${it.slot}` : ""}${it.x !== undefined ? ` x=${it.x}` : ""}${it.z !== undefined ? ` z=${it.z}` : ""}${it.lockX ? " lock" : ""}${it.mirror ? " mirror" : ""}`;
+                    const items = getStageActionItems(b);
+                    if (items.length > 1) {
+                        const tail: string[] = [];
+                        if (b.delay !== undefined) tail.push(`delay=${b.delay}`);
+                        if (b.duration !== undefined) tail.push(`dur=${b.duration}`);
+                        if (b.transition === "instant" || b.transition === "fade") tail.push(b.transition);
+                        if (b.parallel) tail.push("parallel");
+                        summary = `sync [${items.map(fmtItem).join("; ")}]${tail.length > 0 ? ` ${tail.join(" ")}` : ""}`;
+                    } else {
+                        const tail: string[] = [];
+                        if (b.delay !== undefined) tail.push(`delay=${b.delay}`);
+                        if (b.transition === "instant" || b.transition === "fade") tail.push(b.transition);
+                        if (b.parallel) tail.push("parallel");
+                        summary = `${fmtItem(items[0])}${tail.length > 0 ? ` ${tail.join(" ")}` : ""}`;
+                    }
                 } else if (b.kind === "cue") {
                     summary = `${b.cueType}${b.se ? ` ${b.se}` : ""}`;
                 } else {

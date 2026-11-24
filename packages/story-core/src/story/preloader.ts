@@ -29,11 +29,11 @@ import {
     type AssetSiteMember,
     type ResolvedLive2DAssetDocument,
 } from "../live2d/site";
-import type { StoryDocument, StoryVoiceManifest, StoryVoiceRef } from "../types/storyMaker";
+import { getStageActionItems, type StoryDocument, type StoryVoiceManifest, type StoryVoiceRef } from "../types/storyMaker";
 import {
     storyBackgroundUrl, storyBgmUrl, storySeCandidateUrls, storyVoiceCandidateUrls,
 } from "./assets";
-import { resolveVoiceManifestLineUrl } from "./i18nPack";
+import { resolveVoiceManifestLineUrl, type ResolveVoiceManifestUrlOptions } from "./i18nPack";
 import { decodeStoryAudio, getCachedStoryAudio, getSharedAudioContext } from "./audioCache";
 import { isStoryUiKitSupported, loadStoryUiKit } from "./uiKit";
 
@@ -151,6 +151,8 @@ export interface CollectStoryAssetsOptions {
     models?: readonly Live2DModel[] | null;
     /** Optional custom voice track manifest (`moesekai-story-voice/1`) for audio preloading. */
     voiceManifest?: StoryVoiceManifest | null;
+    /** Optional URL resolution options for `voiceManifest` (e.g. desktop workspace base URL or `blob:` preview URLs). */
+    voiceManifestUrlOptions?: ResolveVoiceManifestUrlOptions;
     /** Include the in-game UI Kit in the manifest (default `true`). */
     includeUiKit?: boolean;
     /** Optional host callback checking whether custom-protocol URL prefixes are cached locally. */
@@ -324,7 +326,28 @@ export function collectStoryAssets(
                     for (const reaction of beat.reactions ?? []) {
                         recordClips(reaction.castKey, reaction.motion, reaction.facial);
                     }
-                    if (beat.voice && beat.voice.scenarioId && beat.voice.voiceId) {
+                    const hasOfficialVoice = Boolean(beat.voice && beat.voice.scenarioId && beat.voice.voiceId);
+                    const trackUrls = options.voiceManifest
+                        ? resolveVoiceManifestLineUrl(options.voiceManifest, beat.id, options.voiceManifestUrlOptions)
+                        : [];
+                    const trackLine = options.voiceManifest?.lines[beat.id];
+                    const useCustomVoice = Boolean(
+                        trackUrls.length > 0
+                        && trackLine
+                        && (options.voiceManifest?.overrideOfficialVoice || !hasOfficialVoice),
+                    );
+
+                    if (useCustomVoice && trackLine) {
+                        const key = `voice-track|${trackLine.audioHash || trackUrls[0]}`;
+                        if (!voiceSeen.has(key)) {
+                            voiceSeen.add(key);
+                            voices.push({
+                                kind: "voice",
+                                label: trackLine.speaker || beat.id,
+                                urls: trackUrls,
+                            });
+                        }
+                    } else if (hasOfficialVoice && beat.voice) {
                         const effectiveRegion = beat.voice.region ?? doc.region;
                         const key = `${beat.voice.kind}|${effectiveRegion}|${beat.voice.scenarioId}|${beat.voice.voiceId}`;
                         if (!voiceSeen.has(key)) {
@@ -339,20 +362,6 @@ export function collectStoryAssets(
                                 });
                             }
                         }
-                    } else if (options.voiceManifest) {
-                        const trackUrls = resolveVoiceManifestLineUrl(options.voiceManifest, beat.id);
-                        const trackLine = options.voiceManifest.lines[beat.id];
-                        if (trackUrls.length > 0 && trackLine) {
-                            const key = `voice-track|${trackLine.audioHash || trackUrls[0]}`;
-                            if (!voiceSeen.has(key)) {
-                                voiceSeen.add(key);
-                                voices.push({
-                                    kind: "voice",
-                                    label: trackLine.speaker || beat.id,
-                                    urls: trackUrls,
-                                });
-                            }
-                        }
                     }
                     recordSe(beat.se);
                     break;
@@ -362,7 +371,9 @@ export function collectStoryAssets(
                     break;
                 }
                 case "stageAction": {
-                    recordClips(beat.castKey, beat.motion, beat.facial);
+                    for (const item of getStageActionItems(beat)) {
+                        recordClips(item.castKey, item.motion, item.facial);
+                    }
                     break;
                 }
                 case "cue": {

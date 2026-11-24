@@ -8,6 +8,7 @@ import {
     detectStageActorOverlaps,
     extractLive2DMotionClips,
     fetchLive2DModels,
+    getStageActionItems,
     inferLive2DMotionBundleCandidates,
     live2dDirectoryPath,
     live2dSiteListingUrl,
@@ -243,7 +244,9 @@ export function collectAssetReport(
             } else if (beat.kind === "narration") {
                 recordSe(beat.se);
             } else if (beat.kind === "stageAction") {
-                recordClips(beat.castKey, beat.motion, beat.facial);
+                for (const item of getStageActionItems(beat)) {
+                    recordClips(item.castKey, item.motion, item.facial);
+                }
             } else if (beat.kind === "cue" && beat.cueType === "se") {
                 recordSe(beat.se);
             }

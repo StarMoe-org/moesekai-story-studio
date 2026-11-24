@@ -62,6 +62,8 @@ export interface StoryStudioContextValue {
     stageRenderQuality: StoryStageRenderQuality;
     /** Default auto-preload preference when the user has not explicitly saved a toggle (`true` on Desktop, `false` on Web). */
     defaultAutoPreload: boolean;
+    /** Optional base URL for resolving local workspace voice audio files (e.g. Desktop `moesekai-app://app/workspace/`). */
+    voiceWorkspaceBaseUrl: string | null;
 }
 
 export interface StoryStudioProviderProps {
@@ -115,6 +117,8 @@ export interface StoryStudioProviderProps {
     stageRenderQuality?: StoryStageRenderQuality;
     /** Default auto-preload preference when user has not explicitly toggled it. Defaults to `true` for desktop hosts, `false` for web. */
     defaultAutoPreload?: boolean;
+    /** Optional base URL for resolving local workspace voice clips (e.g. Desktop `moesekai-app://app/workspace/`). */
+    voiceWorkspaceBaseUrl?: string | null;
     children: React.ReactNode;
 }
 
@@ -156,6 +160,7 @@ const StoryStudioContext = createContext<StoryStudioContextValue>({
     hasCustomNoticesHandler: false,
     stageRenderQuality: DEFAULT_STAGE_RENDER_QUALITY,
     defaultAutoPreload: false,
+    voiceWorkspaceBaseUrl: null,
 });
 
 export function StoryStudioProvider({
@@ -184,6 +189,7 @@ export function StoryStudioProvider({
     showAttribution = true,
     stageRenderQuality = DEFAULT_STAGE_RENDER_QUALITY,
     defaultAutoPreload,
+    voiceWorkspaceBaseUrl = null,
     children,
 }: StoryStudioProviderProps) {
     const normalizedLocale = normalizeStudioLocale(locale) as UiLocale;
@@ -276,6 +282,7 @@ export function StoryStudioProvider({
             hasCustomNoticesHandler,
             stageRenderQuality,
             defaultAutoPreload: resolvedDefaultAutoPreload,
+            voiceWorkspaceBaseUrl,
         }),
         [
             brandLogoUrl,
@@ -303,6 +310,7 @@ export function StoryStudioProvider({
             themeMode,
             themeSeed,
             unitIconBaseUrl,
+            voiceWorkspaceBaseUrl,
         ],
     );
 

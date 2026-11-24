@@ -10,6 +10,7 @@ export {
 // High-level Studio Surfaces (Hub, Editor, Player)
 export {
     StoryStudioHub,
+    prependStoryDraft,
     type StoryHubScrollRestore,
     type StoryHubSortKey,
     type StoryStudioHubProps,
@@ -80,12 +81,13 @@ export {
 export { StoryEditorBin } from "./components/StoryEditorBin";
 export { StoryFlowCanvas, type StoryFlowViewportActions } from "./components/StoryFlowCanvas";
 export { StoryI18nDialog, originBadgeTone, type StoryI18nDialogProps } from "./components/StoryI18nDialog";
-export { StoryImportDialog } from "./components/StoryImportDialog";
+export { StoryImportDialog, type StoryImportDialogProps } from "./components/StoryImportDialog";
 export { StoryIssueList } from "./components/StoryIssueList";
 export {
     StoryMetaDialog,
     applyMetaValuesToDoc,
     metaValuesFromDoc,
+    type StoryMetaDialogProps,
     type StoryMetaValues,
 } from "./components/StoryMetaDialog";
 export {
@@ -107,10 +109,28 @@ export { StoryNoticesDialog, type StoryNoticesDialogProps } from "./components/S
 export { StoryStageView, shouldShowStageAttribution } from "./components/StoryStageView";
 export {
     StoryVoiceManifestDialog,
+    detectAudioFilesForManifestDrop,
+    evaluateManifestText,
+    resolveVoiceManifestDialogTab,
+    type AudioFileDropDetection,
+    type ManifestEvaluation,
     type StoryVoiceManifestDialogProps,
+    type VoiceManifestDialogTab,
     type VoiceManifestUploadTabConfig,
     type VoiceManifestUploadTabContext,
 } from "./components/StoryVoiceManifestDialog";
+export {
+    VoiceCueSheetExportBar,
+    type VoiceCueSheetExportBarProps,
+} from "./components/VoiceCueSheetExportBar";
+export {
+    buildVoiceManifestUrlOptions,
+    resolveMidSceneManifestVoiceAction,
+    resolveTalkBeatVoicePlayback,
+    type MidSceneManifestVoiceAction,
+    type PickedFileLike,
+    type ResolvedTalkBeatVoice,
+} from "./components/voiceTrackUtils";
 export { VariableManagerPanel } from "./components/VariableManagerPanel";
 export { VoicePickerDialog, type VoicePickerDialogProps } from "./components/VoicePickerDialog";
 export { VoiceTrimControl } from "./components/VoiceTrimControl";

@@ -13,7 +13,36 @@ import {
     type GameRect,
     type StoryUiKit,
 } from "@moesekai/story-core";
-import type { StoryStageState } from "@moesekai/story-core";
+import type { StoryStageState, TelopPosition } from "@moesekai/story-core";
+
+/**
+ * Resolves 1920x1080 reference rectangles for `ScenarioTelop` band & text by vertical position:
+ * - `"center"` (default): authentic in-game `GAME_LAYOUT.telop` (`y = 480..600`).
+ * - `"top"`: upper stage band (`y = 124..244`), cleanly below `PlaceInfo` (`y = 31..95`) & `Menu` (`y = 16..112`).
+ * - `"bottom"`: lower stage band (`y = 840..960`), clear of faces/torsos with 120px bottom margin.
+ */
+export function resolveTelopRects(position?: TelopPosition): { band: GameRect; text: GameRect } {
+    const [bx, by, bw, bh] = GAME_LAYOUT.telop.band;
+    const [tx, ty, tw, th] = GAME_LAYOUT.telop.text;
+    if (position === "top") {
+        const dy = 124 - by;
+        return {
+            band: [bx, by + dy, bw, bh],
+            text: [tx, ty + dy, tw, th],
+        };
+    }
+    if (position === "bottom") {
+        const dy = 840 - by;
+        return {
+            band: [bx, by + dy, bw, bh],
+            text: [tx, ty + dy, tw, th],
+        };
+    }
+    return {
+        band: GAME_LAYOUT.telop.band,
+        text: GAME_LAYOUT.telop.text,
+    };
+}
 
 export interface GameStageChoiceOption {
     id: string;
@@ -375,54 +404,59 @@ export function GameStageOverlay({
                     </div>
                 )}
 
-                {/* 2. ScenarioTelop: center scene caption band */}
-                {state.telop && (
-                    <div
-                        key={`${state.telop.stepId}:${state.telop.body}`}
-                        style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
-                    >
+                {/* 2. ScenarioTelop: scene caption band (center / top / bottom) */}
+                {state.telop && (() => {
+                    const telopPosition = state.telop.position ?? "center";
+                    const telopRects = resolveTelopRects(telopPosition);
+                    return (
                         <div
-                            className={cn(
-                                "sekai-game-ui-telop-band",
-                                !reduced && "sekai-game-ui-telop-band-show",
-                            )}
-                            style={rectStyle(GAME_LAYOUT.telop.band)}
-                        />
-                        <div
-                            className={cn(
-                                "sekai-game-ui-telop-text",
-                                !reduced && "sekai-game-ui-telop-text-show",
-                            )}
-                            style={{
-                                ...rectStyle(GAME_LAYOUT.telop.text),
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                paddingInline: 96,
-                                boxSizing: "border-box",
-                                textAlign: "center",
-                                fontFamily: GAME_FONTS.body,
-                                fontWeight: GAME_FONTS.bodyWeight,
-                                fontVariationSettings: `"wght" ${GAME_FONTS.bodyWeight}`,
-                                fontSize: telopFontSize(state.telop.body),
-                                color: "#ffffff",
-                            }}
+                            key={`${state.telop.stepId}:${state.telop.body}:${telopPosition}`}
+                            data-telop-position={telopPosition}
+                            style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
                         >
-                            <span
+                            <div
+                                className={cn(
+                                    "sekai-game-ui-telop-band",
+                                    !reduced && "sekai-game-ui-telop-band-show",
+                                )}
+                                style={rectStyle(telopRects.band)}
+                            />
+                            <div
+                                className={cn(
+                                    "sekai-game-ui-telop-text",
+                                    !reduced && "sekai-game-ui-telop-text-show",
+                                )}
                                 style={{
-                                    maxWidth: "100%",
-                                    overflow: "hidden",
-                                    display: "-webkit-box",
-                                    WebkitLineClamp: 2,
-                                    WebkitBoxOrient: "vertical",
-                                    whiteSpace: "pre-wrap",
+                                    ...rectStyle(telopRects.text),
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    paddingInline: 96,
+                                    boxSizing: "border-box",
+                                    textAlign: "center",
+                                    fontFamily: GAME_FONTS.body,
+                                    fontWeight: GAME_FONTS.bodyWeight,
+                                    fontVariationSettings: `"wght" ${GAME_FONTS.bodyWeight}`,
+                                    fontSize: telopFontSize(state.telop.body),
+                                    color: "#ffffff",
                                 }}
                             >
-                                {state.telop.body}
-                            </span>
+                                <span
+                                    style={{
+                                        maxWidth: "100%",
+                                        overflow: "hidden",
+                                        display: "-webkit-box",
+                                        WebkitLineClamp: 2,
+                                        WebkitBoxOrient: "vertical",
+                                        whiteSpace: "pre-wrap",
+                                    }}
+                                >
+                                    {state.telop.body}
+                                </span>
+                            </div>
                         </div>
-                    </div>
-                )}
+                    );
+                })()}
 
                 {/* 3. TalkWindow: bottom dialogue box */}
                 {state.dialogue && (

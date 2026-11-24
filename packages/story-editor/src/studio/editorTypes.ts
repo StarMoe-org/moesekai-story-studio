@@ -30,8 +30,12 @@ export interface EditorSlotContext {
     saveStatus: StoryEditorSaveStatus;
     /** Show a toast notification in the editor Snackbar. */
     notify: (message: string) => void;
-    /** Open the custom voice track manifest dialog (optionally targeting the host-injected upload tab). */
+    /** Open the custom voice track manifest dialog (defaults to the host upload tab when provided). */
     openVoiceManifestDialog: (tab?: "import" | "upload") => void;
+    /** True when a custom voice track manifest with at least one line is mounted. */
+    hasVoiceManifest: boolean;
+    /** Currently mounted custom voice track manifest (or null when unmounted). */
+    currentVoiceManifest: StoryVoiceManifest | null;
     /** Mount or clear the active playtest custom voice track manifest. */
     applyVoiceManifest: (manifest: StoryVoiceManifest | null) => void;
     /** Commit a document update onto the editor undo stack and mark dirty. */
@@ -66,8 +70,6 @@ export interface EditorTopBarSlotContext extends EditorSlotContext {
     saveNow: () => Promise<void>;
     /** Number of attached translation locale packs on `doc`. */
     attachedLocaleCount: number;
-    /** True when a custom voice track manifest with at least one line is mounted. */
-    hasVoiceManifest: boolean;
     /** Built-in dialog openers for custom top bar controls. */
     openMetaDialog: () => void;
     openI18nDialog: () => void;
@@ -203,6 +205,8 @@ export interface StoryStudioEditorProps {
     getDraftPlayHref?: (draftId: string) => string;
     /** Initial custom voice track manifest mounted for playtest (e.g. loaded from Desktop `voices/manifest.json`). */
     initialVoiceManifest?: StoryVoiceManifest | null;
+    /** Called whenever the mounted custom voice track manifest is applied, updated, or cleared in the editor. */
+    onVoiceManifestChange?: (manifest: StoryVoiceManifest | null) => void;
     /** Host slots for Web Community features or Electron Workspace / Pi Agent integration. */
     slots?: StoryStudioEditorSlots;
 }

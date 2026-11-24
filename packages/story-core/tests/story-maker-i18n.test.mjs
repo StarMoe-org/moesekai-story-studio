@@ -46,6 +46,9 @@ const {
     extractTranslatableSource,
     getAvailableStoryLocales,
     inferStorySourceLocale,
+    isSafeDesktopWorkspaceUrl,
+    isSafeLocalWorkspaceVoicePath,
+    isSafeVoiceBlobUrl,
     isSafeVoiceManifestUrl,
     matchVoiceManifestToDoc,
     parseAndValidateLocalePack,
@@ -53,6 +56,7 @@ const {
     resolveVoiceManifestLineUrl,
     upgradePackToProofread,
 } = await import("../src/story/i18nPack.ts");
+const { collectStoryAssets } = await import("../src/story/preloader.ts");
 
 function buildSampleBilingualDoc() {
     let doc = createStoryDocument("jp", "屋顶上的小约定");
@@ -833,4 +837,325 @@ test("10. parseStoryVoiceManifest accepts backend-compatible beat IDs ([A-Za-z0-
     assert.ok(parsed.lines[longBeatId]);
     assert.equal(parsed.lines[tooLongBeatId], undefined);
     assert.equal(parsed.lines["bad/beat"], undefined);
+});
+
+test("11. Local workspace path, desktop workspace URL, and blob URL validators enforce strict safety boundaries", () => {
+    // Safe local workspace voice paths
+    assert.equal(isSafeLocalWorkspaceVoicePath("voices/b1.ogg"), true);
+    assert.equal(isSafeLocalWorkspaceVoicePath("/voices/b1.ogg"), true);
+    assert.equal(isSafeLocalWorkspaceVoicePath("b1.mp3"), true);
+    assert.equal(isSafeLocalWorkspaceVoicePath("voices/sub/clip_01.wav?v=2"), true);
+    // Unsafe local workspace voice paths
+    assert.equal(isSafeLocalWorkspaceVoicePath(""), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("   "), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("/"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("."), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("../secret.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("voices/../secret.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("/voices/../secret.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("voices/%2e%2e/secret.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("voices\\b1.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("voices/b 1.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("voices/b1.ogg\n"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("voices/b1\x00.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("//evil.example/b1.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("voices//b1.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("https://cdn.example.com/b1.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("http://cdn.example.com/b1.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("file:///C:/b1.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("javascript:alert(1)"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("C:/voices/b1.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("/C:/voices/b1.ogg"), false);
+    assert.equal(isSafeLocalWorkspaceVoicePath("moesekai-app://workspace/voices/b1.ogg"), false);
+
+    // Safe desktop workspace URLs
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://workspace/voices/b1.ogg"), true);
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://app/workspace/voices/b1.ogg"), true);
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://app/workspace/voices/sub/b1.ogg?t=1"), true);
+    // Unsafe desktop workspace URLs
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://workspace/"), false);
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://app/workspace/"), false);
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://workspace/../secret.ogg"), false);
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://app/workspace/voices/../secret.ogg"), false);
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://app/workspace/voices/%2e%2e/secret.ogg"), false);
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://app/workspace/voices\\b1.ogg"), false);
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://app/workspace/voices/b1\u0007.ogg"), false);
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://app/other/voices/b1.ogg"), false);
+    assert.equal(isSafeDesktopWorkspaceUrl("moesekai-app://evil/voices/b1.ogg"), false);
+    assert.equal(isSafeDesktopWorkspaceUrl("file:///workspace/voices/b1.ogg"), false);
+    assert.equal(isSafeDesktopWorkspaceUrl("https://cdn.example.com/voices/b1.ogg"), false);
+
+    // Safe blob URLs
+    assert.equal(isSafeVoiceBlobUrl("blob:https://moesekai.com/550e8400-e29b-41d4-a716-446655440000"), true);
+    assert.equal(isSafeVoiceBlobUrl("blob:http://localhost:3000/abc-123"), true);
+    assert.equal(isSafeVoiceBlobUrl("blob:null/abc-123"), true);
+    assert.equal(isSafeVoiceBlobUrl("blob:moesekai-app://app/abc-123"), true);
+    // Unsafe blob URLs
+    assert.equal(isSafeVoiceBlobUrl("blob:"), false);
+    assert.equal(isSafeVoiceBlobUrl("blob:https://moesekai.com/has space"), false);
+    assert.equal(isSafeVoiceBlobUrl("blob:https://moesekai.com/a\nb"), false);
+    assert.equal(isSafeVoiceBlobUrl("blob:javascript:alert(1)"), false);
+    assert.equal(isSafeVoiceBlobUrl("https://moesekai.com/abc.ogg"), false);
+    assert.equal(isSafeVoiceBlobUrl("javascript:alert(1)"), false);
+
+    // Public HTTPS validator remains strictly unchanged (must still reject desktop, blob, and bare relative paths)
+    assert.equal(isSafeVoiceManifestUrl("voices/b1.ogg"), false);
+    assert.equal(isSafeVoiceManifestUrl("moesekai-app://app/workspace/voices/b1.ogg"), false);
+    assert.equal(isSafeVoiceManifestUrl("blob:https://moesekai.com/abc-123"), false);
+});
+
+test("12. parseStoryVoiceManifest supports overrideOfficialVoice, opt-in local workspace & blob URLs while preserving strict defaults", () => {
+    const rawLocal = {
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_local",
+        locale: "zh-CN",
+        overrideOfficialVoice: true,
+        lines: {
+            b1: { url: "voices/b1.ogg", objectKey: "voices/b1.ogg", speaker: "Ichika" },
+            b2: { url: "/voices/b2.ogg" },
+            b3: { url: "moesekai-app://workspace/voices/b3.ogg" },
+            b4: { url: "moesekai-app://app/workspace/voices/b4.ogg" },
+            b5: { url: "", objectKey: "voices/b5.ogg" },
+            bad_http: { url: "http://cdn.example.com/bad.ogg" },
+            bad_file: { url: "file:///C:/bad.ogg" },
+            bad_priv: { url: "https://127.0.0.1/bad.ogg" },
+            bad_trav: { url: "voices/../secret.ogg" },
+            bad_desktop_trav: { url: "moesekai-app://app/workspace/../secret.ogg" },
+            bad_blob: { url: "blob:https://moesekai.com/uuid-1" },
+        },
+    };
+
+    // Strict default rejects bare relative, desktop workspace, and blob URLs (only /voices/b2.ogg remains)
+    const strictParsed = parseStoryVoiceManifest(rawLocal);
+    assert.ok(strictParsed);
+    assert.equal(strictParsed.overrideOfficialVoice, true);
+    assert.deepEqual(Object.keys(strictParsed.lines), ["b2"]);
+
+    // Strict default returns null when ONLY local/desktop/blob URLs exist
+    assert.equal(parseStoryVoiceManifest({
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_local",
+        lines: { b1: { url: "voices/b1.ogg" } },
+    }), null);
+    assert.equal(parseStoryVoiceManifest({
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_local",
+        lines: { b1: { url: "moesekai-app://app/workspace/voices/b1.ogg" } },
+    }), null);
+    assert.equal(parseStoryVoiceManifest({
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_local",
+        lines: { b1: { url: "blob:https://moesekai.com/uuid-1" } },
+    }), null);
+
+    // Opt-in allowLocalWorkspaceUrls accepts safe local & desktop workspace URLs, still rejects http/file/private/traversal/blob
+    const localParsed = parseStoryVoiceManifest(rawLocal, { allowLocalWorkspaceUrls: true });
+    assert.ok(localParsed);
+    assert.equal(localParsed.overrideOfficialVoice, true);
+    assert.deepEqual(Object.keys(localParsed.lines), ["b1", "b2", "b3", "b4", "b5"]);
+    assert.equal(localParsed.lines.b1.url, "voices/b1.ogg");
+    assert.equal(localParsed.lines.b1.objectKey, "voices/b1.ogg");
+    assert.equal(localParsed.lines.b5.url, "voices/b5.ogg");
+    assert.equal(localParsed.lines.bad_blob, undefined);
+
+    // Local workspace baseUrl variants (desktop root, desktop subdir, relative dir)
+    const withDesktopBase = parseStoryVoiceManifest({
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_local",
+        baseUrl: "moesekai-app://app/workspace/",
+        overrideOfficialVoice: false,
+        lines: { b1: { url: "voices/b1.ogg" } },
+    }, { allowLocalWorkspaceUrls: true });
+    assert.ok(withDesktopBase);
+    assert.equal(withDesktopBase.overrideOfficialVoice, false);
+    assert.equal(withDesktopBase.baseUrl, "moesekai-app://app/workspace/");
+
+    const withRelativeBase = parseStoryVoiceManifest({
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_local",
+        baseUrl: "voices",
+        lines: { b1: { url: "b1.ogg" } },
+    }, { allowLocalWorkspaceUrls: true });
+    assert.ok(withRelativeBase);
+    assert.equal(withRelativeBase.baseUrl, "voices");
+
+    // Unsafe baseUrls are still rejected even with allowLocalWorkspaceUrls
+    assert.equal(parseStoryVoiceManifest({
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_local",
+        baseUrl: "http://localhost:3000/voices",
+        lines: { b1: { url: "b1.ogg" } },
+    }, { allowLocalWorkspaceUrls: true }), null);
+    assert.equal(parseStoryVoiceManifest({
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_local",
+        baseUrl: "../outside",
+        lines: { b1: { url: "b1.ogg" } },
+    }, { allowLocalWorkspaceUrls: true }), null);
+
+    // Opt-in allowBlobUrls accepts blob: URLs while still rejecting bare relative & desktop URLs
+    const blobParsed = parseStoryVoiceManifest(rawLocal, { allowBlobUrls: true });
+    assert.ok(blobParsed);
+    assert.deepEqual(Object.keys(blobParsed.lines), ["b2", "bad_blob"]);
+    assert.equal(blobParsed.lines.bad_blob.url, "blob:https://moesekai.com/uuid-1");
+});
+
+test("13. resolveVoiceManifestLineUrl resolves local workspace bases, normalizes desktop URLs, passes blob URLs, and blocks traversal", () => {
+    const manifest = {
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_1",
+        lines: {
+            rel: { url: "voices/b1.ogg", objectKey: "voices/b1.ogg" },
+            legacySlash: { url: "/voices/b2.ogg" },
+            desktopLegacy: { url: "moesekai-app://workspace/voices/b3.ogg" },
+            desktopSameOrigin: { url: "moesekai-app://app/workspace/voices/b4.ogg" },
+            blobLine: { url: "blob:https://moesekai.com/550e8400-e29b-41d4-a716-446655440000" },
+            httpsLine: { url: "https://cdn.example.com/voices/b5.ogg" },
+            keyOnly: { url: "", objectKey: "voices/b6.ogg" },
+            travRel: { url: "voices/../secret.ogg" },
+            travSlash: { url: "/voices/../secret.ogg" },
+            travDesktop: { url: "moesekai-app://workspace/../secret.ogg" },
+            badHttp: { url: "http://cdn.example.com/b.ogg" },
+            badFile: { url: "file:///C:/voices/b.ogg" },
+            badJs: { url: "javascript:alert(1)" },
+        },
+    };
+
+    // Default (no options): only public https & safe same-origin /...
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "rel"), []);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "legacySlash"), ["/voices/b2.ogg"]);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "desktopLegacy"), []);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "desktopSameOrigin"), []);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "blobLine"), []);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "httpsLine"), ["https://cdn.example.com/voices/b5.ogg"]);
+
+    // With string localWorkspaceBaseUrl + allowBlobUrls
+    const desktopOpts = { localWorkspaceBaseUrl: "moesekai-app://app/workspace/", allowBlobUrls: true };
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "rel", desktopOpts), [
+        "moesekai-app://app/workspace/voices/b1.ogg",
+    ]);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "legacySlash", desktopOpts), [
+        "moesekai-app://app/workspace/voices/b2.ogg",
+    ]);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "desktopLegacy", desktopOpts), [
+        "moesekai-app://app/workspace/voices/b3.ogg",
+    ]);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "desktopSameOrigin", desktopOpts), [
+        "moesekai-app://app/workspace/voices/b4.ogg",
+    ]);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "blobLine", desktopOpts), [
+        "blob:https://moesekai.com/550e8400-e29b-41d4-a716-446655440000",
+    ]);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "httpsLine", desktopOpts), [
+        "https://cdn.example.com/voices/b5.ogg",
+    ]);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "keyOnly", desktopOpts), [
+        "moesekai-app://app/workspace/voices/b6.ogg",
+    ]);
+
+    // Unsafe paths/schemes always rejected even with both options enabled
+    for (const badId of ["travRel", "travSlash", "travDesktop", "badHttp", "badFile", "badJs"]) {
+        assert.deepEqual(resolveVoiceManifestLineUrl(manifest, badId, desktopOpts), [], `Expected ${badId} to be rejected`);
+    }
+
+    // Resolver function form of localWorkspaceBaseUrl
+    const fnOpts = {
+        localWorkspaceBaseUrl: (rel) => `moesekai-app://app/workspace/${rel}`,
+    };
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "rel", fnOpts), [
+        "moesekai-app://app/workspace/voices/b1.ogg",
+    ]);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "legacySlash", fnOpts), [
+        "moesekai-app://app/workspace/voices/b2.ogg",
+    ]);
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "desktopLegacy", fnOpts), [
+        "moesekai-app://app/workspace/voices/b3.ogg",
+    ]);
+    // Function returning unsafe scheme is rejected
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "rel", {
+        localWorkspaceBaseUrl: () => "file:///etc/passwd",
+    }), []);
+    // Unsafe string localWorkspaceBaseUrl is rejected
+    assert.deepEqual(resolveVoiceManifestLineUrl(manifest, "rel", {
+        localWorkspaceBaseUrl: "http://evil.example/",
+    }), []);
+
+    // Remote HTTPS manifest.baseUrl keeps resolving to HTTPS even when localWorkspaceBaseUrl is provided
+    const remoteWithBase = {
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_remote",
+        baseUrl: "https://cdn.example.com/dub",
+        lines: {
+            b1: { url: "lines/b1.ogg" },
+        },
+    };
+    assert.deepEqual(resolveVoiceManifestLineUrl(remoteWithBase, "b1", desktopOpts), [
+        "https://cdn.example.com/dub/lines/b1.ogg",
+    ]);
+
+    // Local relative manifest.baseUrl combines cleanly with localWorkspaceBaseUrl
+    const localWithBase = {
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: "story_local_base",
+        baseUrl: "voices",
+        lines: {
+            b1: { url: "b1.ogg" },
+        },
+    };
+    assert.deepEqual(resolveVoiceManifestLineUrl(localWithBase, "b1", desktopOpts), [
+        "moesekai-app://app/workspace/voices/b1.ogg",
+    ]);
+});
+
+test("14. collectStoryAssets respects overrideOfficialVoice and forwards voiceManifestUrlOptions", () => {
+    const { doc, beatIds } = buildSampleBilingualDoc();
+    // In buildSampleBilingualDoc: b1 has NO official voice; b3 HAS official voice (event_001_01/voice_ev_01).
+    const baseManifest = {
+        schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+        storyId: doc.id,
+        lines: {
+            [beatIds.b1]: { url: "voices/b1.ogg", speaker: "星乃一歌" },
+            [beatIds.b3]: { url: "voices/b3_custom.ogg", speaker: "星乃一歌" },
+        },
+    };
+
+    // Without overrideOfficialVoice: b3 keeps official voice, b1 uses custom resolved via localWorkspaceBaseUrl
+    const fallbackPreload = collectStoryAssets(doc, {
+        includeUiKit: false,
+        voiceManifest: baseManifest,
+        voiceManifestUrlOptions: { localWorkspaceBaseUrl: "moesekai-app://app/workspace/" },
+    });
+    assert.equal(fallbackPreload.voices.length, 2);
+    const fallbackB1 = fallbackPreload.voices.find((v) => v.urls[0] === "moesekai-app://app/workspace/voices/b1.ogg");
+    const fallbackB3Official = fallbackPreload.voices.find((v) => v.voice?.voiceId === "voice_ev_01");
+    assert.ok(fallbackB1, "Expected custom fallback voice for b1");
+    assert.ok(fallbackB3Official, "Expected official voice for b3 when overrideOfficialVoice is falsy");
+
+    // With overrideOfficialVoice: true, b3 preloads custom voice instead of official voice
+    const overridePreload = collectStoryAssets(doc, {
+        includeUiKit: false,
+        voiceManifest: { ...baseManifest, overrideOfficialVoice: true },
+        voiceManifestUrlOptions: { localWorkspaceBaseUrl: "moesekai-app://app/workspace/" },
+    });
+    assert.equal(overridePreload.voices.length, 2);
+    assert.equal(overridePreload.voices.some((v) => v.voice?.voiceId === "voice_ev_01"), false);
+    assert.ok(overridePreload.voices.some((v) => v.urls[0] === "moesekai-app://app/workspace/voices/b1.ogg"));
+    assert.ok(overridePreload.voices.some((v) => v.urls[0] === "moesekai-app://app/workspace/voices/b3_custom.ogg"));
+
+    // With overrideOfficialVoice: true, a beat with official voice NOT present in manifest still preloads official voice
+    const partialOverridePreload = collectStoryAssets(doc, {
+        includeUiKit: false,
+        voiceManifest: {
+            schema: STORY_VOICE_MANIFEST_SCHEMA_VERSION,
+            storyId: doc.id,
+            overrideOfficialVoice: true,
+            lines: {
+                [beatIds.b1]: { url: "blob:https://moesekai.com/b1-uuid", speaker: "星乃一歌" },
+            },
+        },
+        voiceManifestUrlOptions: { allowBlobUrls: true },
+    });
+    assert.equal(partialOverridePreload.voices.length, 2);
+    assert.ok(partialOverridePreload.voices.some((v) => v.urls[0] === "blob:https://moesekai.com/b1-uuid"));
+    assert.ok(partialOverridePreload.voices.some((v) => v.voice?.voiceId === "voice_ev_01"));
 });

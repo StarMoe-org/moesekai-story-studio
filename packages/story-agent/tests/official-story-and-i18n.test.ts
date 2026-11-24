@@ -12,7 +12,7 @@ import {
     prepareVoiceCueSheet,
 } from "../src/i18n-tools";
 import { mineOfficialStory } from "../src/official-story";
-import { writeStoryScript } from "../src/workspace";
+import { readVoiceManifestFromDisk, writeStoryScript } from "../src/workspace";
 
 const SAMPLE_EN_STORY = `@story "Nightcord Late Call" region=jp id="niigo_call" author="Test" summary="Kanade and Mafuyu talk."
 
@@ -437,10 +437,55 @@ describe("i18n chunking, locale validation & user voice cue-sheet / manifest", (
             autoMatchAudioDir: "voices",
             locale: "ja-JP",
             title: "User Local Voices",
+            overrideOfficialVoice: true,
         });
         expect(appliedManifest.ok).toBe(true);
         expect(appliedManifest.filePath).toBe("voices/manifest.json");
         expect(appliedManifest.matchSummary?.matchedCount).toBe(2);
         expect(appliedManifest.matchSummary?.totalTalkBeats).toBe(2);
+        expect(appliedManifest.manifest?.overrideOfficialVoice).toBe(true);
+        // Auto-match writes portable relative paths `voices/...` (NOT `/voices/...`)
+        expect(appliedManifest.manifest?.lines[beat1]?.url).toBe(`voices/${beat1}.ogg`);
+        expect(appliedManifest.manifest?.lines[beat1]?.objectKey).toBe(`voices/${beat1}.ogg`);
+        expect(appliedManifest.manifest?.lines[beat2]?.url).toBe(`voices/${beat2}.mp3`);
+        expect(appliedManifest.manifest?.lines[beat2]?.objectKey).toBe(`voices/${beat2}.mp3`);
+
+        // Reading back from disk succeeds with allowLocalWorkspaceUrls enabled
+        const loadedFromDisk = await readVoiceManifestFromDisk(dir);
+        expect(loadedFromDisk?.manifest?.lines[beat1]?.url).toBe(`voices/${beat1}.ogg`);
+        expect(loadedFromDisk?.manifest?.overrideOfficialVoice).toBe(true);
+
+        // Passing rawManifestJson with portable relative workspace paths validates cleanly
+        const rawLocalRes = await applyVoiceManifest(dir, "story.msk", {
+            rawManifestJson: JSON.stringify({
+                schema: "moesekai-story-voice/1",
+                storyId: "niigo_call",
+                locale: "ja-JP",
+                overrideOfficialVoice: false,
+                lines: {
+                    [beat1]: { url: `voices/${beat1}.ogg`, objectKey: `voices/${beat1}.ogg` },
+                },
+            }),
+        });
+        expect(rawLocalRes.ok).toBe(true);
+        expect(rawLocalRes.manifest?.lines[beat1]?.url).toBe(`voices/${beat1}.ogg`);
+        expect(rawLocalRes.manifest?.overrideOfficialVoice).toBe(false);
+
+        // Unsafe rawManifestJson payloads (http, file, private IP, traversal) remain blocked
+        for (const unsafeUrl of [
+            "http://example.com/bad.ogg",
+            "file:///C:/bad.ogg",
+            "https://127.0.0.1/bad.ogg",
+            "voices/../secret.ogg",
+        ]) {
+            const rejected = await applyVoiceManifest(dir, "story.msk", {
+                rawManifestJson: JSON.stringify({
+                    schema: "moesekai-story-voice/1",
+                    storyId: "niigo_call",
+                    lines: { [beat1]: { url: unsafeUrl } },
+                }),
+            });
+            expect(rejected.ok).toBe(false);
+        }
     });
 });

@@ -22,24 +22,28 @@ import { SERVER_LABEL_KEYS } from "@moesekai/story-core";
 import { getCharacterIconUrl, type AssetLine } from "@moesekai/story-core";
 import { UI_LOCALE_LABELS, type UiLocale } from "@moesekai/story-core";
 import { md3EffectsFast, reducedMotionFade } from "../md3/motion";
-import { storyBgmUrl, storySeCandidateUrls, storyVoiceCandidateUrls } from "@moesekai/story-core";
-import { compileStoryGraph, type StoryIR } from "@moesekai/story-core";
+import { storyBgmUrl, storySeCandidateUrls } from "@moesekai/story-core";
+import { compileStoryGraph } from "@moesekai/story-core";
 import {
-    applyStoryLocaleOverlay, getAvailableStoryLocales, resolveVoiceManifestLineUrl,
+    applyStoryLocaleOverlay, getAvailableStoryLocales,
 } from "@moesekai/story-core";
-import { SLOT_X, STORY_FADE_SECONDS, STORY_LIMITS, layoutStageActors } from "@moesekai/story-core";
+import { STORY_FADE_SECONDS, STORY_LIMITS, getStageActionItems } from "@moesekai/story-core";
 import {
     collectStoryAssets, inspectStoryCacheStatus, preloadStoryAssets,
     type StoryPreloadAudioItem, type StoryPreloadProgress,
 } from "@moesekai/story-core";
 import {
-    INITIAL_STAGE_STATE, advanceRuntime, applyVarOps, createInitialRuntime, evaluateStageAt,
+    INITIAL_STAGE_STATE, advanceRuntime, createInitialRuntime, evaluateStageAt,
     initVariables, interpolateStoryText, localizeRuntimeFrame, type StoryRuntimeFrame,
 } from "@moesekai/story-core";
 import type {
-    StoryDocument, StoryEffectColor, StoryStageActorState, StoryStageState, StoryVarValues,
+    StoryDocument, StoryEffectColor, StoryStageState, StoryVarValues,
     StoryVoiceManifest, StoryVoiceRef,
 } from "@moesekai/story-core";
+import {
+    applyInstructionToStage,
+    executeChoreographyFrame,
+} from "../live2d/choreographyRunner";
 import {
     AssetPreloadDialog, readAutoPreloadPreference, writeAutoPreloadPreference,
 } from "./AssetPreloadPanel";
@@ -53,6 +57,11 @@ import { previewStorySound, useStoryAudio } from "./useStoryAudio";
 import { useStoryModels } from "./useStoryModels";
 import { useStoryStage } from "./useStoryStage";
 import { useStoryUiKit } from "./useStoryUiKit";
+import {
+    buildVoiceManifestUrlOptions,
+    resolveMidSceneManifestVoiceAction,
+    resolveTalkBeatVoicePlayback,
+} from "./voiceTrackUtils";
 
 export type PlayerLayoutMode = "workspace" | "theater";
 
@@ -265,262 +274,7 @@ function formatSec(value: number): string {
     return value.toFixed(2);
 }
 
-function nextActorAutoOrder(actors: readonly StoryStageActorState[], targetCastKey?: string): number {
-    let maxOther = 0;
-    let current = 0;
-    for (const actor of actors) {
-        const order = typeof actor.autoOrder === "number" && Number.isFinite(actor.autoOrder) ? actor.autoOrder : 0;
-        if (targetCastKey && actor.cast === targetCastKey) {
-            current = order;
-        } else if (order > maxOther) {
-            maxOther = order;
-        }
-    }
-    return current > maxOther ? current : maxOther + 1;
-}
-
-/**
- * Pure incremental stage reducer mirroring `runtime.ts` so `StoryPlayerView` can animate each
- * IR instruction inside `frame.executedInstructions` smoothly (scene transitions, stage actions,
- * cues, varOps, talk + synchronous co-star reactions) before settling on `frame.stage`.
- */
-export function applyInstructionToStage(
-    stage: StoryStageState,
-    vars: StoryVarValues,
-    inst: StoryIR,
-    doc: StoryDocument,
-): { stage: StoryStageState; variables: StoryVarValues } {
-    switch (inst.op) {
-        case "enterScene": {
-            const background = inst.background.mode === "inherit"
-                ? stage.background
-                : inst.background.mode === "clear"
-                    ? null
-                    : inst.background.asset;
-            const bgm = inst.bgm.mode === "inherit"
-                ? stage.bgm
-                : inst.bgm.mode === "stop"
-                    ? { name: null, volume: stage.bgm.volume }
-                    : { name: inst.bgm.name, volume: inst.bgm.volume };
-            const place = inst.place.mode === "inherit"
-                ? stage.place
-                : inst.place.mode === "hide"
-                    ? null
-                    : (interpolateStoryText(inst.place.text, doc, vars).trim() || null);
-            const actors: StoryStageActorState[] = inst.stageCast.mode === "inherit"
-                ? stage.actors
-                : inst.stageCast.mode === "clear"
-                    ? []
-                    : layoutStageActors(inst.stageCast.actors.map(actor => ({
-                        cast: actor.castKey,
-                        slot: actor.slot,
-                        x: SLOT_X[actor.slot],
-                        y: actor.y ?? 0,
-                        scale: actor.scale ?? 1,
-                        mirror: false,
-                        motion: actor.motion ?? null,
-                        facial: actor.facial ?? null,
-                        ...(actor.z !== undefined ? { z: actor.z } : {}),
-                        ...(actor.allowOverlap ? { allowOverlap: true } : {}),
-                    })));
-            const screenColor: StoryEffectColor = inst.transition.kind === "fadeWhite" ? "white" : "black";
-            return {
-                stage: {
-                    background,
-                    place,
-                    actors,
-                    bgm,
-                    dialogue: null,
-                    narration: null,
-                    telop: null,
-                    screen: { color: screenColor, covered: false },
-                    speaking: null,
-                },
-                variables: vars,
-            };
-        }
-        case "talk": {
-            const beat = inst.beat;
-            const member = beat.speakerKey ? doc.cast.find(item => item.key === beat.speakerKey) : undefined;
-            const speaker = beat.speakerName
-                ? interpolateStoryText(beat.speakerName, doc, vars)
-                : (member?.name ?? "");
-            const body = interpolateStoryText(beat.body, doc, vars);
-            const onStage = Boolean(beat.speakerKey && stage.actors.some(a => a.cast === beat.speakerKey));
-
-            const reactionByKey = new Map<string, { motion?: string; facial?: string }>();
-            if (beat.speakerKey && (beat.motion || beat.facial)) {
-                reactionByKey.set(beat.speakerKey, { motion: beat.motion, facial: beat.facial });
-            }
-            for (const reaction of beat.reactions ?? []) {
-                if (reaction.motion || reaction.facial) {
-                    const prev = reactionByKey.get(reaction.castKey);
-                    reactionByKey.set(reaction.castKey, {
-                        motion: reaction.motion ?? prev?.motion,
-                        facial: reaction.facial ?? prev?.facial,
-                    });
-                }
-            }
-
-            const speakerAutoOrder = onStage && beat.speakerKey
-                ? nextActorAutoOrder(stage.actors, beat.speakerKey)
-                : undefined;
-            const actors = reactionByKey.size === 0 && !onStage
-                ? stage.actors
-                : stage.actors.map((actor) => {
-                    const pose = reactionByKey.get(actor.cast);
-                    const bumpSpeaker = onStage && actor.cast === beat.speakerKey && speakerAutoOrder !== undefined && actor.autoOrder !== speakerAutoOrder;
-                    if (!pose && !bumpSpeaker) return actor;
-                    return {
-                        ...actor,
-                        ...(pose ? { motion: pose.motion ?? actor.motion, facial: pose.facial ?? actor.facial } : {}),
-                        ...(bumpSpeaker ? { autoOrder: speakerAutoOrder } : {}),
-                    };
-                });
-
-            return {
-                stage: {
-                    ...stage,
-                    actors,
-                    narration: null,
-                    telop: null,
-                    dialogue: {
-                        stepId: beat.id,
-                        cast: beat.speakerKey ?? null,
-                        speaker,
-                        body,
-                    },
-                    speaking: onStage ? (beat.speakerKey ?? null) : null,
-                },
-                variables: vars,
-            };
-        }
-        case "narration":
-            return {
-                stage: {
-                    ...stage,
-                    dialogue: null,
-                    telop: null,
-                    speaking: null,
-                    narration: {
-                        stepId: inst.beat.id,
-                        body: interpolateStoryText(inst.beat.body, doc, vars),
-                    },
-                },
-                variables: vars,
-            };
-        case "telop":
-            return {
-                stage: {
-                    ...stage,
-                    dialogue: null,
-                    narration: null,
-                    speaking: null,
-                    telop: {
-                        stepId: inst.beat.id,
-                        body: interpolateStoryText(inst.beat.text, doc, vars),
-                    },
-                },
-                variables: vars,
-            };
-        case "stageAction": {
-            const beat = inst.beat;
-            const base: StoryStageState = { ...stage, telop: null, speaking: null };
-            if (beat.action === "enter") {
-                const slot = beat.slot ?? "center";
-                const remaining = stage.actors.filter(a => a.cast !== beat.castKey);
-                const autoOrder = nextActorAutoOrder(remaining);
-                const actor: StoryStageActorState = {
-                    cast: beat.castKey,
-                    slot,
-                    x: SLOT_X[slot],
-                    y: beat.y ?? 0,
-                    scale: beat.scale ?? 1,
-                    mirror: false,
-                    motion: beat.motion ?? null,
-                    facial: beat.facial ?? null,
-                    ...(beat.z !== undefined ? { z: beat.z } : {}),
-                    autoOrder,
-                    ...(beat.allowOverlap ? { allowOverlap: true } : {}),
-                };
-                return {
-                    stage: { ...base, actors: layoutStageActors([...remaining, actor]) },
-                    variables: vars,
-                };
-            }
-            if (beat.action === "exit") {
-                return {
-                    stage: { ...base, actors: layoutStageActors(stage.actors.filter(a => a.cast !== beat.castKey)) },
-                    variables: vars,
-                };
-            }
-            if (beat.action === "move") {
-                const autoOrder = nextActorAutoOrder(stage.actors, beat.castKey);
-                return {
-                    stage: {
-                        ...base,
-                        actors: layoutStageActors(stage.actors.map((actor) => {
-                            if (actor.cast !== beat.castKey) return actor;
-                            const nextSlot = beat.slot ?? actor.slot;
-                            const nextOverlap = beat.allowOverlap ?? actor.allowOverlap;
-                            const nextZ = beat.z !== undefined ? beat.z : actor.z;
-                            return {
-                                ...actor,
-                                slot: nextSlot,
-                                x: SLOT_X[nextSlot],
-                                scale: beat.scale ?? actor.scale,
-                                y: beat.y ?? actor.y,
-                                motion: beat.motion ?? actor.motion,
-                                facial: beat.facial ?? actor.facial,
-                                ...(nextZ !== undefined ? { z: nextZ } : {}),
-                                autoOrder,
-                                ...(nextOverlap ? { allowOverlap: true } : { allowOverlap: undefined }),
-                            };
-                        })),
-                    },
-                    variables: vars,
-                };
-            }
-            return {
-                stage: {
-                    ...base,
-                    actors: stage.actors.map((actor) => {
-                        if (actor.cast !== beat.castKey) return actor;
-                        const nextZ = beat.z !== undefined ? beat.z : actor.z;
-                        return {
-                            ...actor,
-                            motion: beat.motion ?? actor.motion,
-                            facial: beat.facial ?? actor.facial,
-                            ...(nextZ !== undefined ? { z: nextZ } : {}),
-                        };
-                    }),
-                },
-                variables: vars,
-            };
-        }
-        case "varOp":
-            return {
-                stage: { ...stage, telop: null, speaking: null },
-                variables: applyVarOps(inst.ops, vars, doc),
-            };
-        case "choice":
-            return {
-                stage: { ...stage, telop: null, speaking: null },
-                variables: vars,
-            };
-        case "end":
-            return {
-                stage: { ...stage, dialogue: null, narration: null, telop: null, speaking: null },
-                variables: vars,
-            };
-        case "cue":
-            return { stage: { ...stage, telop: null, speaking: null }, variables: vars };
-        case "condition":
-        case "jump":
-        case "halt":
-            return { stage, variables: vars };
-    }
-}
+export { applyInstructionToStage };
 
 /**
  * Compiler-driven deterministic player for `moesekai-story/2` graph documents with a CapCut / NLE
@@ -635,7 +389,16 @@ export function StoryPlayerView({
         defaultAutoPreload,
         showAttribution,
         openNotices,
+        voiceWorkspaceBaseUrl,
     } = useStoryStudio();
+    const voiceManifestUrlOptions = useMemo(
+        () => buildVoiceManifestUrlOptions(voiceWorkspaceBaseUrl),
+        [voiceWorkspaceBaseUrl],
+    );
+    const voiceManifestUrlOptionsRef = useRef(voiceManifestUrlOptions);
+    useEffect(() => {
+        voiceManifestUrlOptionsRef.current = voiceManifestUrlOptions;
+    }, [voiceManifestUrlOptions]);
     const includeUiKit = Boolean(sseWebScriptBase);
     const live2dSources = useMemo(() => resolveLive2dSources(doc.region), [doc.region, resolveLive2dSources]);
     const {
@@ -674,10 +437,11 @@ export function StoryPlayerView({
             assetSource: preloadSource,
             models,
             voiceManifest,
+            voiceManifestUrlOptions,
             live2dSources,
             includeUiKit,
         }),
-        [doc, includeUiKit, live2dSources, models, preloadSource, voiceManifest],
+        [doc, includeUiKit, live2dSources, models, preloadSource, voiceManifest, voiceManifestUrlOptions],
     );
 
     /** First SceneNode (and optional beat) referencing each asset, for click-to-jump in Media Bin. */
@@ -739,8 +503,10 @@ export function StoryPlayerView({
                         }
                         break;
                     case "stageAction":
-                        if (beat.castKey && !cast.has(beat.castKey)) {
-                            cast.set(beat.castKey, { nodeId, beatId: beat.id });
+                        for (const item of getStageActionItems(beat)) {
+                            if (item.castKey && !cast.has(item.castKey)) {
+                                cast.set(item.castKey, { nodeId, beatId: beat.id });
+                            }
                         }
                         break;
                     case "cue":
@@ -941,6 +707,7 @@ export function StoryPlayerView({
             assetSource: preloadSource,
             models: stageModels ?? undefined,
             voiceManifest,
+            voiceManifestUrlOptions,
             live2dSources,
             includeUiKit,
         };
@@ -986,7 +753,7 @@ export function StoryPlayerView({
                 preloadAbortRef.current = null;
             }
         };
-    }, [defaultAutoPreload, doc, includeUiKit, live2dSources, modelList.status, preloadSource, stageModels, voiceManifest]);
+    }, [defaultAutoPreload, doc, includeUiKit, live2dSources, modelList.status, preloadSource, stageModels, voiceManifest, voiceManifestUrlOptions]);
 
     const latestItem = history[history.length - 1] ?? null;
     const activeFrame = latestItem?.frame ?? null;
@@ -1050,143 +817,59 @@ export function StoryPlayerView({
 
         runningRef.current = true;
         setRunning(true);
-        let stage = baseStage;
-        let vars = baseVars;
 
-        for (const inst of frame.executedInstructions) {
-            if (playGenRef.current !== generation) return;
-            const activeDoc = localizedDocRef.current;
-            const stepped = applyInstructionToStage(stage, vars, inst, activeDoc);
-            stage = stepped.stage;
-            vars = stepped.variables;
-
-            switch (inst.op) {
-                case "enterScene": {
-                    setStageState(stage);
-                    syncBgm(
-                        stage.bgm.name ? storyBgmUrl(stage.bgm.name, doc.region, line) : null,
-                        stage.bgm.volume,
+        const result = await executeChoreographyFrame(frame, baseStage, {
+            isCancelled: () => playGenRef.current !== generation,
+            getDoc: () => localizedDocRef.current,
+            baseVars,
+            setStageState,
+            setVariables: setLiveVariables,
+            syncBgm: (bgm) => {
+                syncBgm(bgm.name ? storyBgmUrl(bgm.name, doc.region, line) : null, bgm.volume);
+            },
+            setFadeSeconds,
+            setEffectActive,
+            triggerFlash: (color, seconds) => {
+                flashKeyRef.current += 1;
+                setFlash({ key: flashKeyRef.current, color, seconds });
+            },
+            applyStage,
+            shakeStage,
+            waitMs: (ms) => waitMs(ms, generation),
+            playSe: (se, seVolume) => {
+                playSe(storySeCandidateUrls(se, localizedDocRef.current.region, line), seVolume);
+            },
+            onTalkBeat: (beat, currentStage, currentVars, activeDoc) => {
+                const body = currentStage.dialogue?.body ?? interpolateStoryText(beat.body, activeDoc, currentVars);
+                setTypedCount(reduced ? body.length : 0);
+                const resolvedVoice = resolveTalkBeatVoicePlayback({
+                    beat,
+                    region: activeDoc.region,
+                    line,
+                    voiceManifest: voiceManifestRef.current,
+                    urlOptions: voiceManifestUrlOptionsRef.current,
+                });
+                if (resolvedVoice) {
+                    startVoice(
+                        resolvedVoice.urls,
+                        {
+                            label: resolvedVoice.label,
+                            start: resolvedVoice.start,
+                            end: resolvedVoice.end,
+                        },
+                        generation,
+                        true,
                     );
-                    if (inst.transition.kind === "fadeBlack" || inst.transition.kind === "fadeWhite") {
-                        const dur = Math.max(0.1, inst.transition.duration);
-                        const color: StoryEffectColor = inst.transition.kind === "fadeWhite" ? "white" : "black";
-                        setFadeSeconds(dur);
-                        setEffectActive(true);
-                        try {
-                            flashKeyRef.current += 1;
-                            setFlash({ key: flashKeyRef.current, color, seconds: dur });
-                            await Promise.all([
-                                applyStage(stage, { instant: false, fade: true }),
-                                waitMs(dur * 1000 * 0.6, generation),
-                            ]);
-                        } finally {
-                            if (playGenRef.current === generation) setEffectActive(false);
-                        }
-                    } else {
-                        setFadeSeconds(0);
-                        await applyStage(stage, { instant: false, fade: false });
-                    }
-                    break;
                 }
-                case "stageAction": {
-                    setStageState(stage);
-                    const beat = inst.beat;
-                    await applyStage(stage, {
-                        instant: false,
-                        fade: beat.action === "enter" || beat.action === "exit",
-                        moveSeconds: beat.action === "move" ? (beat.duration ?? STORY_FADE_SECONDS) : undefined,
-                    });
-                    break;
-                }
-                case "cue": {
-                    const beat = inst.beat;
-                    setStageState(stage);
-                    if (beat.cueType === "se") {
-                        if (beat.se) playSe(storySeCandidateUrls(beat.se, doc.region, line), beat.seVolume);
-                    } else {
-                        setEffectActive(true);
-                        try {
-                            if (beat.cueType === "flash") {
-                                const dur = beat.duration ?? 0.4;
-                                flashKeyRef.current += 1;
-                                setFlash({ key: flashKeyRef.current, color: beat.color ?? "white", seconds: dur });
-                                await waitMs(Math.min(dur, 1.5) * 1000, generation);
-                            } else if (beat.cueType === "shake") {
-                                await shakeStage(beat.duration ?? 0.4);
-                            } else if (beat.cueType === "wait") {
-                                await waitMs((beat.duration ?? 0.8) * 1000, generation);
-                            }
-                        } finally {
-                            if (playGenRef.current === generation) setEffectActive(false);
-                        }
-                    }
-                    break;
-                }
-                case "varOp": {
-                    setLiveVariables(vars);
-                    break;
-                }
-                case "talk": {
-                    const beat = inst.beat;
-                    setStageState(stage);
-                    setLiveVariables(vars);
-                    void applyStage(stage, { instant: false });
-                    const body = stage.dialogue?.body ?? interpolateStoryText(beat.body, activeDoc, vars);
-                    setTypedCount(reduced ? body.length : 0);
-                    if (beat.se) {
-                        playSe(storySeCandidateUrls(beat.se, activeDoc.region, line), beat.seVolume);
-                    }
-                    if (beat.voice && beat.voice.scenarioId && beat.voice.voiceId) {
-                        const urls = storyVoiceCandidateUrls(beat.voice, activeDoc.region, line);
-                        startVoice(
-                            urls,
-                            { label: beat.voice.voiceId, start: beat.voice.start, end: beat.voice.end },
-                            generation,
-                            true,
-                        );
-                    } else if (voiceManifestRef.current) {
-                        const trackUrls = resolveVoiceManifestLineUrl(voiceManifestRef.current, beat.id);
-                        const trackLine = voiceManifestRef.current.lines[beat.id];
-                        if (trackUrls.length > 0 && trackLine) {
-                            startVoice(
-                                trackUrls,
-                                { label: trackLine.speaker || beat.id },
-                                generation,
-                                true,
-                            );
-                        }
-                    }
-                    break;
-                }
-                case "narration": {
-                    const beat = inst.beat;
-                    setStageState(stage);
-                    void applyStage(stage, { instant: false });
-                    if (beat.se) {
-                        playSe(storySeCandidateUrls(beat.se, doc.region, line), beat.seVolume);
-                    }
-                    break;
-                }
-                case "telop":
-                case "choice":
-                case "end": {
-                    setStageState(stage);
-                    void applyStage(stage, { instant: false });
-                    break;
-                }
-                case "condition":
-                case "jump":
-                case "halt":
-                default:
-                    break;
-            }
-        }
+            },
+            reducedMotion: Boolean(reduced),
+        });
 
-        if (playGenRef.current !== generation) return;
+        if (result.cancelled || playGenRef.current !== generation) return;
         const finalFrame = localizeRuntimeFrame(frame, localizedDocRef.current);
         setStageState(finalFrame.stage);
         setLiveVariables(finalFrame.variables);
-        if (finalFrame.stage.dialogue && finalFrame.stage.dialogue.body !== stage.dialogue?.body) {
+        if (finalFrame.stage.dialogue && finalFrame.stage.dialogue.body !== result.stage.dialogue?.body) {
             setTypedCount(reduced ? finalFrame.stage.dialogue.body.length : 0);
         }
         syncBgm(
@@ -1308,7 +991,7 @@ export function StoryPlayerView({
         const timer = window.setTimeout(() => {
             const stepId = stageStateRef.current.dialogue?.stepId;
             if (!stepId) return;
-            let matchedBeat: { voice?: StoryVoiceRef } | null = null;
+            let matchedBeat: { id: string; voice?: StoryVoiceRef } | null = null;
             for (const node of Object.values(localizedDocRef.current.nodes)) {
                 if (node.type !== "scene") continue;
                 const found = node.beats.find(beat => beat.kind === "talk" && beat.id === stepId);
@@ -1317,12 +1000,19 @@ export function StoryPlayerView({
                     break;
                 }
             }
-            if (!matchedBeat || matchedBeat.voice?.voiceId) return;
-            const trackUrls = resolveVoiceManifestLineUrl(voiceManifest, stepId);
-            const trackLine = voiceManifest.lines[stepId];
-            if (trackUrls.length === 0 || !trackLine) return;
-            unlockAudioRef.current();
-            startVoiceRef.current(trackUrls, { label: trackLine.speaker || stepId }, playGenRef.current, true);
+            if (!matchedBeat) return;
+            const outcome = resolveMidSceneManifestVoiceAction({
+                beat: matchedBeat,
+                previousManifest: previous,
+                nextManifest: voiceManifest,
+                urlOptions: voiceManifestUrlOptionsRef.current,
+            });
+            if (outcome.action === "play") {
+                unlockAudioRef.current();
+                startVoiceRef.current(outcome.urls, { label: outcome.label }, playGenRef.current, true);
+            } else if (outcome.action === "stop") {
+                stopActiveVoiceRef.current();
+            }
         }, 0);
         return () => window.clearTimeout(timer);
     }, [voiceManifest]);
@@ -1683,26 +1373,22 @@ export function StoryPlayerView({
                     const body = frame.stage.dialogue?.stepId === beat.id
                         ? frame.stage.dialogue.body
                         : interpolateStoryText(beat.body, localizedDoc, frame.variables);
-                    const hasVoice = Boolean(beat.voice && beat.voice.scenarioId && beat.voice.voiceId);
-                    const officialUrls = hasVoice && beat.voice
-                        ? storyVoiceCandidateUrls(beat.voice, localizedDoc.region, line)
-                        : [];
-                    const manifestUrls = !hasVoice && voiceManifest
-                        ? resolveVoiceManifestLineUrl(voiceManifest, beat.id)
-                        : [];
-                    const voiceUrls = officialUrls.length > 0 ? officialUrls : manifestUrls;
-                    const voiceLabel = hasVoice
-                        ? beat.voice?.voiceId
-                        : (voiceManifest?.lines[beat.id]?.speaker || (manifestUrls.length > 0 ? beat.id : undefined));
+                    const resolvedVoice = resolveTalkBeatVoicePlayback({
+                        beat,
+                        region: localizedDoc.region,
+                        line,
+                        voiceManifest,
+                        urlOptions: voiceManifestUrlOptions,
+                    });
                     items.push({
                         key: `${frameIndex}-${instIdx}-${beat.id}`,
                         kind: "talk",
                         speaker,
                         body,
-                        voiceUrls: voiceUrls.length > 0 ? voiceUrls : undefined,
-                        voiceStart: hasVoice ? beat.voice?.start : undefined,
-                        voiceEnd: hasVoice ? beat.voice?.end : undefined,
-                        voiceLabel,
+                        voiceUrls: resolvedVoice?.urls,
+                        voiceStart: resolvedVoice?.start,
+                        voiceEnd: resolvedVoice?.end,
+                        voiceLabel: resolvedVoice?.label,
                     });
                 } else if (inst.op === "narration") {
                     const body = frame.stage.narration?.stepId === inst.beat.id
@@ -1729,7 +1415,7 @@ export function StoryPlayerView({
             }
         });
         return items;
-    }, [history, line, localizedDoc, voiceManifest]);
+    }, [history, line, localizedDoc, voiceManifest, voiceManifestUrlOptions]);
 
     const activeNode = activeFrame?.nodeId ? localizedDoc.nodes[activeFrame.nodeId] ?? null : null;
     const activeNodeLabel = activeNode ? getNodeDisplayLabel(activeNode, t) : null;
@@ -2697,7 +2383,7 @@ export function StoryPlayerView({
                                                                         onOpenVoiceManifest();
                                                                     }}
                                                                 >
-                                                                    {t("page.storyMaker.voiceTrack.action")}
+                                                                    {t("page.storyMaker.voiceTrack.externalAction")}
                                                                 </Button>
                                                             ) : null}
                                                         </div>
@@ -3122,7 +2808,7 @@ export function StoryPlayerView({
                                             )}
                                         </div>
                                     )}
-                                    {hasVoiceTrackManifest ? (
+                                    {hasVoiceTrackManifest && (
                                         onOpenVoiceManifest ? (
                                             <button
                                                 type="button"
@@ -3139,14 +2825,7 @@ export function StoryPlayerView({
                                                 <span>{voiceTrackBadgeLabel}</span>
                                             </span>
                                         )
-                                    ) : onOpenVoiceManifest ? (
-                                        <IconButton
-                                            size="xs"
-                                            icon={mdRecordVoiceOver}
-                                            label={t("page.storyMaker.voiceTrack.action")}
-                                            onClick={onOpenVoiceManifest}
-                                        />
-                                    ) : null}
+                                    )}
                                     {audioBlocked && !emptyStory && !ended && !hasCompileErrors && (
                                         <Button
                                             size="xs"

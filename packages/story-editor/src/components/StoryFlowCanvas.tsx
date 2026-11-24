@@ -6,19 +6,19 @@ import {
     mdCalculate, mdCenterFocusStrong, mdChat, mdClose, mdContentCopy, mdContentCut,
     mdDelete, mdDragIndicator, mdErrorFill, mdFlag, mdGroups, mdHourglassTop, mdImage,
     mdKeyboardArrowDown, mdKeyboardArrowUp, mdLabel, mdLink, mdLinkOff, mdLock, mdMood, mdMovie,
-    mdMusicNote, mdMusicOff, mdPlayArrowFill, mdPlayCircle, mdRecordVoiceOver, mdRedo, mdTitle,
+    mdMusicNote, mdMusicOff, mdPlayArrowFill, mdPlayCircle, mdRecordVoiceOver, mdRedo, mdSync, mdTitle,
     mdUndo, mdUnfoldLess, mdUnfoldMore, mdVolumeUp, mdWandStars, mdWarning, mdWarningFill,
     mdZoomIn, mdZoomOut,
 } from "../md3/icons";
 import { useStoryI18n as useI18n } from "../context/StoryStudioContext";
 import {
     STORY_BEAT_DRAG_MIME, STORY_DRAG_MIME, canConnectNodes, canDropOnTarget, clampCoord,
-    getIncomingEdges, getNodeOutPorts, getOutgoingEdge, speakerName,
+    getIncomingEdges, getNodeOutPorts, getOutgoingEdge, getStageActionItems, speakerName,
     type StoryBeatDragPayload, type StoryDragPayload, type StoryDropTarget, type StoryDropZone,
 } from "@moesekai/story-core";
 import { STORY_LIMITS } from "@moesekai/story-core";
 import type {
-    ConditionExpr, SceneBeat, SceneNode, StoryCompileDiagnostic, StoryDocument, StoryEdge,
+    ConditionExpr, SceneBeat, SceneNode, StageActionBeat, StoryCompileDiagnostic, StoryDocument, StoryEdge,
     StoryNode, StoryNodePos, StoryVariable, VarOp,
 } from "@moesekai/story-core";
 
@@ -415,6 +415,42 @@ function beatIcon(beat: SceneBeat): string {
     }
 }
 
+/** Pure formatter for single- or multi-actor `StageActionBeat` summaries in flow cards and tests. */
+export function formatStageActionBeatSummary(
+    beat: StageActionBeat,
+    castNameByKey: ReadonlyMap<string, string>,
+    t: (key: string, values?: Record<string, string | number>) => string,
+): string {
+    const items = getStageActionItems(beat);
+    const labelForAction = (action: StageActionBeat["action"]) => (
+        action === "enter"
+            ? t("page.storyMaker.v2.beats.stageActionEnter")
+            : action === "move"
+                ? t("page.storyMaker.v2.beats.stageActionMove")
+                : action === "pose"
+                    ? t("page.storyMaker.v2.beats.stageActionPose")
+                    : t("page.storyMaker.v2.beats.stageActionExit")
+    );
+    if (items.length <= 1) {
+        const actorName = castNameByKey.get(beat.castKey) || beat.castKey;
+        const actionLabel = labelForAction(beat.action);
+        return actorName ? `${actionLabel} · ${actorName}` : actionLabel;
+    }
+    const allSameAction = items.every(item => item.action === beat.action);
+    const prefix = allSameAction ? labelForAction(beat.action) : t("page.storyMaker.v2.beats.stageAction");
+    const names: string[] = [];
+    for (const item of items) {
+        const label = castNameByKey.get(item.castKey) || item.castKey;
+        if (label && !names.includes(label)) names.push(label);
+    }
+    const namesPreview = names.length <= 2
+        ? names.join("、")
+        : `${names.slice(0, 2).join("、")} +${names.length - 2}`;
+    return namesPreview
+        ? `${prefix} (${items.length}) · ${namesPreview}`
+        : `${prefix} (${items.length})`;
+}
+
 function beatSummary(
     beat: SceneBeat,
     doc: StoryDocument,
@@ -435,17 +471,8 @@ function beatSummary(
             return beat.body.trim() || t("page.storyMaker.v2.beats.narration");
         case "telop":
             return beat.text.trim() || t("page.storyMaker.v2.beats.telop");
-        case "stageAction": {
-            const actorName = castNameByKey.get(beat.castKey) || beat.castKey;
-            const actionLabel = beat.action === "enter"
-                ? t("page.storyMaker.v2.beats.stageActionEnter")
-                : beat.action === "move"
-                    ? t("page.storyMaker.v2.beats.stageActionMove")
-                    : beat.action === "pose"
-                        ? t("page.storyMaker.v2.beats.stageActionPose")
-                        : t("page.storyMaker.v2.beats.stageActionExit");
-            return actorName ? `${actionLabel} · ${actorName}` : actionLabel;
-        }
+        case "stageAction":
+            return formatStageActionBeatSummary(beat, castNameByKey, t);
         case "cue": {
             if (beat.cueType === "se") {
                 return beat.se ? `${t("page.storyMaker.v2.beats.cueSe")} · ${beat.se}` : t("page.storyMaker.v2.beats.cueSe");
@@ -2178,8 +2205,20 @@ export function StoryFlowCanvas({
                             <span>{t("page.storyMaker.v2.slots.stageCast")}</span>
                         </span>
                         {scene.stageCast.mode === "set" ? (
-                            <span className="font-mono type-label-s text-on-surface-variant">
-                                {scene.stageCast.actors.length}/{STORY_LIMITS.stageActors}
+                            <span className="inline-flex items-center gap-1">
+                                {scene.stageCast.enterTiming === "afterTelop" && (
+                                    <span className="rounded-md3-xs bg-tertiary-container px-1 py-0.5 type-label-s text-on-tertiary-container">
+                                        {t("page.storyMaker.v2.slots.afterTelopBadge")}
+                                    </span>
+                                )}
+                                {scene.stageCast.layoutMode === "fixed" && (
+                                    <span className="rounded-md3-xs bg-primary-container px-1 py-0.5 type-label-s text-on-primary-container">
+                                        {t("page.storyMaker.v2.slots.fixedLayoutBadge")}
+                                    </span>
+                                )}
+                                <span className="font-mono type-label-s text-on-surface-variant">
+                                    {scene.stageCast.actors.length}/{STORY_LIMITS.stageActors}
+                                </span>
                             </span>
                         ) : (
                             <span className="type-label-s text-on-surface-variant">
@@ -2206,7 +2245,14 @@ export function StoryFlowCanvas({
                                         <span className="max-w-[90px] truncate">
                                             {castNameByKey.get(actor.castKey) || actor.castKey}
                                         </span>
-                                        <span className="opacity-70">{slotLabel(actor.slot, t)}</span>
+                                        <span className="font-mono opacity-75">
+                                            {actor.x !== undefined
+                                                ? `X${actor.x > 0 ? `+${actor.x.toFixed(2)}` : actor.x.toFixed(2)}`
+                                                : slotLabel(actor.slot, t)}
+                                        </span>
+                                        {(actor.lockX || actor.x !== undefined) && (
+                                            <Icon path={mdLock} size={10} className="shrink-0 opacity-80" />
+                                        )}
                                     </span>
                                 ))}
                             </div>
@@ -2352,6 +2398,19 @@ export function StoryFlowCanvas({
                                                 <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md3-xs bg-secondary-container/80 px-1 py-0.5 type-label-s text-on-secondary-container">
                                                     <Icon path={mdMood} size={11} />
                                                     <span>{beat.reactions!.length}</span>
+                                                </span>
+                                            )}
+                                            {beat.kind === "stageAction" && (beat.delay ?? 0) > 0 && (
+                                                <span className="shrink-0 rounded-md3-xs bg-surface-container-highest px-1 py-0.5 font-mono type-label-s text-on-surface-variant">
+                                                    +{(beat.delay ?? 0).toFixed(1)}s
+                                                </span>
+                                            )}
+                                            {beat.kind === "stageAction" && beat.parallel && (
+                                                <span
+                                                    title={t("page.storyMaker.v2.beats.parallelWithNext")}
+                                                    className="inline-flex shrink-0 items-center gap-0.5 rounded-md3-xs bg-tertiary-container/80 px-1 py-0.5 type-label-s text-on-tertiary-container"
+                                                >
+                                                    <Icon path={mdSync} size={11} />
                                                 </span>
                                             )}
                                             {beat.kind === "talk" && beat.voice && (

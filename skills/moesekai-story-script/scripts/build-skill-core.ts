@@ -39,11 +39,11 @@ export {
     resolveLive2DSiteBase,
 } from ${JSON.stringify(resolve(coreSrcDir, "live2d/site.ts"))};
 export { fetchLive2DModelClips, fetchMotionBundleClips } from ${JSON.stringify(resolve(coreSrcDir, "story/assets.ts"))};
-export { compileStoryGraph } from ${JSON.stringify(resolve(coreSrcDir, "story/compiler.ts"))};
-export { detectStageActorOverlaps, layoutStageActors, STORY_LIMITS } from ${JSON.stringify(resolve(coreSrcDir, "story/limits.ts"))};
-export { advanceRuntime, computeActorRenderOrders, createInitialRuntime } from ${JSON.stringify(resolve(coreSrcDir, "story/runtime.ts"))};
+export { compileStoryGraph, findLeadingTelopEndIndex } from ${JSON.stringify(resolve(coreSrcDir, "story/compiler.ts"))};
+export { clampActorX, clampDelay, detectStageActorOverlaps, layoutStageActors, STORY_LIMITS } from ${JSON.stringify(resolve(coreSrcDir, "story/limits.ts"))};
+export { advanceRuntime, applyStageActionWave, computeActorRenderOrders, createInitialRuntime } from ${JSON.stringify(resolve(coreSrcDir, "story/runtime.ts"))};
 export { parseStoryScript, serializeStoryScript } from ${JSON.stringify(resolve(coreSrcDir, "story/script.ts"))};
-export { STORY_REGIONS } from ${JSON.stringify(resolve(coreSrcDir, "types/storyMaker.ts"))};
+export { getStageActionItems, STORY_REGIONS } from ${JSON.stringify(resolve(coreSrcDir, "types/storyMaker.ts"))};
 `;
 
 const tempEntry = join(tmpdir(), `moesekai-msk-core-entry-${process.pid}.ts`);

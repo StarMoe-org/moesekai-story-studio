@@ -14,6 +14,8 @@ import {
     type ExportLocalesRequest,
     type ExportMskRequest,
     type ExportPreflightRequest,
+    type ImportedVoiceFileResult,
+    type ImportVoiceFilesRequest,
     type SaveWorkspaceInput,
     type UpdateCheckRequest,
 } from "../shared/ipc.ts";
@@ -28,7 +30,11 @@ import {
 } from "./exporter.ts";
 import type { DesktopSettingsStore } from "./settings.ts";
 import type { DesktopUpdateService } from "./updater.ts";
-import { resolveUniqueProjectDir, type WorkspaceManager } from "./workspace.ts";
+import {
+    resolveUniqueProjectDir,
+    scanAudioFilesRecursive,
+    type WorkspaceManager,
+} from "./workspace.ts";
 
 export interface IpcHandlersDeps {
     getMainWindow: () => BrowserWindow | null;
@@ -251,6 +257,125 @@ export function registerIpcHandlers(deps: IpcHandlersDeps): void {
             fileName: imported.fileName,
             sizeBytes: imported.sizeBytes,
         };
+    });
+
+    ipcMain.handle(
+        IPC_CHANNELS.WORKSPACE_IMPORT_VOICE_FILES,
+        async (_ev, req: ImportVoiceFilesRequest): Promise<ImportedVoiceFileResult[]> => {
+            const toResult = (imported: {
+                relativePath: string;
+                fileName: string;
+                originalName: string;
+                sizeBytes: number;
+            }): ImportedVoiceFileResult => ({
+                relativePath: imported.relativePath,
+                url: `${appInfo.workspaceProtocolBase}${imported.relativePath}`,
+                fileName: imported.fileName,
+                originalName: imported.originalName,
+                sizeBytes: imported.sizeBytes,
+            });
+
+            if (req.mode === "buffers") {
+                const results: ImportedVoiceFileResult[] = [];
+                for (const item of req.items ?? []) {
+                    const bytes = item.bytes instanceof Uint8Array
+                        ? item.bytes
+                        : ArrayBuffer.isView(item.bytes)
+                            ? new Uint8Array(
+                                (item.bytes as ArrayBufferView).buffer,
+                                (item.bytes as ArrayBufferView).byteOffset,
+                                (item.bytes as ArrayBufferView).byteLength,
+                            )
+                            : new Uint8Array(item.bytes as unknown as ArrayBuffer);
+                    const imported = workspace.importLocalVoiceBuffer(item.fileName, bytes, item.beatId);
+                    results.push(toResult(imported));
+                }
+                return results;
+            }
+
+            const win = getOwnerWindow();
+            let sourcePaths: string[] = [];
+            if (req.mode === "files") {
+                const pick = await dialog.showOpenDialog(win ?? BrowserWindow.getFocusedWindow()!, {
+                    title: "Select Local Voice Audio Files",
+                    properties: ["openFile", "multiSelections"],
+                    filters: [
+                        { name: "Audio Files", extensions: ["ogg", "mp3", "wav", "m4a", "flac", "webm"] },
+                    ],
+                });
+                if (pick.canceled || pick.filePaths.length === 0) return [];
+                sourcePaths = pick.filePaths;
+            } else {
+                const pick = await dialog.showOpenDialog(win ?? BrowserWindow.getFocusedWindow()!, {
+                    title: "Select Folder Containing Voice Audio Files",
+                    properties: ["openDirectory"],
+                });
+                if (pick.canceled || pick.filePaths.length === 0) return [];
+                sourcePaths = scanAudioFilesRecursive(pick.filePaths[0]);
+            }
+
+            const exactBeatSet = new Set(req.knownBeatIds ?? []);
+            const lowerBeatMap = new Map<string, string>();
+            for (const id of req.knownBeatIds ?? []) {
+                const lower = id.toLowerCase();
+                if (!lowerBeatMap.has(lower)) lowerBeatMap.set(lower, id);
+            }
+
+            const usedDestNames = new Set<string>();
+            const results: ImportedVoiceFileResult[] = [];
+            for (const srcPath of sourcePaths) {
+                const originalName = path.basename(srcPath);
+                const ext = path.extname(originalName).toLowerCase();
+                const rawStem = path.basename(originalName, path.extname(originalName)).trim();
+                const matchedBeatId = exactBeatSet.has(rawStem)
+                    ? rawStem
+                    : lowerBeatMap.get(rawStem.toLowerCase());
+
+                let targetStem = matchedBeatId;
+                if (!targetStem) {
+                    const baseStem = sanitizeExportFilename(rawStem, "voice");
+                    let candidate = baseStem;
+                    let suffix = 2;
+                    while (usedDestNames.has(`${candidate}${ext}`.toLowerCase())) {
+                        candidate = `${baseStem}_${suffix}`;
+                        suffix += 1;
+                    }
+                    targetStem = candidate;
+                }
+                usedDestNames.add(`${sanitizeExportFilename(targetStem, "voice")}${ext}`.toLowerCase());
+
+                try {
+                    const imported = workspace.importLocalVoiceFile(srcPath, targetStem);
+                    results.push(toResult(imported));
+                } catch (err) {
+                    if (req.mode === "folder") {
+                        console.warn(`[desktop:voice] Skipping ${originalName}:`, err instanceof Error ? err.message : String(err));
+                        continue;
+                    }
+                    throw err;
+                }
+            }
+            return results;
+        },
+    );
+
+    ipcMain.handle(IPC_CHANNELS.WORKSPACE_LIST_VOICE_FILES, (): ImportedVoiceFileResult[] => {
+        return workspace.listLocalVoiceFiles().map(item => ({
+            relativePath: item.relativePath,
+            url: `${appInfo.workspaceProtocolBase}${item.relativePath}`,
+            fileName: item.fileName,
+            originalName: item.originalName,
+            sizeBytes: item.sizeBytes,
+        }));
+    });
+
+    ipcMain.handle(IPC_CHANNELS.WORKSPACE_SAVE_VOICE_MANIFEST, (_ev, manifest: unknown | null) =>
+        workspace.saveVoiceManifest(manifest),
+    );
+
+    ipcMain.handle(IPC_CHANNELS.WORKSPACE_OPEN_VOICES_DIR, async () => {
+        const voicesDir = workspace.ensureVoicesDir();
+        await shell.openPath(voicesDir);
     });
 
     ipcMain.handle(IPC_CHANNELS.WORKSPACE_REVEAL_PATH, (_ev, targetPath?: string) => {

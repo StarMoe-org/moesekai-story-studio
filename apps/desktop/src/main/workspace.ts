@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
     isValidLocaleCode,
+    PathJailError,
     resolveJailedPath,
     sanitizeExportFilename,
 } from "../shared/path-jail.ts";
@@ -10,6 +11,7 @@ import type {
     CreateWorkspaceInput,
     DesktopStoryRegion,
     RecentProjectEntry,
+    SaveVoiceManifestResult,
     SaveWorkspaceInput,
     SaveWorkspaceResult,
     WorkspaceExternalChangeEvent,
@@ -28,7 +30,8 @@ const MAX_RECENT_PROJECTS = 15;
 const MAX_SNAPSHOTS = 60;
 const ECHO_SUPPRESS_WINDOW_MS = 1800;
 
-const SUPPORTED_VOICE_EXTS = new Set([".ogg", ".mp3", ".wav", ".m4a", ".flac", ".webm"]);
+export const SUPPORTED_VOICE_EXTS = new Set([".ogg", ".mp3", ".wav", ".m4a", ".flac", ".webm"]);
+export const MAX_LOCAL_VOICE_FILE_BYTES = 50 * 1024 * 1024; // 50 MiB per local voice clip
 const STORY_REGIONS = new Set<DesktopStoryRegion>(["jp", "cn", "tw", "kr", "en"]);
 
 interface ProjectMetaRecord {
@@ -92,6 +95,102 @@ function atomicWriteUtf8(targetPath: string, content: string): number {
     fs.writeFileSync(tmpPath, buf);
     fs.renameSync(tmpPath, targetPath);
     return buf.byteLength;
+}
+
+function atomicWriteBytes(targetPath: string, data: Uint8Array): number {
+    const dir = path.dirname(targetPath);
+    fs.mkdirSync(dir, { recursive: true });
+    const tmpPath = path.join(dir, `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.${crypto.randomBytes(2).toString("hex")}.tmp`);
+    try {
+        fs.writeFileSync(tmpPath, data);
+        fs.renameSync(tmpPath, targetPath);
+        return data.byteLength;
+    } catch (err) {
+        try {
+            fs.rmSync(tmpPath, { force: true });
+        } catch {
+            // ignore cleanup failure
+        }
+        throw err;
+    }
+}
+
+function atomicCopyFile(srcPath: string, destPath: string): void {
+    const dir = path.dirname(destPath);
+    fs.mkdirSync(dir, { recursive: true });
+    const tmpPath = path.join(dir, `.${path.basename(destPath)}.${process.pid}.${Date.now()}.${crypto.randomBytes(2).toString("hex")}.tmp`);
+    try {
+        fs.copyFileSync(srcPath, tmpPath);
+        fs.renameSync(tmpPath, destPath);
+    } catch (err) {
+        try {
+            fs.rmSync(tmpPath, { force: true });
+        } catch {
+            // ignore cleanup failure
+        }
+        throw err;
+    }
+}
+
+function assertSafeVoiceNameToken(raw: string, label: string): void {
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+        throw new PathJailError("INVALID_PATH", `${label} must be a non-empty string.`);
+    }
+    if (raw.includes("\0") || /[\x00-\x1f]/.test(raw)) {
+        throw new PathJailError("INVALID_PATH", `${label} contains forbidden control characters.`);
+    }
+    if (raw.includes("/") || raw.includes("\\") || raw.includes(":") || raw.includes("..")) {
+        throw new PathJailError("PATH_ESCAPE", `${label} contains forbidden path traversal characters: ${raw}`);
+    }
+}
+
+/**
+ * Recursively enumerates supported audio files inside a user-picked directory,
+ * skipping hidden folders and protecting against symlink directory loops.
+ */
+export function scanAudioFilesRecursive(dirPath: string, maxFiles = 2000): string[] {
+    const rootAbs = path.resolve(dirPath);
+    if (!fs.existsSync(rootAbs) || !fs.statSync(rootAbs).isDirectory()) {
+        return [];
+    }
+    const visitedDirs = new Set<string>();
+    const results: string[] = [];
+
+    const walk = (currentDir: string) => {
+        if (results.length >= maxFiles) return;
+        let realDir: string;
+        try {
+            realDir = fs.realpathSync(currentDir);
+        } catch {
+            return;
+        }
+        const visitKey = process.platform === "win32" ? realDir.toLowerCase() : realDir;
+        if (visitedDirs.has(visitKey)) return;
+        visitedDirs.add(visitKey);
+
+        let entries: fs.Dirent[];
+        try {
+            entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        } catch {
+            return;
+        }
+        entries.sort((a, b) => a.name.localeCompare(b.name));
+        for (const entry of entries) {
+            if (results.length >= maxFiles) break;
+            if (entry.name.startsWith(".")) continue;
+            const fullPath = path.join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                walk(fullPath);
+            } else if (entry.isFile()) {
+                if (SUPPORTED_VOICE_EXTS.has(path.extname(entry.name).toLowerCase())) {
+                    results.push(fullPath);
+                }
+            }
+        }
+    };
+
+    walk(rootAbs);
+    return results;
 }
 
 function listFilesRecursive(baseDir: string, currentRel = ""): string[] {
@@ -283,6 +382,19 @@ export class WorkspaceManager {
         // Seed self-write map with current disk contents so initial watch doesn't fire spuriously.
         this.lastWrittenHash.clear();
         this.recordSelfWrite(mskPath, data.script);
+        const manifestPath = path.join(rootDir, VOICE_MANIFEST_REL);
+        if (fs.existsSync(manifestPath)) {
+            try {
+                this.recordSelfWrite(manifestPath, fs.readFileSync(manifestPath, "utf8"));
+            } catch {
+                // ignore
+            }
+        } else {
+            this.lastWrittenHash.set(this.keyForPath(manifestPath), {
+                hash: "__deleted__",
+                writtenAt: Date.now(),
+            });
+        }
 
         const header = extractHeaderMetaFromMsk(data.script);
         this.recordRecentProject({
@@ -355,20 +467,7 @@ export class WorkspaceManager {
         }
 
         if (input.voiceManifest !== undefined) {
-            const manifestPath = path.join(this.activeRootDir, VOICE_MANIFEST_REL);
-            if (input.voiceManifest === null) {
-                if (fs.existsSync(manifestPath)) {
-                    this.lastWrittenHash.set(this.keyForPath(manifestPath), {
-                        hash: "__deleted__",
-                        writtenAt: Date.now(),
-                    });
-                    fs.rmSync(manifestPath, { force: true });
-                }
-            } else {
-                const jsonText = JSON.stringify(input.voiceManifest, null, 2) + "\n";
-                this.recordSelfWrite(manifestPath, jsonText);
-                atomicWriteUtf8(manifestPath, jsonText);
-            }
+            this.saveVoiceManifest(input.voiceManifest);
         }
 
         const now = Date.now();
@@ -511,12 +610,109 @@ export class WorkspaceManager {
     }
 
     /**
-     * Imports a local audio file into `<workspace>/voices/` safely and returns its relative path & URL.
+     * Atomically writes `voices/manifest.json` (or removes it when `manifest === null`)
+     * with self-write echo suppression so the workspace watcher does not fire a redundant reload.
+     */
+    saveVoiceManifest(manifest: unknown | null): SaveVoiceManifestResult {
+        if (!this.activeRootDir) {
+            throw new Error("No active workspace open.");
+        }
+        const manifestPath = resolveJailedPath(this.activeRootDir, "voices/manifest.json");
+        const now = Date.now();
+        if (manifest === null) {
+            this.lastWrittenHash.set(this.keyForPath(manifestPath), {
+                hash: "__deleted__",
+                writtenAt: now,
+            });
+            if (fs.existsSync(manifestPath)) {
+                fs.rmSync(manifestPath, { force: true });
+            }
+            this.updateProjectMetaTimestamp(this.activeRootDir, now);
+            return {
+                savedAt: now,
+                removed: true,
+                manifestPath,
+            };
+        }
+
+        const jsonText = JSON.stringify(manifest, null, 2) + "\n";
+        this.recordSelfWrite(manifestPath, jsonText);
+        atomicWriteUtf8(manifestPath, jsonText);
+        this.updateProjectMetaTimestamp(this.activeRootDir, now);
+        return {
+            savedAt: now,
+            removed: false,
+            manifestPath,
+        };
+    }
+
+    /**
+     * Ensures `<workspace>/voices/` exists inside the active workspace jail and returns its path.
+     */
+    ensureVoicesDir(): string {
+        if (!this.activeRootDir) {
+            throw new Error("No active workspace open.");
+        }
+        const voicesRoot = resolveJailedPath(this.activeRootDir, VOICES_DIR);
+        fs.mkdirSync(voicesRoot, { recursive: true });
+        return voicesRoot;
+    }
+
+    /**
+     * Enumerates all supported audio files currently present under `<workspace>/voices/`.
+     */
+    listLocalVoiceFiles(): Array<{
+        relativePath: string;
+        absolutePath: string;
+        fileName: string;
+        originalName: string;
+        sizeBytes: number;
+    }> {
+        if (!this.activeRootDir) {
+            return [];
+        }
+        const voicesRoot = path.join(this.activeRootDir, VOICES_DIR);
+        if (!fs.existsSync(voicesRoot) || !fs.statSync(voicesRoot).isDirectory()) {
+            return [];
+        }
+        const results: Array<{
+            relativePath: string;
+            absolutePath: string;
+            fileName: string;
+            originalName: string;
+            sizeBytes: number;
+        }> = [];
+        const relFiles = listFilesRecursive(voicesRoot)
+            .filter(rel => SUPPORTED_VOICE_EXTS.has(path.extname(rel).toLowerCase()))
+            .sort();
+        for (const rel of relFiles) {
+            try {
+                const abs = resolveJailedPath(this.activeRootDir, `${VOICES_DIR}/${rel}`, { mustExist: true });
+                const stat = fs.statSync(abs);
+                if (!stat.isFile()) continue;
+                const fileName = path.basename(rel);
+                results.push({
+                    relativePath: `${VOICES_DIR}/${rel}`,
+                    absolutePath: abs,
+                    fileName,
+                    originalName: fileName,
+                    sizeBytes: stat.size,
+                });
+            } catch {
+                // Ignore any entry that fails path-jail verification
+            }
+        }
+        return results;
+    }
+
+    /**
+     * Imports a local audio file into `<workspace>/voices/` safely and returns its relative path & metadata.
      */
     importLocalVoiceFile(sourceFilePath: string, preferredStem?: string): {
         relativePath: string;
         absolutePath: string;
         fileName: string;
+        originalName: string;
         sizeBytes: number;
     } {
         if (!this.activeRootDir) {
@@ -526,27 +722,106 @@ export class WorkspaceManager {
         if (!fs.existsSync(srcAbs) || !fs.statSync(srcAbs).isFile()) {
             throw new Error(`Audio source file does not exist: ${srcAbs}`);
         }
+        const srcStat = fs.statSync(srcAbs);
+        if (srcStat.size <= 0) {
+            throw new Error(`Audio source file is empty: ${srcAbs}`);
+        }
+        if (srcStat.size > MAX_LOCAL_VOICE_FILE_BYTES) {
+            throw new Error(
+                `Audio file exceeds maximum allowed size (${MAX_LOCAL_VOICE_FILE_BYTES} bytes): ${path.basename(srcAbs)}`,
+            );
+        }
         const ext = path.extname(srcAbs).toLowerCase();
         if (!SUPPORTED_VOICE_EXTS.has(ext)) {
             throw new Error(`Unsupported audio file extension: ${ext}`);
         }
+        if (preferredStem !== undefined && preferredStem.trim().length > 0) {
+            assertSafeVoiceNameToken(preferredStem, "beatId");
+        }
 
-        const voicesRoot = path.join(this.activeRootDir, VOICES_DIR);
-        fs.mkdirSync(voicesRoot, { recursive: true });
-
+        const voicesRoot = this.ensureVoicesDir();
+        const originalName = path.basename(srcAbs);
         const rawStem = preferredStem?.trim() || path.basename(srcAbs, ext);
         const safeStem = sanitizeExportFilename(rawStem, "voice");
         const fileName = `${safeStem}${ext}`;
-        const destAbs = resolveJailedPath(voicesRoot, fileName);
+        const destAbs = resolveJailedPath(this.activeRootDir, `${VOICES_DIR}/${fileName}`);
+        resolveJailedPath(voicesRoot, fileName);
 
-        fs.copyFileSync(srcAbs, destAbs);
+        let isSameFile = false;
+        if (fs.existsSync(destAbs)) {
+            try {
+                const realSrc = fs.realpathSync(srcAbs);
+                const realDest = fs.realpathSync(destAbs);
+                isSameFile = process.platform === "win32"
+                    ? realSrc.toLowerCase() === realDest.toLowerCase()
+                    : realSrc === realDest;
+            } catch {
+                isSameFile = false;
+            }
+        }
+        if (!isSameFile) {
+            atomicCopyFile(srcAbs, destAbs);
+        }
         const stat = fs.statSync(destAbs);
 
         return {
             relativePath: `voices/${fileName}`,
             absolutePath: destAbs,
             fileName,
+            originalName,
             sizeBytes: stat.size,
+        };
+    }
+
+    /**
+     * Imports raw audio file bytes (e.g. from drag-and-drop in the renderer) safely into `<workspace>/voices/`.
+     */
+    importLocalVoiceBuffer(
+        fileName: string,
+        bytes: Uint8Array,
+        preferredStem?: string,
+    ): {
+        relativePath: string;
+        absolutePath: string;
+        fileName: string;
+        originalName: string;
+        sizeBytes: number;
+    } {
+        if (!this.activeRootDir) {
+            throw new Error("No active workspace open.");
+        }
+        assertSafeVoiceNameToken(fileName, "fileName");
+        if (preferredStem !== undefined && preferredStem.trim().length > 0) {
+            assertSafeVoiceNameToken(preferredStem, "beatId");
+        }
+        const ext = path.extname(fileName).toLowerCase();
+        if (!SUPPORTED_VOICE_EXTS.has(ext)) {
+            throw new Error(`Unsupported audio file extension: ${ext || "(none)"}`);
+        }
+        if (!(bytes instanceof Uint8Array) || bytes.byteLength <= 0) {
+            throw new Error(`Audio buffer is empty for file: ${fileName}`);
+        }
+        if (bytes.byteLength > MAX_LOCAL_VOICE_FILE_BYTES) {
+            throw new Error(
+                `Audio file exceeds maximum allowed size (${MAX_LOCAL_VOICE_FILE_BYTES} bytes): ${fileName}`,
+            );
+        }
+
+        const voicesRoot = this.ensureVoicesDir();
+        const rawStem = preferredStem?.trim() || path.basename(fileName, ext);
+        const safeStem = sanitizeExportFilename(rawStem, "voice");
+        const safeFileName = `${safeStem}${ext}`;
+        const destAbs = resolveJailedPath(this.activeRootDir, `${VOICES_DIR}/${safeFileName}`);
+        resolveJailedPath(voicesRoot, safeFileName);
+
+        const sizeBytes = atomicWriteBytes(destAbs, bytes);
+
+        return {
+            relativePath: `voices/${safeFileName}`,
+            absolutePath: destAbs,
+            fileName: safeFileName,
+            originalName: fileName,
+            sizeBytes,
         };
     }
 
@@ -712,7 +987,7 @@ export class WorkspaceManager {
         if (!rec) return false;
         const withinWindow = Date.now() - rec.writtenAt <= ECHO_SUPPRESS_WINDOW_MS;
         if (!fs.existsSync(filePath)) {
-            return withinWindow && rec.hash === "__deleted__";
+            return rec.hash === "__deleted__";
         }
         try {
             const currentHash = sha256Text(fs.readFileSync(filePath, "utf8"));
@@ -828,6 +1103,21 @@ export class WorkspaceManager {
             const data = this.readProjectData(this.activeRootDir, this.activeMskPath, this.activeIsSingleFile);
             // Refresh recorded hashes to the newly observed disk content so consecutive polls don't double-fire.
             this.recordSelfWrite(this.activeMskPath, data.script);
+            if (confirmedKinds.has("voice-manifest")) {
+                const manifestPath = path.join(this.activeRootDir, VOICE_MANIFEST_REL);
+                if (fs.existsSync(manifestPath)) {
+                    try {
+                        this.recordSelfWrite(manifestPath, fs.readFileSync(manifestPath, "utf8"));
+                    } catch {
+                        // ignore
+                    }
+                } else {
+                    this.lastWrittenHash.set(this.keyForPath(manifestPath), {
+                        hash: "__deleted__",
+                        writtenAt: Date.now(),
+                    });
+                }
+            }
 
             const emittedKind: WorkspaceExternalChangeEvent["kind"] =
                 confirmedKinds.size > 1 ? "all" : Array.from(confirmedKinds)[0] ?? "msk";

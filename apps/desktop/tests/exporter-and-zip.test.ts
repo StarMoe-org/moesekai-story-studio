@@ -194,6 +194,144 @@ describe(".msk export pipeline", () => {
         expect(fs.existsSync(path.join(folderPath, "voices", "beat_1.mp3"))).toBe(true);
     });
 
+    it("bundles /voices/..., voices/..., moesekai-app://workspace/..., and moesekai-app://app/workspace/... voice entries cleanly", async () => {
+        const wsDir = makeTempDir("moesekai-exp-voice-forms-");
+        const outDir = makeTempDir("moesekai-exp-voice-out-");
+        fs.mkdirSync(path.join(wsDir, "voices"), { recursive: true });
+        fs.writeFileSync(path.join(wsDir, "voices", "b1.ogg"), Buffer.from("VOICE_1"));
+        fs.writeFileSync(path.join(wsDir, "voices", "b2.mp3"), Buffer.from("VOICE_2"));
+        fs.writeFileSync(path.join(wsDir, "voices", "b3.wav"), Buffer.from("VOICE_3"));
+        fs.writeFileSync(path.join(wsDir, "voices", "b4.m4a"), Buffer.from("VOICE_4"));
+
+        const voiceManifest = {
+            schema: "moesekai-story-voice/1",
+            storyId: "story_mixed",
+            locale: "ja-JP",
+            overrideOfficialVoice: true,
+            baseUrl: "moesekai-app://app/workspace/",
+            lines: {
+                b1: { url: "voices/b1.ogg", objectKey: "voices/b1.ogg" },
+                b2: { url: "/voices/b2.mp3" },
+                b3: { url: "moesekai-app://workspace/voices/b3.wav" },
+                b4: { url: "moesekai-app://app/workspace/voices/b4.m4a?t=999" },
+                b5: { url: "https://cdn.example.com/remote/b5.ogg" },
+            },
+        };
+
+        const zipPath = path.join(outDir, "mixed-voices.zip");
+        const zipRes = await exportFullBundleToPath({
+            script: makeValidScript("Mixed Voices Story"),
+            includePositions: false,
+            format: "zip",
+            voiceManifest,
+            workspaceRoot: wsDir,
+            outputPath: zipPath,
+        });
+        expect(zipRes.canceled).toBe(false);
+
+        const zipBytes = fs.readFileSync(zipPath);
+        const names = listZipEntries(zipBytes).map(e => e.path);
+        expect(names).toContain("voices/b1.ogg");
+        expect(names).toContain("voices/b2.mp3");
+        expect(names).toContain("voices/b3.wav");
+        expect(names).toContain("voices/b4.m4a");
+        expect(names).toContain("voices/manifest.json");
+
+        const bundledManifest = JSON.parse(
+            extractZipEntry(zipBytes, "voices/manifest.json")!.toString("utf8"),
+        );
+        expect(bundledManifest.overrideOfficialVoice).toBe(true);
+        expect(bundledManifest.baseUrl).toBeUndefined();
+        expect(bundledManifest.lines.b1).toEqual({ url: "voices/b1.ogg", objectKey: "voices/b1.ogg" });
+        expect(bundledManifest.lines.b2).toEqual({ url: "voices/b2.mp3", objectKey: "voices/b2.mp3" });
+        expect(bundledManifest.lines.b3).toEqual({ url: "voices/b3.wav", objectKey: "voices/b3.wav" });
+        expect(bundledManifest.lines.b4).toEqual({ url: "voices/b4.m4a", objectKey: "voices/b4.m4a" });
+        expect(bundledManifest.lines.b5).toEqual({ url: "https://cdn.example.com/remote/b5.ogg" });
+    });
+
+    it("blocks /voices/.. traversal attempts during bundle export", async () => {
+        const base = makeTempDir("moesekai-exp-slash-escape-");
+        const wsDir = path.join(base, "ws");
+        const outDir = path.join(base, "out");
+        fs.mkdirSync(path.join(wsDir, "voices"), { recursive: true });
+        fs.writeFileSync(path.join(base, "secret.ogg"), "SECRET");
+
+        const badManifest = {
+            schema: "moesekai-story-voice/1",
+            storyId: "story_1",
+            lines: {
+                beat_1: { url: "/voices/../../secret.ogg" },
+            },
+        };
+
+        await expect(
+            exportFullBundleToPath({
+                script: makeValidScript("Slash Escape"),
+                includePositions: false,
+                format: "zip",
+                voiceManifest: badManifest,
+                workspaceRoot: wsDir,
+                outputPath: path.join(outDir, "bad.zip"),
+            }),
+        ).rejects.toThrow(PathJailError);
+    });
+
+    it("restricts bundled local voices to valid non-empty audio under voices/ and matches moesekai-app scheme case-insensitively", async () => {
+        const wsDir = makeTempDir("moesekai-exp-restrict-");
+        const outDir = makeTempDir("moesekai-exp-restrict-out-");
+        fs.mkdirSync(path.join(wsDir, "voices"), { recursive: true });
+        fs.writeFileSync(path.join(wsDir, "story.msk"), makeValidScript("Root Script"));
+        fs.writeFileSync(path.join(wsDir, "secret.ogg"), Buffer.from("OUTSIDE_VOICES_DIR"));
+        fs.writeFileSync(path.join(wsDir, "voices", "manifest.json"), JSON.stringify({ schema: "moesekai-story-voice/1" }));
+        fs.writeFileSync(path.join(wsDir, "voices", "readme.txt"), "NOT_AUDIO");
+        fs.writeFileSync(path.join(wsDir, "voices", "empty.ogg"), Buffer.alloc(0));
+        fs.writeFileSync(path.join(wsDir, "voices", "valid.ogg"), Buffer.from("VALID_OGG_BYTES"));
+
+        const voiceManifest = {
+            schema: "moesekai-story-voice/1",
+            storyId: "story_restrict",
+            baseUrl: "MOESEKAI-APP://APP/WORKSPACE/",
+            lines: {
+                ok_upper: { url: "MOESEKAI-APP://APP/WORKSPACE/voices/valid.ogg" },
+                bad_root_msk: { url: "story.msk" },
+                bad_root_audio: { url: "secret.ogg" },
+                bad_manifest_dup: { url: "voices/manifest.json" },
+                bad_ext: { url: "voices/readme.txt" },
+                bad_empty: { url: "voices/empty.ogg" },
+            },
+        };
+
+        const zipPath = path.join(outDir, "restricted.zip");
+        const res = await exportFullBundleToPath({
+            script: makeValidScript("Restricted Voices"),
+            includePositions: false,
+            format: "zip",
+            voiceManifest,
+            workspaceRoot: wsDir,
+            outputPath: zipPath,
+        });
+        expect(res.canceled).toBe(false);
+
+        const zipBytes = fs.readFileSync(zipPath);
+        const names = listZipEntries(zipBytes).map(e => e.path);
+        expect(names).toContain("voices/valid.ogg");
+        expect(names).not.toContain("secret.ogg");
+        expect(names).not.toContain("voices/readme.txt");
+        expect(names).not.toContain("voices/empty.ogg");
+        // Ensure story.msk and voices/manifest.json appear exactly once (never duplicated via voice collector)
+        expect(names.filter(n => n === "story.msk").length).toBe(1);
+        expect(names.filter(n => n === "voices/manifest.json").length).toBe(1);
+
+        const bundledManifest = JSON.parse(
+            extractZipEntry(zipBytes, "voices/manifest.json")!.toString("utf8"),
+        );
+        expect(bundledManifest.baseUrl).toBeUndefined();
+        expect(bundledManifest.lines.ok_upper).toEqual({
+            url: "voices/valid.ogg",
+            objectKey: "voices/valid.ogg",
+        });
+    });
+
     it("blocks voice manifest path-escape references during bundle export", async () => {
         const base = makeTempDir("moesekai-exp-escape-");
         const wsDir = path.join(base, "ws");

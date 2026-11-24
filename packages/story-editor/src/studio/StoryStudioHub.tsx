@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
     createStoryDocument,
     downloadStoryScript,
@@ -75,6 +75,14 @@ export interface StoryStudioHubProps {
 
 const DEFAULT_PAGE_SIZE = 12;
 
+/**
+ * Prepends a newly created or imported draft to the hub list, deduplicating by `id`
+ * so the list reflects the draft immediately before or without a full page reload.
+ */
+export function prependStoryDraft(previous: readonly StoryDraft[], created: StoryDraft): StoryDraft[] {
+    return [created, ...previous.filter(item => item.id !== created.id)];
+}
+
 export function StoryStudioHub({
     initialSearch = "",
     initialSortBy = "updated",
@@ -102,31 +110,62 @@ export function StoryStudioHub({
 
     const [creatingOpen, setCreatingOpen] = useState(false);
     const [importOpen, setImportOpen] = useState(false);
+    const [creatingDraft, setCreatingDraft] = useState(false);
     const [renaming, setRenaming] = useState<StoryDraft | null>(null);
     const [renameValue, setRenameValue] = useState("");
     const [deleting, setDeleting] = useState<StoryDraft | null>(null);
     const [snack, setSnack] = useState<string | null>(null);
 
-    const onLoadingChangeRef = useCallback((nextLoading: boolean) => {
-        onLoadingChange?.(nextLoading);
+    const onLoadingChangeRef = useRef(onLoadingChange);
+    const refreshSeqRef = useRef(0);
+    const mutationEpochRef = useRef(0);
+    const creatingDraftRef = useRef(false);
+
+    useEffect(() => {
+        onLoadingChangeRef.current = onLoadingChange;
     }, [onLoadingChange]);
 
     const refresh = useCallback(async () => {
+        const seq = ++refreshSeqRef.current;
+        const startEpoch = mutationEpochRef.current;
         setLoading(true);
-        onLoadingChangeRef(true);
+        onLoadingChangeRef.current?.(true);
         setStorageError(null);
         try {
-            setDrafts(await storage.listDrafts());
+            let loaded = await storage.listDrafts();
+            if (seq !== refreshSeqRef.current) return;
+            if (mutationEpochRef.current !== startEpoch) {
+                loaded = await storage.listDrafts();
+                if (seq !== refreshSeqRef.current) return;
+            }
+            setDrafts(loaded);
         } catch (error) {
+            if (seq !== refreshSeqRef.current) return;
             setStorageError(error instanceof StoryDraftsUnavailableError ? "unavailable" : "failed");
         } finally {
-            setLoading(false);
-            onLoadingChangeRef(false);
+            if (seq === refreshSeqRef.current) {
+                setLoading(false);
+                onLoadingChangeRef.current?.(false);
+            }
         }
-    }, [onLoadingChangeRef, storage]);
+    }, [storage]);
 
     useEffect(() => {
         void refresh();
+        return () => {
+            refreshSeqRef.current += 1;
+        };
+    }, [refresh]);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        const handlePageShow = (event: PageTransitionEvent) => {
+            if (event.persisted) {
+                void refresh();
+            }
+        };
+        window.addEventListener("pageshow", handlePageShow);
+        return () => window.removeEventListener("pageshow", handlePageShow);
     }, [refresh]);
 
     const displayCount = scrollRestore ? scrollRestore.displayCount : internalDisplayCount;
@@ -180,35 +219,58 @@ export function StoryStudioHub({
     }, [getEditHref, navigate, onOpenDraft]);
 
     const handleCreate = async (values: StoryMetaValues) => {
+        if (creatingDraftRef.current) return;
+        creatingDraftRef.current = true;
+        setCreatingDraft(true);
         try {
             const base = createStoryDocument(values.region, values.title);
             const doc = applyMetaValuesToDoc(base, values);
             const created = await storage.createDraft(doc);
+            mutationEpochRef.current += 1;
+            setDrafts(previous => prependStoryDraft(previous, created));
             setCreatingOpen(false);
             openEditor(created.id);
         } catch {
             setStorageError("failed");
+        } finally {
+            creatingDraftRef.current = false;
+            setCreatingDraft(false);
         }
     };
 
     const handleCreateStarter = async () => {
+        if (creatingDraftRef.current) return;
+        creatingDraftRef.current = true;
+        setCreatingDraft(true);
         try {
             const created = await storage.createDraft(buildStarter(defaultRegion));
+            mutationEpochRef.current += 1;
+            setDrafts(previous => prependStoryDraft(previous, created));
             openEditor(created.id);
         } catch {
             setStorageError("failed");
+        } finally {
+            creatingDraftRef.current = false;
+            setCreatingDraft(false);
         }
     };
 
     const handleImport = async (doc: StoryDocument) => {
+        if (creatingDraftRef.current) return;
+        creatingDraftRef.current = true;
+        setCreatingDraft(true);
         try {
             const created = await storage.createDraft(doc);
+            mutationEpochRef.current += 1;
             setImportOpen(false);
-            setDrafts(previous => [created, ...previous]);
+            setDrafts(previous => prependStoryDraft(previous, created));
             setSnack(t("page.storyMaker.landing.importedToast"));
             openEditor(created.id);
         } catch {
             setStorageError("failed");
+        } finally {
+            creatingDraftRef.current = false;
+            setCreatingDraft(false);
         }
     };
 
@@ -217,6 +279,7 @@ export function StoryStudioHub({
         try {
             const updated = await storage.renameDraft(renaming.id, renameValue.trim().slice(0, STORY_LIMITS.title));
             if (updated) {
+                mutationEpochRef.current += 1;
                 setDrafts(previous => previous.map(item => (item.id === updated.id ? updated : item)));
                 setSnack(t("page.storyMaker.landing.renamedToast"));
             }
@@ -230,7 +293,8 @@ export function StoryStudioHub({
         try {
             const copy = await storage.duplicateDraft(draft.id, t("page.storyMaker.landing.copySuffix"));
             if (copy) {
-                setDrafts(previous => [copy, ...previous]);
+                mutationEpochRef.current += 1;
+                setDrafts(previous => prependStoryDraft(previous, copy));
                 setSnack(t("page.storyMaker.landing.duplicatedToast"));
             }
         } catch {
@@ -242,6 +306,7 @@ export function StoryStudioHub({
         if (!deleting) return;
         try {
             await storage.deleteDraft(deleting.id);
+            mutationEpochRef.current += 1;
             setDrafts(previous => previous.filter(item => item.id !== deleting.id));
             setSnack(t("page.storyMaker.landing.deletedToast"));
             setDeleting(null);
@@ -575,16 +640,20 @@ export function StoryStudioHub({
 
             <StoryMetaDialog
                 isOpen={creatingOpen}
-                onClose={() => setCreatingOpen(false)}
+                onClose={() => { if (!creatingDraft) setCreatingOpen(false); }}
                 title={t("page.storyMaker.landing.newStory")}
                 confirmLabel={t("page.storyMaker.landing.createConfirm")}
                 initial={{ title: "", author: "", summary: "", region: defaultRegion }}
+                syncHistory={false}
+                submitting={creatingDraft}
                 onSubmit={values => void handleCreate(values)}
             />
 
             <StoryImportDialog
                 isOpen={importOpen}
-                onClose={() => setImportOpen(false)}
+                onClose={() => { if (!creatingDraft) setImportOpen(false); }}
+                syncHistory={false}
+                submitting={creatingDraft}
                 onImport={doc => void handleImport(doc)}
             />
 

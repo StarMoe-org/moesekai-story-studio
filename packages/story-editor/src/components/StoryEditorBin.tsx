@@ -18,7 +18,7 @@ import {
     storyBackgroundUrl, storyBgmUrl, storySeCandidateUrls, storyVoiceCandidateUrls,
 } from "@moesekai/story-core";
 import {
-    STORY_DRAG_MIME, addCastMember, removeCastMember, speakerName, updateCastMember,
+    STORY_DRAG_MIME, addCastMember, getStageActionItems, removeCastMember, speakerName, updateCastMember,
     type StoryDragPayload,
 } from "@moesekai/story-core";
 import {
@@ -111,6 +111,34 @@ function writeAllPinnedAssets(map: Record<string, PinnedBinAssets>): void {
 }
 
 const NOOP = () => {};
+
+/** Scans all scene nodes (including `stageCast`, `talk`, and multi-actor `stageAction` groups) for each cast member's first node. */
+export function collectCastFirstNodeMap(nodes: StoryDocument["nodes"]): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const node of Object.values(nodes)) {
+        if (node.type !== "scene") continue;
+        if (node.stageCast.mode === "set") {
+            for (const actor of node.stageCast.actors) {
+                if (!map.has(actor.castKey)) map.set(actor.castKey, node.id);
+            }
+        }
+        for (const beat of node.beats) {
+            if (beat.kind === "talk") {
+                if (beat.speakerKey && !map.has(beat.speakerKey)) map.set(beat.speakerKey, node.id);
+                for (const reaction of beat.reactions ?? []) {
+                    if (!map.has(reaction.castKey)) map.set(reaction.castKey, node.id);
+                }
+            } else if (beat.kind === "stageAction") {
+                for (const item of getStageActionItems(beat)) {
+                    if (item.castKey && !map.has(item.castKey)) {
+                        map.set(item.castKey, node.id);
+                    }
+                }
+            }
+        }
+    }
+    return map;
+}
 
 function startPayloadDrag(
     payload: StoryDragPayload,
@@ -264,28 +292,7 @@ export function StoryEditorBin({
         return new Set(activeScene.stageCast.actors.map(a => a.castKey));
     }, [activeScene]);
 
-    const castFirstNode = useMemo(() => {
-        const map = new Map<string, string>();
-        for (const node of Object.values(doc.nodes)) {
-            if (node.type !== "scene") continue;
-            if (node.stageCast.mode === "set") {
-                for (const actor of node.stageCast.actors) {
-                    if (!map.has(actor.castKey)) map.set(actor.castKey, node.id);
-                }
-            }
-            for (const beat of node.beats) {
-                if (beat.kind === "talk") {
-                    if (beat.speakerKey && !map.has(beat.speakerKey)) map.set(beat.speakerKey, node.id);
-                    for (const reaction of beat.reactions ?? []) {
-                        if (!map.has(reaction.castKey)) map.set(reaction.castKey, node.id);
-                    }
-                } else if (beat.kind === "stageAction" && beat.castKey && !map.has(beat.castKey)) {
-                    map.set(beat.castKey, node.id);
-                }
-            }
-        }
-        return map;
-    }, [doc.nodes]);
+    const castFirstNode = useMemo(() => collectCastFirstNodeMap(doc.nodes), [doc.nodes]);
 
     const usedBackgrounds = useMemo(() => {
         const map = new Map<string, string | null>();
@@ -654,10 +661,18 @@ export function StoryEditorBin({
             {
                 key: "beat-stageAction",
                 label: t("page.storyMaker.v2.beats.stageAction"),
-                hint,
+                hint: `${hint} · ${t("page.storyMaker.v2.beats.stageActionGroupPalette")}`,
                 icon: mdAccessibilityNew,
                 tone: "secondary",
                 payload: { kind: "beat", beatKind: "stageAction", stageAction: "enter" },
+            },
+            {
+                key: "beat-stageActionExit",
+                label: t("page.storyMaker.v2.beats.stageActionExit"),
+                hint: `${hint} · ${t("page.storyMaker.v2.beats.stageActionGroupPalette")}`,
+                icon: mdPersonRemove,
+                tone: "secondary",
+                payload: { kind: "beat", beatKind: "stageAction", stageAction: "exit" },
             },
             {
                 key: "beat-cue",

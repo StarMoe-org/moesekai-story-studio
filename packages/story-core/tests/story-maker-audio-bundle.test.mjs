@@ -5,13 +5,26 @@ import {
     buildAudioTarBundle,
     buildSafeArchiveClipPath,
     buildUstarHeader,
+    buildVoiceCueSheetCsv,
+    buildVoiceCueSheetJson,
+    buildVoiceCueSheetText,
     estimateTarArchiveBytes,
     extractTalkBeatsForVoice,
     matchAudioFilesToTalkBeats,
     sha256Hex,
     validateAudioSelection,
 } from "../src/story/audioBundle.ts";
-import { connectEdge, createNode, createSceneBeat, createStoryDocument } from "../src/story/document.ts";
+import {
+    addCastMember,
+    connectEdge,
+    createNode,
+    createSceneBeat,
+    createStoryDocument,
+    setStorySourceLocale,
+    upsertStoryLocalePack,
+} from "../src/story/document.ts";
+import { STORY_I18N_SCHEMA_VERSION } from "../src/types/storyMaker.ts";
+import { computeBeatSrcHash } from "../src/story/i18nPack.ts";
 
 /** Minimal POSIX USTAR parser to verify every header block, checksum, padding, and EOF record. */
 function parseUstarTar(bytes) {
@@ -245,4 +258,96 @@ test("6. validateAudioSelection enforces single clip duration, total duration, f
     const largeEst = estimateTarArchiveBytes(Array.from({ length: 500 }, () => 1024));
     assert.ok(smallEst > 2048);
     assert.ok(largeEst > 500 * 1536 + 500 * 240);
+});
+
+test("7. Voice cue sheet CSV/TXT/JSON builders handle BOM, RFC-4180 quoting, onlyMissingOfficialVoice, and locale overlay", () => {
+    let doc = createStoryDocument("jp", "Cue Sheet Demo");
+    doc = setStorySourceLocale(doc, "zh-CN");
+    doc = addCastMember(doc, { key: "ichika", name: "星乃一歌", modelId: "01ichika_unit", characterId: 1 });
+    doc = addCastMember(doc, { key: "miku", name: "初音未来", modelId: "21miku_band", characterId: 21 });
+
+    const s1 = createNode(doc, "scene", { x: 200, y: 100 });
+    doc = s1.doc;
+    const s2 = createNode(doc, "scene", { x: 450, y: 100 });
+    doc = s2.doc;
+    doc = connectEdge(doc, doc.startNodeId, "out", s1.node.id);
+    doc = connectEdge(doc, s1.node.id, "out", s2.node.id);
+
+    const scene1 = doc.nodes[s1.node.id];
+    const scene2 = doc.nodes[s2.node.id];
+    assert.ok(scene1.type === "scene" && scene2.type === "scene");
+    scene1.title = 'Rooftop, "Sunset"';
+    scene2.title = "Music Room";
+
+    const b1 = createSceneBeat("talk", doc);
+    b1.id = "b_001";
+    b1.speakerKey = "ichika";
+    b1.body = '你好, "ミク"! 今天练习吗？';
+
+    const b2 = createSceneBeat("talk", doc);
+    b2.id = "b_002";
+    b2.speakerKey = "miku";
+    b2.body = "这句已经有官方语音了。";
+    b2.voice = { kind: "story", scenarioId: "ev_01", voiceId: "v_01" };
+
+    const b3 = createSceneBeat("talk", doc);
+    b3.id = "b_003";
+    b3.speakerKey = "ichika";
+    b3.body = "我们开始吧！";
+
+    scene1.beats = [b1, b2];
+    scene2.beats = [b3];
+
+    doc = upsertStoryLocalePack(doc, {
+        schema: STORY_I18N_SCHEMA_VERSION,
+        storyId: doc.id,
+        locale: "en-US",
+        translationMeta: { origin: "human" },
+        cast: { ichika: "Ichika", miku: "Miku" },
+        beats: {
+            b_001: { srcHash: computeBeatSrcHash(b1.body), body: 'Hello, "Miku"! Ready to practice?' },
+            b_002: { srcHash: computeBeatSrcHash(b2.body), body: "Official voiced line." },
+            b_003: { srcHash: computeBeatSrcHash(b3.body), body: "Let's begin!" },
+        },
+    });
+
+    // CSV: UTF-8 BOM, exact header, RFC-4180 quoting of commas & double quotes
+    const csv = buildVoiceCueSheetCsv(doc);
+    assert.ok(csv.startsWith("\uFEFF"), "CSV must start with UTF-8 BOM");
+    const csvLines = csv.slice(1).trim().split("\n");
+    assert.equal(csvLines[0], "beat_id,scene_id,scene_title,speaker,text,suggested_filename,has_official_voice");
+    assert.equal(csvLines.length, 4);
+    assert.equal(
+        csvLines[1],
+        `b_001,${s1.node.id},"Rooftop, ""Sunset""",星乃一歌,"你好, ""ミク""! 今天练习吗？",b_001.ogg,false`,
+    );
+    assert.ok(csvLines[2].endsWith(",b_002.ogg,true"));
+
+    // onlyMissingOfficialVoice filters out b_002
+    const csvMissingOnly = buildVoiceCueSheetCsv(doc, { onlyMissingOfficialVoice: true });
+    const missingRows = csvMissingOnly.slice(1).trim().split("\n");
+    assert.equal(missingRows.length, 3);
+    assert.equal(missingRows.some((r) => r.startsWith("b_002,")), false);
+
+    // Locale overlay applies translated speaker & text without mutating doc
+    const txtEn = buildVoiceCueSheetText(doc, { locale: "en-US" });
+    assert.match(txtEn, /<beat_id>\.ogg \/ \.mp3 \/ \.wav/);
+    assert.match(txtEn, /## Rooftop, "Sunset"/);
+    assert.match(txtEn, /## Music Room/);
+    assert.match(txtEn, /\[b_001\] Ichika: Hello, "Miku"! Ready to practice\?/);
+    assert.match(txtEn, /\[b_003\] Ichika: Let's begin!/);
+    assert.equal(doc.cast[0].name, "星乃一歌");
+
+    // JSON output carries storyId, locale, totalLines, lines
+    const jsonRaw = buildVoiceCueSheetJson(doc, { locale: "en-US", onlyMissingOfficialVoice: true });
+    const parsedJson = JSON.parse(jsonRaw);
+    assert.equal(parsedJson.storyId, doc.id);
+    assert.equal(parsedJson.locale, "en-US");
+    assert.equal(parsedJson.totalLines, 2);
+    assert.equal(parsedJson.lines.length, 2);
+    assert.equal(parsedJson.lines[0].beatId, "b_001");
+    assert.equal(parsedJson.lines[0].speaker, "Ichika");
+    assert.equal(parsedJson.lines[0].suggestedFilename, "b_001.ogg");
+    assert.equal(parsedJson.lines[0].hasOfficialVoice, false);
+    assert.equal(parsedJson.lines[1].beatId, "b_003");
 });

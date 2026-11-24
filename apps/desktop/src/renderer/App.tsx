@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+    clearStoryAudioCache,
     configureStoryCore,
     createStarterStoryFromScript,
     DEFAULT_STORY_CORE_CONFIG,
     DESKTOP_STORY_WORKSPACE_CAPABILITIES,
     parseStoryScript,
+    parseStoryVoiceManifest,
     serializeStoryScript,
     type StarterLocale,
     type StoryCoreConfig,
@@ -58,6 +60,7 @@ import {
     DesktopPlayerTopBar,
     DesktopWelcomeTopBar,
 } from "./components/DesktopTopBar";
+import { DesktopVoiceManagerPanel } from "./components/DesktopVoiceManagerPanel";
 import { ExportMskDialog, type ExportDialogMode } from "./components/ExportMskDialog";
 import { PiAgentPanel, type PiAgentPanelHandle } from "./components/PiAgentPanel";
 import { SettingsDialog, type SettingsDialogTab } from "./components/SettingsDialog";
@@ -128,6 +131,11 @@ function parseProjectDoc(project: WorkspaceProjectData): StoryDocument | null {
             ...(project.locales as Partial<Record<UiLocale, StoryLocalePack>>),
         },
     };
+}
+
+function normalizeWorkspaceVoiceManifest(raw: unknown): StoryVoiceManifest | null {
+    if (raw == null) return null;
+    return parseStoryVoiceManifest(raw, { allowLocalWorkspaceUrls: true });
 }
 
 export const App: React.FC = () => {
@@ -240,7 +248,9 @@ export const App: React.FC = () => {
         setProjectSessionSeq(seq => seq + 1);
         setLiveScript(proj.script);
         setSnapshots(proj.snapshots);
-        setVoiceManifest((proj.voiceManifest as StoryVoiceManifest | null) ?? null);
+        const normalizedManifest = normalizeWorkspaceVoiceManifest(proj.voiceManifest);
+        voiceManifestRef.current = normalizedManifest;
+        setVoiceManifest(normalizedManifest);
         const parsed = parseProjectDoc(proj);
         setActiveDoc(parsed);
         setSelection({ nodeId: null, beatId: null });
@@ -690,7 +700,9 @@ export const App: React.FC = () => {
         setProject(updated);
         setLiveScript(updated.script);
         setSnapshots(updated.snapshots);
-        setVoiceManifest((updated.voiceManifest as StoryVoiceManifest | null) ?? null);
+        const normalizedManifest = normalizeWorkspaceVoiceManifest(updated.voiceManifest);
+        voiceManifestRef.current = normalizedManifest;
+        setVoiceManifest(normalizedManifest);
         const parsed = parseProjectDoc(updated);
         if (parsed) setActiveDoc(parsed);
         editorRef.current?.reloadFromScript(updated.script, {
@@ -700,6 +712,16 @@ export const App: React.FC = () => {
         });
         setSaveState("saved");
         setSnack(formatDesktopMessage(localeRef.current, "rollbackSuccessNotice"));
+    }, []);
+
+    const handleVoiceManifestChange = useCallback((next: StoryVoiceManifest | null) => {
+        voiceManifestRef.current = next;
+        setVoiceManifest(next);
+        setProject(prev => (prev ? { ...prev, voiceManifest: next } : prev));
+        if (!projectRef.current) return;
+        void window.moesekaiDesktop.workspace.saveVoiceManifest(next).catch(err => {
+            setSnack(err instanceof Error ? err.message : String(err));
+        });
     }, []);
 
     const handleRefreshSnapshots = useCallback(async () => {
@@ -714,9 +736,14 @@ export const App: React.FC = () => {
             if (!currentProj || currentProj.mskFilePath !== change.mskFilePath || currentProj.rootDir !== change.rootDir) {
                 return;
             }
+            if (change.kind === "voice-manifest" || change.kind === "all") {
+                clearStoryAudioCache();
+            }
             setLiveScript(change.script);
             setSnapshots(change.snapshots);
-            setVoiceManifest((change.voiceManifest as StoryVoiceManifest | null) ?? null);
+            const normalizedManifest = normalizeWorkspaceVoiceManifest(change.voiceManifest);
+            voiceManifestRef.current = normalizedManifest;
+            setVoiceManifest(normalizedManifest);
             setProject(prev =>
                 prev && prev.id === currentProj.id
                     ? {
@@ -963,6 +990,7 @@ export const App: React.FC = () => {
         appInfo?.live2dScriptBase ?? (isCustomAppOrigin ? "moesekai-app://app/live2d-viewer/" : "/live2d-viewer/");
     const unitIconBaseUrl =
         (appInfo ? !appInfo.isDev : isCustomAppOrigin) ? "moesekai-app://app/unit-icons/" : "/unit-icons/";
+    const voiceWorkspaceBaseUrl = appInfo?.workspaceProtocolBase ?? "moesekai-app://app/workspace/";
 
     const platform = appInfo?.platform ?? "win32";
     const appVersion = appInfo?.version ?? "0.1.0";
@@ -1077,6 +1105,7 @@ export const App: React.FC = () => {
             live2dScriptVersion={LIVE2D_SCRIPT_VERSION}
             coreConfig={storyCoreConfig}
             unitIconBaseUrl={unitIconBaseUrl}
+            voiceWorkspaceBaseUrl={voiceWorkspaceBaseUrl}
             themeSeed={settings.themeSeed}
             themeMode={settings.themeMode}
             stageRenderQuality={settings.stageRenderQuality}
@@ -1144,6 +1173,7 @@ export const App: React.FC = () => {
                                 initialLocale={settings.locale}
                                 initialImmersive={true}
                                 homeHref={null}
+                                onVoiceManifestChange={handleVoiceManifestChange}
                                 onBackToDrafts={() => setViewMode("editor")}
                                 onEditDraft={() => setViewMode("editor")}
                                 slots={{
@@ -1186,7 +1216,19 @@ export const App: React.FC = () => {
                                 enforceDesktopViewport={false}
                                 initialImmersive={true}
                                 initialVoiceManifest={voiceManifest}
+                                onVoiceManifestChange={handleVoiceManifestChange}
                                 slots={{
+                                    voiceManifestUploadTab: slotCtx => ({
+                                        label: formatDesktopMessage(settings.locale, "voiceManagerTabLabel"),
+                                        render: tabCtx => (
+                                            <DesktopVoiceManagerPanel
+                                                doc={slotCtx.effectiveDoc}
+                                                locale={settings.locale}
+                                                workspaceProtocolBase={voiceWorkspaceBaseUrl}
+                                                tabCtx={tabCtx}
+                                            />
+                                        ),
+                                    }),
                                     replaceTopBar: topCtx => (
                                         <DesktopEditorTopBar
                                             ctx={topCtx}

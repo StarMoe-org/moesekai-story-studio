@@ -179,7 +179,7 @@ async function bootstrap(): Promise<void> {
         isFullscreen: false,
         isDev,
         live2dScriptBase: isDev ? "/live2d-viewer/" : `${APP_PROTOCOL_SCHEME}://app/live2d-viewer/`,
-        workspaceProtocolBase: `${APP_PROTOCOL_SCHEME}://workspace/`,
+        workspaceProtocolBase: `${APP_PROTOCOL_SCHEME}://app/workspace/`,
         skillPath,
     };
 

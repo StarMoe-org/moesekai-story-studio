@@ -20,6 +20,10 @@ export interface StoryImportDialogProps {
     onClose: () => void;
     title?: string;
     confirmLabel?: string;
+    /** Whether opening/closing syncs browser history. Disable when submitting immediately navigates away. */
+    syncHistory?: boolean;
+    /** Disables confirmation while an async import action is in flight. */
+    submitting?: boolean;
     onImport: (doc: StoryDocument) => void;
 }
 
@@ -75,7 +79,7 @@ function evaluateImportText(raw: string): ImportEvaluation {
  * file or pasted source, running strict syntax/schema validation and graph compilation before
  * accepting the document.
  */
-export function StoryImportDialog({ isOpen, onClose, title, confirmLabel, onImport }: StoryImportDialogProps) {
+export function StoryImportDialog({ isOpen, onClose, title, confirmLabel, syncHistory, submitting = false, onImport }: StoryImportDialogProps) {
     const { t } = useI18n();
     const inputRef = useRef<HTMLInputElement>(null);
     const [text, setText] = useState("");
@@ -116,7 +120,7 @@ export function StoryImportDialog({ isOpen, onClose, title, confirmLabel, onImpo
     };
 
     const submit = () => {
-        if (!parsed?.ok) return;
+        if (submitting || !parsed?.ok) return;
         const doc = parsed.doc;
         setText("");
         setFileError(null);
@@ -137,10 +141,11 @@ export function StoryImportDialog({ isOpen, onClose, title, confirmLabel, onImpo
             title={title ?? t("page.storyMaker.import.title")}
             size="lg"
             fullscreenOnMobile
+            syncHistory={syncHistory}
             actions={(
                 <>
-                    <Button variant="text" onClick={resetAndClose}>{t("common.action.cancel")}</Button>
-                    <Button variant="filled" disabled={!parsed?.ok} onClick={submit}>
+                    <Button variant="text" disabled={submitting} onClick={resetAndClose}>{t("common.action.cancel")}</Button>
+                    <Button variant="filled" disabled={submitting || !parsed?.ok} onClick={submit}>
                         {confirmLabel ?? t("page.storyMaker.import.confirm")}
                     </Button>
                 </>

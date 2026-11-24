@@ -8,7 +8,9 @@
  * - Produces archives strictly compatible with `moesekai-media-worker`'s `worker/archive.py`
  *   (POSIX USTAR regular files, root `index.json`, safe relative paths, verified SHA-256).
  */
+import type { UiLocale } from "../locales";
 import type { StoryDocument } from "../types/storyMaker";
+import { applyStoryLocaleOverlay, inferStorySourceLocale } from "./i18nPack";
 
 export const SUPPORTED_AUDIO_EXTENSIONS = [
     ".ogg",
@@ -197,11 +199,129 @@ export function extractTalkBeatsForVoice(doc: StoryDocument): TalkBeatVoiceSlot[
                 sceneTitle,
                 speakerName,
                 textPreview: beat.body.replace(/\s+/g, " ").trim(),
-                hasOfficialVoice: Boolean(beat.voice),
+                hasOfficialVoice: Boolean(beat.voice && beat.voice.scenarioId && beat.voice.voiceId),
             });
         }
     }
     return slots;
+}
+
+export interface VoiceCueSheetOptions {
+    locale?: UiLocale;
+    onlyMissingOfficialVoice?: boolean;
+}
+
+export interface VoiceCueSheetLine {
+    beatId: string;
+    sceneId: string;
+    sceneTitle: string;
+    speaker: string;
+    text: string;
+    suggestedFilename: string;
+    hasOfficialVoice: boolean;
+}
+
+function collectVoiceCueSheetData(
+    doc: StoryDocument,
+    options?: VoiceCueSheetOptions,
+): {
+    storyId: string;
+    title: string;
+    locale: UiLocale;
+    lines: VoiceCueSheetLine[];
+} {
+    const sourceLocale = inferStorySourceLocale(doc);
+    const effectiveLocale = options?.locale ?? sourceLocale;
+    const workingDoc = options?.locale ? applyStoryLocaleOverlay(doc, options.locale) : doc;
+    const slots = extractTalkBeatsForVoice(workingDoc);
+    const filtered = options?.onlyMissingOfficialVoice
+        ? slots.filter((slot) => !slot.hasOfficialVoice)
+        : slots;
+    const lines: VoiceCueSheetLine[] = filtered.map((slot) => ({
+        beatId: slot.beatId,
+        sceneId: slot.nodeId,
+        sceneTitle: slot.sceneTitle,
+        speaker: slot.speakerName,
+        text: slot.textPreview,
+        suggestedFilename: `${slot.beatId}.ogg`,
+        hasOfficialVoice: slot.hasOfficialVoice,
+    }));
+    return {
+        storyId: workingDoc.id,
+        title: workingDoc.meta.title.trim() || workingDoc.id,
+        locale: effectiveLocale,
+        lines,
+    };
+}
+
+function escapeCsvCell(value: string): string {
+    if (/[",\r\n]/.test(value)) {
+        return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+}
+
+/**
+ * Builds an Excel-compatible UTF-8 BOM RFC-4180 CSV voice recording cue sheet with columns:
+ * `beat_id,scene_id,scene_title,speaker,text,suggested_filename,has_official_voice`.
+ */
+export function buildVoiceCueSheetCsv(doc: StoryDocument, options?: VoiceCueSheetOptions): string {
+    const data = collectVoiceCueSheetData(doc, options);
+    const rows: string[] = [
+        "beat_id,scene_id,scene_title,speaker,text,suggested_filename,has_official_voice",
+    ];
+    for (const line of data.lines) {
+        rows.push([
+            escapeCsvCell(line.beatId),
+            escapeCsvCell(line.sceneId),
+            escapeCsvCell(line.sceneTitle),
+            escapeCsvCell(line.speaker),
+            escapeCsvCell(line.text),
+            escapeCsvCell(line.suggestedFilename),
+            line.hasOfficialVoice ? "true" : "false",
+        ].join(","));
+    }
+    return `\uFEFF${rows.join("\n")}\n`;
+}
+
+/**
+ * Builds a clean human-readable dialogue cue sheet grouped by scene with
+ * `[beat_id] Speaker: text` lines and `<beat_id>.ogg / .mp3 / .wav` naming hint.
+ */
+export function buildVoiceCueSheetText(doc: StoryDocument, options?: VoiceCueSheetOptions): string {
+    const data = collectVoiceCueSheetData(doc, options);
+    const out: string[] = [
+        `# ${data.title} (${data.storyId})`,
+        `# Locale: ${data.locale} | Lines: ${data.lines.length}`,
+        "# Naming hint: <beat_id>.ogg / .mp3 / .wav",
+    ];
+
+    let currentSceneId: string | null = null;
+    for (const line of data.lines) {
+        if (line.sceneId !== currentSceneId) {
+            currentSceneId = line.sceneId;
+            out.push("");
+            out.push(`## ${line.sceneTitle} (${line.sceneId})`);
+        }
+        const speakerPart = line.speaker ? `${line.speaker}: ` : "";
+        out.push(`[${line.beatId}] ${speakerPart}${line.text}`);
+    }
+
+    return `${out.join("\n")}\n`;
+}
+
+/**
+ * Builds a pretty-printed JSON cue sheet (`storyId`, `locale`, `totalLines`, `lines`).
+ */
+export function buildVoiceCueSheetJson(doc: StoryDocument, options?: VoiceCueSheetOptions): string {
+    const data = collectVoiceCueSheetData(doc, options);
+    const payload = {
+        storyId: data.storyId,
+        locale: data.locale,
+        totalLines: data.lines.length,
+        lines: data.lines,
+    };
+    return `${JSON.stringify(payload, null, 2)}\n`;
 }
 
 /**

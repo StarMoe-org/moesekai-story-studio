@@ -9,25 +9,30 @@
  *   next blocking beat (`talk` / `narration` / `telop`), `choice`, `end`, `disconnected`, or `loop`
  * - `evaluateStageAt(doc, nodeId, beatId?)`: instant stage + variable snapshot for the editor monitor
  */
-import type {
-    BackgroundSlot,
-    BgmSlot,
-    ConditionExpr,
-    PlaceSlot,
-    SceneBeat,
-    StageCastSlot,
-    StoryActorState,
-    StoryDocument,
-    StoryEdge,
-    StoryStageActorState,
-    StoryStageState,
-    StoryVarValues,
-    TransitionSlot,
-    VarOp,
+import {
+    getStageActionItems,
+    type BackgroundSlot,
+    type BgmSlot,
+    type ConditionExpr,
+    type PlaceSlot,
+    type SceneBeat,
+    type SceneNode,
+    type StageActionItem,
+    type StageCastSlot,
+    type StageLayoutMode,
+    type StoryActorState,
+    type StoryCastMember,
+    type StoryDocument,
+    type StoryEdge,
+    type StoryStageActorState,
+    type StoryStageState,
+    type StoryVarValues,
+    type TransitionSlot,
+    type VarOp,
 } from "../types/storyMaker";
-import type { CompiledStoryProgram, StoryIR } from "./compiler";
+import { findLeadingTelopEndIndex, type CompiledStoryProgram, type StoryIR } from "./compiler";
 import { getNodeOutPorts } from "./document";
-import { SLOT_X, STORY_LIMITS, STORY_TEMPLATE_VAR_PATTERN, layoutStageActors } from "./limits";
+import { SLOT_X, STORY_LIMITS, STORY_TEMPLATE_VAR_PATTERN, clampActorX, layoutStageActors } from "./limits";
 
 export type { StoryActorState, StoryStageActorState, StoryStageState, StoryVarValues };
 
@@ -225,6 +230,194 @@ export function computeActorRenderOrders(
 
 // ==================== Stage Reducers ====================
 
+function buildActorsFromStageCast(
+    stageCast: Extract<StageCastSlot, { mode: "set" }>,
+): StoryStageActorState[] {
+    const layoutMode: StageLayoutMode = stageCast.layoutMode ?? "auto";
+    return layoutStageActors(
+        stageCast.actors.map((actor) => {
+            const explicitX = actor.x !== undefined && Number.isFinite(actor.x)
+                ? clampActorX(actor.x)
+                : undefined;
+            return {
+                cast: actor.castKey,
+                slot: actor.slot,
+                x: explicitX ?? SLOT_X[actor.slot],
+                ...(explicitX !== undefined ? { explicitX } : {}),
+                ...(actor.lockX ? { lockX: true } : {}),
+                y: actor.y ?? 0,
+                scale: actor.scale ?? 1,
+                mirror: actor.mirror ?? false,
+                motion: actor.motion ?? null,
+                facial: actor.facial ?? null,
+                ...(actor.z !== undefined ? { z: actor.z } : {}),
+                ...(actor.allowOverlap ? { allowOverlap: true } : {}),
+            };
+        }),
+        { mode: "initial", layoutMode },
+    );
+}
+
+function applyDeferredStageCast(
+    stage: StoryStageState,
+    stageCast: Extract<StageCastSlot, { mode: "set" }>,
+): StoryStageState {
+    const next: StoryStageState = {
+        ...stage,
+        actors: buildActorsFromStageCast(stageCast),
+        telop: null,
+        speaking: null,
+    };
+    if (stageCast.layoutMode !== undefined) {
+        next.layoutMode = stageCast.layoutMode;
+    } else {
+        delete next.layoutMode;
+    }
+    return next;
+}
+
+/**
+ * Atomically applies a simultaneous wave of `StageActionItem`s (from a single beat's
+ * `getStageActionItems(beat)` and/or consecutive `parallel`-linked `stageAction` beats):
+ * 1. Snapshots `stationaryKeys` from `stage.actors` BEFORE the wave.
+ * 2. Processes all `exit` items (removing from actors & `stationaryKeys`).
+ * 3. Processes all `pose` items in place (never modifies `x` or triggers layout).
+ * 4. Processes all `move` / `enter` items (removing from `stationaryKeys` and updating transform/pose fields).
+ * 5. Calls `layoutStageActors(..., { mode: "incremental", layoutMode, stationaryKeys })` ONCE iff
+ *    the wave contained at least one `enter` or `move`.
+ * 6. If the wave had ONLY `exit` and/or `pose`, skips `layoutStageActors` so surviving actors keep exact `x`.
+ */
+export function applyStageActionWave(
+    stage: StoryStageState,
+    items: readonly StageActionItem[],
+    _castMap?: ReadonlyMap<string, StoryCastMember> | Readonly<Record<string, StoryCastMember>>,
+): StoryStageState {
+    const base: StoryStageState = { ...stage, telop: null, speaking: null };
+    if (items.length === 0) return base;
+
+    const stationaryKeys = new Set<string>(stage.actors.map(a => a.cast));
+    let actors: StoryStageActorState[] = [...stage.actors];
+    let hasEnterOrMove = false;
+
+    // 1. Exits
+    const exitingKeys = new Set<string>();
+    for (const item of items) {
+        if (item.action === "exit") {
+            exitingKeys.add(item.castKey);
+            stationaryKeys.delete(item.castKey);
+        }
+    }
+    if (exitingKeys.size > 0) {
+        actors = actors.filter(a => !exitingKeys.has(a.cast));
+    }
+
+    // 2. Poses in place (never modifies x or triggers layout)
+    for (const item of items) {
+        if (item.action !== "pose") continue;
+        actors = actors.map((actor) => {
+            if (actor.cast !== item.castKey) return actor;
+            const nextZ = item.z !== undefined ? item.z : actor.z;
+            const nextMirror = item.mirror !== undefined ? item.mirror : actor.mirror;
+            const nextLockX = item.lockX !== undefined ? item.lockX : actor.lockX;
+            const updated: StoryStageActorState = {
+                ...actor,
+                mirror: nextMirror,
+                motion: item.motion ?? actor.motion,
+                facial: item.facial ?? actor.facial,
+                ...(nextZ !== undefined ? { z: nextZ } : {}),
+            };
+            if (nextLockX) updated.lockX = true;
+            else delete updated.lockX;
+            return updated;
+        });
+    }
+
+    // 3. Moves & Enters
+    for (const item of items) {
+        if (item.action === "enter") {
+            hasEnterOrMove = true;
+            stationaryKeys.delete(item.castKey);
+            const slot = item.slot ?? "center";
+            const remaining = actors.filter(a => a.cast !== item.castKey);
+            const autoOrder = nextActorAutoOrder(remaining);
+            const explicitX = item.x !== undefined && Number.isFinite(item.x)
+                ? clampActorX(item.x)
+                : undefined;
+            const entered: StoryStageActorState = {
+                cast: item.castKey,
+                slot,
+                x: explicitX ?? SLOT_X[slot],
+                ...(explicitX !== undefined ? { explicitX } : {}),
+                ...(item.lockX ? { lockX: true } : {}),
+                y: item.y ?? 0,
+                scale: item.scale ?? 1,
+                mirror: item.mirror ?? false,
+                motion: item.motion ?? null,
+                facial: item.facial ?? null,
+                ...(item.z !== undefined ? { z: item.z } : {}),
+                autoOrder,
+                ...(item.allowOverlap ? { allowOverlap: true } : {}),
+            };
+            actors = [...remaining, entered];
+        } else if (item.action === "move") {
+            hasEnterOrMove = true;
+            stationaryKeys.delete(item.castKey);
+            const autoOrder = nextActorAutoOrder(actors, item.castKey);
+            actors = actors.map((actor) => {
+                if (actor.cast !== item.castKey) return actor;
+                const nextSlot = item.slot ?? actor.slot;
+                const nextOverlap = item.allowOverlap ?? actor.allowOverlap;
+                const nextZ = item.z !== undefined ? item.z : actor.z;
+                const nextMirror = item.mirror !== undefined ? item.mirror : actor.mirror;
+                const hasExplicitX = item.x !== undefined && Number.isFinite(item.x);
+                const nextExplicitX = hasExplicitX
+                    ? clampActorX(item.x!)
+                    : item.slot !== undefined
+                        ? undefined
+                        : actor.explicitX;
+                const nextX = nextExplicitX !== undefined
+                    ? nextExplicitX
+                    : item.slot !== undefined
+                        ? SLOT_X[nextSlot]
+                        : actor.x;
+                const nextLockX = item.lockX !== undefined ? item.lockX : actor.lockX;
+                const moved: StoryStageActorState = {
+                    ...actor,
+                    slot: nextSlot,
+                    x: nextX,
+                    scale: item.scale ?? actor.scale,
+                    y: item.y ?? actor.y,
+                    mirror: nextMirror,
+                    motion: item.motion ?? actor.motion,
+                    facial: item.facial ?? actor.facial,
+                    ...(nextZ !== undefined ? { z: nextZ } : {}),
+                    autoOrder,
+                };
+                if (nextExplicitX !== undefined) moved.explicitX = nextExplicitX;
+                else delete moved.explicitX;
+                if (nextLockX) moved.lockX = true;
+                else delete moved.lockX;
+                if (nextOverlap) moved.allowOverlap = true;
+                else delete moved.allowOverlap;
+                return moved;
+            });
+        }
+    }
+
+    if (hasEnterOrMove) {
+        actors = layoutStageActors(actors, {
+            mode: "incremental",
+            layoutMode: stage.layoutMode ?? "auto",
+            stationaryKeys,
+        });
+    }
+
+    return {
+        ...base,
+        actors,
+    };
+}
+
 function applySceneSlots(
     stage: StoryStageState,
     slots: {
@@ -236,6 +429,7 @@ function applySceneSlots(
     },
     doc: StoryDocument,
     vars: StoryVarValues,
+    options?: { deferStageCast?: boolean },
 ): StoryStageState {
     const background = slots.background.mode === "inherit"
         ? stage.background
@@ -255,22 +449,19 @@ function applySceneSlots(
             ? null
             : (interpolateStoryText(slots.place.text, doc, vars).trim() || null);
 
+    const nextLayoutMode: StageLayoutMode | undefined = slots.stageCast.mode === "inherit"
+        ? stage.layoutMode
+        : slots.stageCast.mode === "clear"
+            ? undefined
+            : slots.stageCast.layoutMode;
+
     const actors: StoryStageActorState[] = slots.stageCast.mode === "inherit"
         ? stage.actors
         : slots.stageCast.mode === "clear"
             ? []
-            : layoutStageActors(slots.stageCast.actors.map(actor => ({
-                cast: actor.castKey,
-                slot: actor.slot,
-                x: SLOT_X[actor.slot],
-                y: actor.y ?? 0,
-                scale: actor.scale ?? 1,
-                mirror: false,
-                motion: actor.motion ?? null,
-                facial: actor.facial ?? null,
-                ...(actor.z !== undefined ? { z: actor.z } : {}),
-                ...(actor.allowOverlap ? { allowOverlap: true } : {}),
-            })));
+            : options?.deferStageCast
+                ? []
+                : buildActorsFromStageCast(slots.stageCast);
 
     const screenColor = slots.transition.kind === "fadeWhite" ? "white" : "black";
 
@@ -278,6 +469,7 @@ function applySceneSlots(
         background,
         place,
         actors,
+        ...(nextLayoutMode !== undefined ? { layoutMode: nextLayoutMode } : {}),
         bgm,
         dialogue: null,
         narration: null,
@@ -371,95 +563,79 @@ function applySceneBeat(
                     telop: {
                         stepId: beat.id,
                         body: interpolateStoryText(beat.text, doc, vars),
+                        ...(beat.actorVisibility !== undefined ? { actorVisibility: beat.actorVisibility } : {}),
+                        ...(beat.position !== undefined ? { position: beat.position } : {}),
                     },
                 },
                 variables: vars,
             };
-        case "stageAction": {
-            if (beat.action === "enter") {
-                const slot = beat.slot ?? "center";
-                const remaining = stage.actors.filter(a => a.cast !== beat.castKey);
-                const autoOrder = nextActorAutoOrder(remaining);
-                const actor: StoryStageActorState = {
-                    cast: beat.castKey,
-                    slot,
-                    x: SLOT_X[slot],
-                    y: beat.y ?? 0,
-                    scale: beat.scale ?? 1,
-                    mirror: false,
-                    motion: beat.motion ?? null,
-                    facial: beat.facial ?? null,
-                    ...(beat.z !== undefined ? { z: beat.z } : {}),
-                    autoOrder,
-                    ...(beat.allowOverlap ? { allowOverlap: true } : {}),
-                };
-                return {
-                    stage: {
-                        ...base,
-                        actors: layoutStageActors([...remaining, actor]),
-                    },
-                    variables: vars,
-                };
-            }
-            if (beat.action === "exit") {
-                return {
-                    stage: {
-                        ...base,
-                        actors: layoutStageActors(stage.actors.filter(a => a.cast !== beat.castKey)),
-                    },
-                    variables: vars,
-                };
-            }
-            if (beat.action === "move") {
-                const autoOrder = nextActorAutoOrder(stage.actors, beat.castKey);
-                return {
-                    stage: {
-                        ...base,
-                        actors: layoutStageActors(stage.actors.map((actor) => {
-                            if (actor.cast !== beat.castKey) return actor;
-                            const nextSlot = beat.slot ?? actor.slot;
-                            const nextOverlap = beat.allowOverlap ?? actor.allowOverlap;
-                            const nextZ = beat.z !== undefined ? beat.z : actor.z;
-                            return {
-                                ...actor,
-                                slot: nextSlot,
-                                x: SLOT_X[nextSlot],
-                                scale: beat.scale ?? actor.scale,
-                                y: beat.y ?? actor.y,
-                                motion: beat.motion ?? actor.motion,
-                                facial: beat.facial ?? actor.facial,
-                                ...(nextZ !== undefined ? { z: nextZ } : {}),
-                                autoOrder,
-                                ...(nextOverlap ? { allowOverlap: true } : { allowOverlap: undefined }),
-                            };
-                        })),
-                    },
-                    variables: vars,
-                };
-            }
-            // "pose"
+        case "stageAction":
             return {
-                stage: {
-                    ...base,
-                    actors: stage.actors.map((actor) => {
-                        if (actor.cast !== beat.castKey) return actor;
-                        const nextZ = beat.z !== undefined ? beat.z : actor.z;
-                        return {
-                            ...actor,
-                            motion: beat.motion ?? actor.motion,
-                            facial: beat.facial ?? actor.facial,
-                            ...(nextZ !== undefined ? { z: nextZ } : {}),
-                        };
-                    }),
-                },
+                stage: applyStageActionWave(stage, getStageActionItems(beat)),
                 variables: vars,
             };
-        }
         case "cue":
             return { stage: base, variables: vars };
         case "varOp":
             return { stage: base, variables: applyVarOps(beat.ops, vars, doc) };
     }
+}
+
+/**
+ * Executes `node.beats[0..endIndex]` (inclusive, or all beats when `endIndex` is omitted),
+ * coalescing consecutive `parallel`-linked `stageAction` beats into atomic waves and applying
+ * deferred `afterTelop` `stageCast` immediately after the last leading `telop`.
+ */
+function applySceneBeatsRange(
+    initialStage: StoryStageState,
+    initialVars: StoryVarValues,
+    node: SceneNode,
+    doc: StoryDocument,
+    options: { endIndex?: number; deferStageCast: boolean },
+): { stage: StoryStageState; variables: StoryVarValues } {
+    let stage = initialStage;
+    let variables = initialVars;
+    const deferIdx = options.deferStageCast && node.stageCast.mode === "set"
+        ? findLeadingTelopEndIndex(node.beats)
+        : -1;
+    const limit = options.endIndex === undefined
+        ? node.beats.length - 1
+        : Math.min(options.endIndex, node.beats.length - 1);
+
+    let i = 0;
+    while (i <= limit) {
+        const beat = node.beats[i];
+        if (beat.kind === "stageAction") {
+            const waveItems: StageActionItem[] = [...getStageActionItems(beat)];
+            let endWave = i;
+            while (
+                endWave < limit
+                && node.beats[endWave].kind === "stageAction"
+                && (node.beats[endWave] as Extract<SceneBeat, { kind: "stageAction" }>).parallel === true
+                && node.beats[endWave + 1]?.kind === "stageAction"
+            ) {
+                endWave += 1;
+                waveItems.push(...getStageActionItems(node.beats[endWave] as Extract<SceneBeat, { kind: "stageAction" }>));
+            }
+            stage = applyStageActionWave(stage, waveItems);
+            i = endWave + 1;
+            continue;
+        }
+
+        const res = applySceneBeat(stage, variables, beat, doc);
+        stage = res.stage;
+        variables = res.variables;
+
+        if (deferIdx >= 0 && i === deferIdx && node.stageCast.mode === "set") {
+            // Apply deferred cast when continuing past the leading telop (either full replay or target beat is after deferIdx).
+            if (options.endIndex === undefined || options.endIndex > deferIdx) {
+                stage = applyDeferredStageCast(stage, node.stageCast);
+            }
+        }
+        i += 1;
+    }
+
+    return { stage, variables };
 }
 
 // ==================== Graph Path Reconstruction (BFS) ====================
@@ -558,12 +734,14 @@ function replayAncestors(
         if (!node) continue;
         recordNode(node.id);
         if (node.type === "scene") {
-            stage = applySceneSlots(stage, node, doc, variables);
-            for (const beat of node.beats) {
-                const res = applySceneBeat(stage, variables, beat, doc);
-                stage = res.stage;
-                variables = res.variables;
-            }
+            const deferStageCast =
+                node.stageCast.mode === "set"
+                && node.stageCast.enterTiming === "afterTelop"
+                && findLeadingTelopEndIndex(node.beats) >= 0;
+            stage = applySceneSlots(stage, node, doc, variables, { deferStageCast });
+            const res = applySceneBeatsRange(stage, variables, node, doc, { deferStageCast });
+            stage = res.stage;
+            variables = res.variables;
         } else if (node.type === "choice" && nextStep.viaEdge) {
             const option = node.options.find(opt => opt.id === nextStep.viaEdge!.fromPortId);
             if (option?.effects && option.effects.length > 0) {
@@ -638,7 +816,14 @@ function runFromPc(
 
         switch (inst.op) {
             case "enterScene":
-                stage = applySceneSlots(stage, inst, doc, variables);
+                stage = applySceneSlots(stage, inst, doc, variables, {
+                    deferStageCast: inst.deferStageCast,
+                });
+                pc += 1;
+                break;
+
+            case "applyStageCast":
+                stage = applyDeferredStageCast(stage, inst.stageCast);
                 pc += 1;
                 break;
 
@@ -697,10 +882,21 @@ function runFromPc(
                 };
             }
             case "stageAction": {
-                const res = applySceneBeat(stage, variables, inst.beat, doc);
-                stage = res.stage;
-                variables = res.variables;
-                pc += 1;
+                const waveItems: StageActionItem[] = [...getStageActionItems(inst.beat)];
+                let cursor = pc;
+                while (
+                    instructions[cursor]?.op === "stageAction"
+                    && (instructions[cursor] as Extract<StoryIR, { op: "stageAction" }>).beat.parallel === true
+                    && instructions[cursor + 1]?.op === "stageAction"
+                ) {
+                    cursor += 1;
+                    const nextInst = instructions[cursor] as Extract<StoryIR, { op: "stageAction" }>;
+                    recordNode(nextInst.nodeId);
+                    executedInstructions.push(nextInst);
+                    waveItems.push(...getStageActionItems(nextInst.beat));
+                }
+                stage = applyStageActionWave(stage, waveItems);
+                pc = cursor + 1;
                 break;
             }
             case "cue": {
@@ -979,15 +1175,18 @@ export function advanceRuntime(
 }
 
 /**
- * Instant editor stage preview at `(nodeId, beatId?)`.
+ * Instant editor stage preview at `(nodeId, beatIdOrIndex?)`.
  * Reconstructs inherited BG/BGM/Place/Cast/Variables from a valid BFS path from `start` to `nodeId`
- * (or starts cleanly when `nodeId` is isolated), applies `nodeId`'s stage slots, and applies beats
- * up through `beatId` inclusive.
+ * (or starts cleanly when `nodeId` is isolated):
+ * - When `beatIdOrIndex` is omitted or `null` (inspecting the Scene node itself), mounts `stageCast`
+ *   actors immediately even if `enterTiming === "afterTelop"` so authors can visually inspect/drag them.
+ * - When `beatIdOrIndex` specifies a beat ID or 0-based beat index, applies beats through that beat
+ *   inclusive, keeping `afterTelop` actors unmounted while previewing any leading `telop` beat.
  */
 export function evaluateStageAt(
     doc: StoryDocument,
     nodeId: string,
-    beatId?: string,
+    beatIdOrIndex?: string | number | null,
 ): { stage: StoryStageState; variables: StoryVarValues } {
     const node = doc.nodes[nodeId];
     if (!node) {
@@ -1007,13 +1206,30 @@ export function evaluateStageAt(
     }
 
     if (node.type === "scene") {
-        stage = applySceneSlots(stage, node, doc, variables);
-        if (beatId) {
-            for (const beat of node.beats) {
-                const res = applySceneBeat(stage, variables, beat, doc);
+        if (beatIdOrIndex === undefined || beatIdOrIndex === null) {
+            // Scene-level inspection: mount stageCast actors immediately so they remain editable on stage.
+            stage = applySceneSlots(stage, node, doc, variables, { deferStageCast: false });
+        } else {
+            const deferStageCast =
+                node.stageCast.mode === "set"
+                && node.stageCast.enterTiming === "afterTelop"
+                && findLeadingTelopEndIndex(node.beats) >= 0;
+            stage = applySceneSlots(stage, node, doc, variables, { deferStageCast });
+
+            let endIndex: number | undefined;
+            if (typeof beatIdOrIndex === "number") {
+                endIndex = beatIdOrIndex;
+            } else {
+                const hit = node.beats.findIndex(b => b.id === beatIdOrIndex);
+                endIndex = hit !== -1 ? hit : undefined;
+            }
+            if (endIndex === undefined || endIndex >= 0) {
+                const res = applySceneBeatsRange(stage, variables, node, doc, {
+                    endIndex,
+                    deferStageCast,
+                });
                 stage = res.stage;
                 variables = res.variables;
-                if (beat.id === beatId) break;
             }
         }
     }

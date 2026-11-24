@@ -147,7 +147,7 @@ describe("moesekai-app:// custom protocol handler", () => {
         expect(workerRes.status).toBe(200);
         expect(workerRes.headers.get("content-type")).toBe("application/javascript; charset=utf-8");
 
-        // 3. Workspace audio with Range request (206 Partial Content)
+        // 3. Workspace audio with Range request (206 Partial Content) on both workspace and same-origin app/workspace routes
         const rangeRes = handler(
             new Request("moesekai-app://workspace/voices/line1.mp3", {
                 headers: { Range: "bytes=2-5" },
@@ -157,6 +157,16 @@ describe("moesekai-app:// custom protocol handler", () => {
         expect(rangeRes.headers.get("content-type")).toBe("audio/mpeg");
         expect(rangeRes.headers.get("content-range")).toBe("bytes 2-5/16");
         expect(await rangeRes.text()).toBe("2345");
+
+        const sameOriginRangeRes = handler(
+            new Request("moesekai-app://app/workspace/voices/line1.mp3?t=12345", {
+                headers: { Range: "bytes=0-3" },
+            }),
+        );
+        expect(sameOriginRangeRes.status).toBe(206);
+        expect(sameOriginRangeRes.headers.get("content-type")).toBe("audio/mpeg");
+        expect(sameOriginRangeRes.headers.get("content-range")).toBe("bytes 0-3/16");
+        expect(await sameOriginRangeRes.text()).toBe("0123");
 
         // 4. Path escape blocked (403 on double-encoded/backslash traversal, 404 when URL parser collapses to non-existent root file)
         const doubleEncodedEscape = handler(new Request("moesekai-app://workspace/%252e%252e/outside.txt"));

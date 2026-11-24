@@ -157,6 +157,8 @@ export interface StoryStudioPlayerProps {
     getEditHref?: (draftId: string, immersive: boolean) => string;
     /** Optional programmatic callback for Edit button. */
     onEditDraft?: (draftId: string) => void;
+    /** Called whenever the mounted custom voice track manifest is applied, updated, or cleared in the player. */
+    onVoiceManifestChange?: (manifest: StoryVoiceManifest | null) => void;
     slots?: StoryStudioPlayerSlots;
 }
 
@@ -218,6 +220,7 @@ export function StoryStudioPlayer({
     homeHref = "/",
     getEditHref = (id, immersive) => `/story-maker/edit?id=${encodeURIComponent(id)}${!immersive ? "&immersive=0" : ""}`,
     onEditDraft,
+    onVoiceManifestChange,
     slots,
 }: StoryStudioPlayerProps) {
     const { t, assetLine, assetSource, brandLogoUrl, storage, exporter } = useStoryStudio();
@@ -274,10 +277,12 @@ export function StoryStudioPlayer({
     const loadSeqRef = useRef(0);
     const onImmersiveChangeRef = useRef(onImmersiveChange);
     const onEffectiveImmersiveChangeRef = useRef(onEffectiveImmersiveChange);
+    const onVoiceManifestChangeRef = useRef(onVoiceManifestChange);
     useEffect(() => {
         onImmersiveChangeRef.current = onImmersiveChange;
         onEffectiveImmersiveChangeRef.current = onEffectiveImmersiveChange;
-    }, [onEffectiveImmersiveChange, onImmersiveChange]);
+        onVoiceManifestChangeRef.current = onVoiceManifestChange;
+    }, [onEffectiveImmersiveChange, onImmersiveChange, onVoiceManifestChange]);
 
     // Load draft from storage adapter when `draftId` is provided and no externalSource is active.
     useEffect(() => {
@@ -335,9 +340,14 @@ export function StoryStudioPlayer({
     const voiceManifest: StoryVoiceManifest | null = voiceManifestOverride?.key === playerKey
         ? voiceManifestOverride.manifest
         : (externalSource?.voiceManifest ?? null);
+    const hasVoiceManifest = Boolean(voiceManifest && Object.keys(voiceManifest.lines).length > 0);
+    const voiceTrackBadgeLabel = voiceManifest?.locale
+        ? `${t("page.storyMaker.voiceTrack.badge")} · ${UI_LOCALE_LABELS[voiceManifest.locale]}`
+        : t("page.storyMaker.voiceTrack.badge");
 
     const setVoiceManifest = useCallback((manifest: StoryVoiceManifest | null) => {
         setVoiceManifestOverride({ key: playerKey, manifest });
+        onVoiceManifestChangeRef.current?.(manifest);
     }, [playerKey]);
 
     const loading = externalLoading || draftLoading;
@@ -539,7 +549,7 @@ export function StoryStudioPlayer({
         },
         {
             key: "load-voice-manifest",
-            label: t("page.storyMaker.voiceTrack.action"),
+            label: t("page.storyMaker.voiceTrack.externalAction"),
             icon: mdRecordVoiceOver,
             onSelect: () => setVoiceManifestOpen(true),
         },
@@ -605,7 +615,7 @@ export function StoryStudioPlayer({
         },
         openLocalePackPicker: () => localePackInputRef.current?.click(),
         moreItems: immersiveMoreItems,
-        hasVoiceManifest: Boolean(voiceManifest),
+        hasVoiceManifest,
         saveImportedAsDraft: sourceKind === "imported" ? handleSaveImported : undefined,
         onBackToDrafts,
         backToDraftsHref,
@@ -770,14 +780,17 @@ export function StoryStudioPlayer({
                                 onClick={toggleCompanionPanel}
                             />
                         )}
-                        <IconButton
-                            size="xs"
-                            variant={voiceManifest ? "tonal" : "standard"}
-                            icon={mdRecordVoiceOver}
-                            label={t("page.storyMaker.voiceTrack.action")}
-                            className="hidden sm:inline-flex"
-                            onClick={() => setVoiceManifestOpen(true)}
-                        />
+                        {hasVoiceManifest && (
+                            <button
+                                type="button"
+                                onClick={() => setVoiceManifestOpen(true)}
+                                title={t("page.storyMaker.voiceTrack.manageButton")}
+                                className="state-layer focus-ring hidden max-w-[180px] shrink-0 cursor-pointer items-center gap-1 rounded-md3-full bg-tertiary-container px-2 py-0.5 type-label-s text-on-tertiary-container sm:inline-flex"
+                            >
+                                <Icon path={mdRecordVoiceOver} size={13} className="shrink-0" />
+                                <span className="truncate">{voiceTrackBadgeLabel}</span>
+                            </button>
+                        )}
                         <IconButton
                             size="xs"
                             icon={mdTranslate}
@@ -927,14 +940,16 @@ export function StoryStudioPlayer({
                                     >
                                         {t("page.storyMaker.i18n.loadLocalePackAction")}
                                     </Button>
-                                    <Button
-                                        variant={voiceManifest ? "tonal" : "outlined"}
-                                        icon={mdRecordVoiceOver}
-                                        className="max-w-full px-3 sm:px-4"
-                                        onClick={() => setVoiceManifestOpen(true)}
-                                    >
-                                        {t("page.storyMaker.voiceTrack.action")}
-                                    </Button>
+                                    {hasVoiceManifest && (
+                                        <Button
+                                            variant="tonal"
+                                            icon={mdRecordVoiceOver}
+                                            className="max-w-full px-3 sm:px-4"
+                                            onClick={() => setVoiceManifestOpen(true)}
+                                        >
+                                            {voiceTrackBadgeLabel}
+                                        </Button>
+                                    )}
                                     <Button
                                         variant="outlined"
                                         icon={mdCode}

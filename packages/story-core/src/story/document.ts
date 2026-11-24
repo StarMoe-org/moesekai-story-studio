@@ -13,6 +13,7 @@
 import {
     STORY_SCHEMA_VERSION,
     STORY_SLOTS,
+    getStageActionItems,
     type BackgroundSlot,
     type BgmSlot,
     type ChoiceNode,
@@ -28,7 +29,10 @@ import {
     type SceneBeatKind,
     type SceneNode,
     type StageActionBeat,
+    type StageCastEnterTiming,
     type StageCastSlot,
+    type StageLayoutMode,
+    type StageTransitionStyle,
     type StoryCastMember,
     type StoryDocument,
     type StoryEdge,
@@ -662,7 +666,7 @@ export function setSceneTransition(doc: StoryDocument, nodeId: string, transitio
 
 export function setSceneStageCast(doc: StoryDocument, nodeId: string, stageCast: StageCastSlot): StoryDocument {
     if (stageCast.mode === "set") {
-        // Deduplicate by castKey (last wins) and cap at STORY_LIMITS.stageActors.
+        // Deduplicate by castKey (last wins) and cap at STORY_LIMITS.stageActors while preserving timing/layout metadata.
         const deduped: SceneActorSlot[] = [];
         const indexByKey = new Map<string, number>();
         for (const actor of stageCast.actors) {
@@ -676,10 +680,48 @@ export function setSceneStageCast(doc: StoryDocument, nodeId: string, stageCast:
         }
         return updateSceneNode(doc, nodeId, scene => ({
             ...scene,
-            stageCast: { mode: "set", actors: deduped },
+            stageCast: { ...stageCast, mode: "set", actors: deduped },
         }));
     }
     return updateSceneNode(doc, nodeId, scene => ({ ...scene, stageCast }));
+}
+
+/** Updates scene-level `stageCast` timing/layout settings when `stageCast.mode === "set"`. */
+export function updateSceneStageCastSettings(
+    doc: StoryDocument,
+    nodeId: string,
+    patch: {
+        enterTiming?: StageCastEnterTiming;
+        enterDelay?: number;
+        enterDuration?: number;
+        enterTransition?: StageTransitionStyle;
+        layoutMode?: StageLayoutMode;
+    },
+): StoryDocument {
+    return updateSceneNode(doc, nodeId, (scene) => {
+        if (scene.stageCast.mode !== "set") return scene;
+        const next: Extract<StageCastSlot, { mode: "set" }> = {
+            ...scene.stageCast,
+            ...patch,
+        };
+        if (next.enterTiming === undefined) delete next.enterTiming;
+        if (next.enterDelay === undefined) delete next.enterDelay;
+        if (next.enterDuration === undefined) delete next.enterDuration;
+        if (next.enterTransition === undefined) delete next.enterTransition;
+        if (next.layoutMode === undefined) delete next.layoutMode;
+        return { ...scene, stageCast: next };
+    });
+}
+
+/** Convenience helper toggling `stageCast.enterTiming` between `"afterTelop"` and `"immediate"` when `mode === "set"`. */
+export function deferStageCastAfterTelop(
+    doc: StoryDocument,
+    nodeId: string,
+    enabled = true,
+): StoryDocument {
+    return updateSceneStageCastSettings(doc, nodeId, {
+        enterTiming: enabled ? "afterTelop" : "immediate",
+    });
 }
 
 /** Adds or replaces an actor in a SceneNode's `stageCast` slot (enforces unique `castKey` and max 5 actors). */
@@ -692,12 +734,12 @@ export function addActorToSceneCast(doc: StoryDocument, nodeId: string, actor: S
         if (existingIdx !== -1) {
             const actors = [...scene.stageCast.actors];
             actors[existingIdx] = actor;
-            return { ...scene, stageCast: { mode: "set", actors } };
+            return { ...scene, stageCast: { ...scene.stageCast, actors } };
         }
         if (scene.stageCast.actors.length >= STORY_LIMITS.stageActors) {
             return scene;
         }
-        return { ...scene, stageCast: { mode: "set", actors: [...scene.stageCast.actors, actor] } };
+        return { ...scene, stageCast: { ...scene.stageCast, actors: [...scene.stageCast.actors, actor] } };
     });
 }
 
@@ -730,7 +772,7 @@ export function updateActorInSceneCast(
             changed = true;
             return { ...actor, ...patch };
         });
-        return changed ? { ...scene, stageCast: { mode: "set", actors } } : scene;
+        return changed ? { ...scene, stageCast: { ...scene.stageCast, actors } } : scene;
     });
 }
 
@@ -739,7 +781,7 @@ export function removeActorFromSceneCast(doc: StoryDocument, nodeId: string, cas
         if (scene.stageCast.mode !== "set") return scene;
         const actors = scene.stageCast.actors.filter(a => a.castKey !== castKey);
         if (actors.length === scene.stageCast.actors.length) return scene;
-        return { ...scene, stageCast: { mode: "set", actors } };
+        return { ...scene, stageCast: { ...scene.stageCast, actors } };
     });
 }
 
@@ -1082,8 +1124,10 @@ export function castUsage(doc: StoryDocument, key: string): number {
                 for (const reaction of beat.reactions ?? []) {
                     if (reaction.castKey === key) count += 1;
                 }
-            } else if (beat.kind === "stageAction" && beat.castKey === key) {
-                count += 1;
+            } else if (beat.kind === "stageAction") {
+                for (const item of getStageActionItems(beat)) {
+                    if (item.castKey === key) count += 1;
+                }
             }
         }
     }

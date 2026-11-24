@@ -490,10 +490,12 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
         name: "story_write_msk",
         label: "Write Story Script (.msk)",
         description:
-            "Writes a complete MoeSekai Script (.msk) file to the active workspace, automatically saving a pre-mutation rollback snapshot to .moesekai-studio/snapshots/, compiling the result, and returning a structured diff. Actively use optional `z=<int>` (-99..99; higher=front, negative=back, default 0=auto move/speaker front) on `cast set` entries and `stage enter`/`move`/`pose` beats for close-ups, huddles (`overlap`), foreground focus, or depth layering.",
+            "Writes a complete MoeSekai Script (.msk) file to the active workspace, automatically saving a pre-mutation rollback snapshot to .moesekai-studio/snapshots/, compiling the result, and returning a structured diff. Supports full Live2D choreography: `cast set [fixed] [afterTelop] [delay=<sec>] [dur=<sec>] [instant] [...]`, per-actor `x=<num>` (-1.2..1.2) / `lock` / `mirror` / `z=<int>` (-99..99; higher=front, negative=back, default 0=auto move/speaker front) / `overlap`, `stage sync [ ...; ... ] [dur=] [delay=] [instant] [parallel]`, and `telop \"...\" [actors=hide|dim] [pos=top|bottom]`.",
         promptSnippet:
-            "story_write_msk: Write complete .msk script (with optional Live2D `z=<int>` depth layering) + automatic rollback snapshot and post-write diff.",
+            "story_write_msk: Write complete .msk script (supporting afterTelop, stage sync, x/lock/mirror, telop actors/pos, and z=<int> depth) + rollback snapshot and diff.",
         promptGuidelines: [
+            "Use `cast set afterTelop [...]` or `telop \"...\" actors=hide|dim [pos=top|bottom]` so center subtitles never cover Live2D characters.",
+            "Use `stage sync [ enter a at left; enter b at right ] [dur=] [delay=]` (or `parallel`) for simultaneous multi-character enter/exit/move, and optional `x=<num>` / `lock` / `mirror` / `fixed` for exact placement.",
             "Use optional `z=<int>` on `cast set` and `stage enter`/`move`/`pose` whenever choreographing close-ups, `overlap` huddles, foreground focus (e.g. `z=10`), or background observers (e.g. `z=-1`).",
             "After story_write_msk or story_patch_msk, always call story_validate_and_simulate to verify 0 errors, 0 warnings, and reachable endings.",
         ],
@@ -556,11 +558,11 @@ export function createStoryMakerTools(runtime: StoryMakerToolsRuntime): ToolDefi
         name: "story_patch_msk",
         label: "Patch Story Script (.msk)",
         description:
-            "Applies targeted edits to the active .msk script via exact string replacements (`edits`) or whole-node replacement (`replaceNode`), saving an automatic pre-mutation rollback snapshot and returning compile diagnostics and structured diff. Supports adjusting Live2D `z=<int>` layers (-99..99) on `cast set` and `stage enter`/`move`/`pose` to resolve occlusion or set foreground/background depth.",
+            "Applies targeted edits to the active .msk script via exact string replacements (`edits`) or whole-node replacement (`replaceNode`), saving an automatic pre-mutation rollback snapshot and returning compile diagnostics and structured diff. Supports refining Live2D `cast set [fixed|afterTelop|delay=|dur=|instant]`, per-actor `x=`/`lock`/`mirror`/`z=<int>` (-99..99), simultaneous `stage sync [...]`/`parallel` waves, and `telop ... actors=hide|dim pos=top|bottom`.",
         promptSnippet:
-            "story_patch_msk: Surgically patch .msk via exact edits or replaceNode (including Live2D `z=<int>` layering), with automatic snapshot and diff.",
+            "story_patch_msk: Surgically patch .msk via exact edits or replaceNode (supporting choreography timing, stage sync, x/lock/mirror, telop visibility, and z=<int>), with automatic snapshot and diff.",
         promptGuidelines: [
-            "When fixing Live2D occlusion or adjusting close-up/huddle foreground priority, set explicit `z=<int>` (higher = front, negative = back, omitted/0 = auto move/speaker front) on `cast set` or `stage enter`/`move`/`pose`.",
+            "When fixing Live2D occlusion, subtitle overlap, or multi-actor timing, use `cast set afterTelop`, `telop ... actors=hide|dim pos=top|bottom`, `stage sync [...]`/`parallel`, `x=<num>`/`lock`/`fixed`, and explicit `z=<int>` (higher = front, negative = back, omitted/0 = auto move/speaker front).",
         ],
         parameters: Type.Object({
             edits: Type.Optional(

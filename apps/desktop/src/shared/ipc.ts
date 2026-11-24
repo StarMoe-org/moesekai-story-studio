@@ -44,6 +44,10 @@ export const IPC_CHANNELS = {
     WORKSPACE_CREATE_SNAPSHOT: "workspace:create-snapshot",
     WORKSPACE_ROLLBACK_SNAPSHOT: "workspace:rollback-snapshot",
     WORKSPACE_IMPORT_VOICE_FILE: "workspace:import-voice-file",
+    WORKSPACE_IMPORT_VOICE_FILES: "workspace:import-voice-files",
+    WORKSPACE_LIST_VOICE_FILES: "workspace:list-voice-files",
+    WORKSPACE_SAVE_VOICE_MANIFEST: "workspace:save-voice-manifest",
+    WORKSPACE_OPEN_VOICES_DIR: "workspace:open-voices-dir",
     WORKSPACE_REVEAL_PATH: "workspace:reveal-path",
 
     // Export
@@ -171,6 +175,40 @@ export interface SaveWorkspaceResult {
     bytesWritten: number;
     snapshot?: WorkspaceSnapshotInfo;
 }
+
+export interface SaveVoiceManifestResult {
+    savedAt: number;
+    removed: boolean;
+    manifestPath: string;
+}
+
+export interface ImportedVoiceFileResult {
+    relativePath: string;
+    url: string;
+    fileName: string;
+    originalName: string;
+    sizeBytes: number;
+}
+
+export interface ImportVoiceBufferItem {
+    fileName: string;
+    beatId?: string;
+    bytes: Uint8Array;
+}
+
+export type ImportVoiceFilesRequest =
+    | {
+          mode: "files";
+          knownBeatIds?: string[];
+      }
+    | {
+          mode: "folder";
+          knownBeatIds?: string[];
+      }
+    | {
+          mode: "buffers";
+          items: ImportVoiceBufferItem[];
+      };
 
 export interface WorkspaceExternalChangeEvent {
     rootDir: string;
@@ -597,6 +635,10 @@ export interface MoesekaiDesktopApi {
         createSnapshot(reason?: string): Promise<WorkspaceSnapshotInfo>;
         rollbackSnapshot(snapshotId: string): Promise<WorkspaceProjectData>;
         importVoiceFile(beatId?: string): Promise<{ relativePath: string; url: string; fileName: string; sizeBytes: number } | null>;
+        importVoiceFiles(req: ImportVoiceFilesRequest): Promise<ImportedVoiceFileResult[]>;
+        listVoiceFiles(): Promise<ImportedVoiceFileResult[]>;
+        saveVoiceManifest(manifest: unknown | null): Promise<SaveVoiceManifestResult>;
+        openVoicesDir(): Promise<void>;
         revealPath(targetPath?: string): Promise<void>;
         onExternalChange(listener: (event: WorkspaceExternalChangeEvent) => void): UnsubscribeFn;
     };

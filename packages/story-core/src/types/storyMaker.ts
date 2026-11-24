@@ -91,8 +91,12 @@ export interface StoryStageActorState {
     /** Cast member key. */
     cast: string;
     slot: StorySlot;
-    /** Stage x coordinate (`SLOT_X[slot]`). */
+    /** Stage x coordinate (resolved by `layoutStageActors`, explicit `x`, or `SLOT_X[slot]`). */
     x: number;
+    /** Explicitly authored horizontal world coordinate (`-1.2..1.2`), pinning this actor against auto-layout shifts. */
+    explicitX?: number;
+    /** When true, this actor's horizontal coordinate is locked against auto-layout shifts. */
+    lockX?: boolean;
     /** Vertical offset in world units (`0`: game stand baseline). */
     y: number;
     /** Character scale multiplier (`1`: game stand height). */
@@ -120,10 +124,17 @@ export interface StoryStageState {
     place: string | null;
     /** Actors currently on stage in draw order (later on top). */
     actors: StoryStageActorState[];
+    /** Active stage anti-overlap layout policy (`"auto"` default incremental, or `"fixed"` exact coordinates). */
+    layoutMode?: StageLayoutMode;
     bgm: { name: string | null; volume: number };
     dialogue: { stepId: string; cast: string | null; speaker: string; body: string } | null;
     narration: { stepId: string; body: string } | null;
-    telop: { stepId: string; body: string } | null;
+    telop: {
+        stepId: string;
+        body: string;
+        actorVisibility?: TelopActorVisibility;
+        position?: TelopPosition;
+    } | null;
     /** Persistent screen fader cover. */
     screen: StoryScreenEffect;
     /** Cast key whose mouth flaps during dialogue, if on stage. */
@@ -202,9 +213,30 @@ export interface TransitionSlot {
     duration: number;
 }
 
+export const STAGE_TRANSITION_STYLES = ["fade", "instant"] as const;
+export type StageTransitionStyle = (typeof STAGE_TRANSITION_STYLES)[number];
+
+export const STAGE_CAST_ENTER_TIMINGS = ["immediate", "afterTelop"] as const;
+export type StageCastEnterTiming = (typeof STAGE_CAST_ENTER_TIMINGS)[number];
+
+export const STAGE_LAYOUT_MODES = ["auto", "fixed"] as const;
+export type StageLayoutMode = (typeof STAGE_LAYOUT_MODES)[number];
+
+export const TELOP_ACTOR_VISIBILITIES = ["keep", "hide", "dim"] as const;
+export type TelopActorVisibility = (typeof TELOP_ACTOR_VISIBILITIES)[number];
+
+export const TELOP_POSITIONS = ["center", "top", "bottom"] as const;
+export type TelopPosition = (typeof TELOP_POSITIONS)[number];
+
 export interface SceneActorSlot {
     castKey: string;
     slot: StorySlot;
+    /** Optional explicit horizontal world coordinate (`-1.2..1.2`); pins actor against auto-layout shifts. */
+    x?: number;
+    /** Lock horizontal X against auto-layout displacement. */
+    lockX?: boolean;
+    /** Flip Live2D actor horizontally. */
+    mirror?: boolean;
     scale?: number;
     y?: number;
     /** Optional explicit integer Live2D draw layer (`-99..99`; higher renders in front, omitted = auto `0`). */
@@ -221,7 +253,20 @@ export type StoryActorPlacement = SceneActorSlot;
 export type StageCastSlot =
     | { mode: "inherit" }
     | { mode: "clear" }
-    | { mode: "set"; actors: SceneActorSlot[] };
+    | {
+        mode: "set";
+        actors: SceneActorSlot[];
+        /** When scene actors enter (`"immediate"` default on node start, or `"afterTelop"` after leading telops). */
+        enterTiming?: StageCastEnterTiming;
+        /** Optional enter delay in seconds (`0..10`). */
+        enterDelay?: number;
+        /** Optional enter transition duration in seconds (`0..10`). */
+        enterDuration?: number;
+        /** Optional enter transition style (`"fade"` default, or `"instant"`). */
+        enterTransition?: StageTransitionStyle;
+        /** Stage anti-overlap layout policy (`"auto"` default incremental, or `"fixed"` exact coordinates). */
+        layoutMode?: StageLayoutMode;
+    };
 
 // ==================== 3. Scene Performance Beats ====================
 
@@ -267,23 +312,81 @@ export interface TelopBeat {
     id: string;
     kind: "telop";
     text: string;
+    /** Optional stage actor visibility while this telop is displayed (`"keep"` default, `"hide"`, or `"dim"`). */
+    actorVisibility?: TelopActorVisibility;
+    /** Optional vertical screen position (`"center"` default, `"top"`, or `"bottom"`). */
+    position?: TelopPosition;
 }
 
-export interface StageActionBeat {
-    id: string;
-    kind: "stageAction";
+/** One actor choreography instruction inside a `StageActionBeat` (primary item or `group[]` item). */
+export interface StageActionItem {
     action: StageActionKind;
     castKey: string;
     slot?: StorySlot;
+    /** Optional explicit horizontal world coordinate (`-1.2..1.2`); pins actor against auto-layout shifts. */
+    x?: number;
     scale?: number;
     y?: number;
     /** Optional explicit integer Live2D draw layer (`-99..99`; higher renders in front) for `enter` / `move` / `pose`. */
     z?: number;
+    /** Flip Live2D actor horizontally. */
+    mirror?: boolean;
     motion?: string;
     facial?: string;
-    duration?: number;
     /** Explicitly opt in to intentional overlap / close huddle for `enter` / `move`. */
     allowOverlap?: boolean;
+    /** Lock actor's horizontal coordinate against subsequent auto-layout shifts. */
+    lockX?: boolean;
+    /** Transition/tween duration in seconds (`0..10`). */
+    duration?: number;
+    /** Start delay in seconds (`0..10`). */
+    delay?: number;
+    /** Transition style (`"fade"` default, or `"instant"`). */
+    transition?: StageTransitionStyle;
+}
+
+export interface StageActionBeat extends StageActionItem {
+    id: string;
+    kind: "stageAction";
+    /** Additional simultaneous actors animated within the exact same choreography beat. */
+    group?: StageActionItem[];
+    /** Also execute concurrently with the immediately following `stageAction` beat. */
+    parallel?: boolean;
+}
+
+/**
+ * Expands a `StageActionBeat` into its ordered list of simultaneous `StageActionItem`s,
+ * inheriting beat-level `duration` / `delay` / `transition` as defaults for `group` items
+ * that omit them.
+ */
+export function getStageActionItems(beat: StageActionBeat): StageActionItem[] {
+    const primary: StageActionItem = {
+        action: beat.action,
+        castKey: beat.castKey,
+        ...(beat.slot !== undefined ? { slot: beat.slot } : {}),
+        ...(beat.x !== undefined ? { x: beat.x } : {}),
+        ...(beat.scale !== undefined ? { scale: beat.scale } : {}),
+        ...(beat.y !== undefined ? { y: beat.y } : {}),
+        ...(beat.z !== undefined ? { z: beat.z } : {}),
+        ...(beat.mirror !== undefined ? { mirror: beat.mirror } : {}),
+        ...(beat.motion !== undefined ? { motion: beat.motion } : {}),
+        ...(beat.facial !== undefined ? { facial: beat.facial } : {}),
+        ...(beat.allowOverlap !== undefined ? { allowOverlap: beat.allowOverlap } : {}),
+        ...(beat.lockX !== undefined ? { lockX: beat.lockX } : {}),
+        ...(beat.duration !== undefined ? { duration: beat.duration } : {}),
+        ...(beat.delay !== undefined ? { delay: beat.delay } : {}),
+        ...(beat.transition !== undefined ? { transition: beat.transition } : {}),
+    };
+    if (!beat.group || beat.group.length === 0) {
+        return [primary];
+    }
+    const rest = beat.group.map((item): StageActionItem => ({
+        ...item,
+        ...(item.duration === undefined && beat.duration !== undefined ? { duration: beat.duration } : {}),
+        ...(item.delay === undefined && beat.delay !== undefined ? { delay: beat.delay } : {}),
+        ...(item.transition === undefined && beat.transition !== undefined ? { transition: beat.transition } : {}),
+    }));
+    return [primary, ...rest];
 }
 
 /** Alias for `StageActionBeat`. */
@@ -443,7 +546,7 @@ export interface StoryLocalePack {
 
 /** One audio clip entry inside a custom `StoryVoiceManifest` (`moesekai-story-voice/1`). */
 export interface StoryVoiceManifestLine {
-    /** Playable audio URL (`https://`, same-origin `/...`, or relative to `manifest.baseUrl`). */
+    /** Playable audio URL (`https://`, same-origin `/...`, relative to `manifest.baseUrl`, or opt-in local workspace / `blob:` URL). */
     url: string;
     /** Optional clip duration in milliseconds. */
     durationMs?: number;
@@ -473,6 +576,8 @@ export interface StoryVoiceManifest {
     title?: string;
     /** Optional base URL for resolving relative `lines[beatId].url` or `objectKey` entries. */
     baseUrl?: string;
+    /** When true, custom voice lines override official `beat.voice` on matching talk beats instead of acting as fallback-only. */
+    overrideOfficialVoice?: boolean;
     /** Optional revision number. */
     storyRev?: number;
     /** Optional ISO 8601 timestamp. */

@@ -18,6 +18,10 @@ import {
     resolveJailedPath,
 } from "../shared/path-jail.ts";
 import { createZipBuffer, type ZipInputEntry } from "../shared/zip.ts";
+import {
+    MAX_LOCAL_VOICE_FILE_BYTES,
+    SUPPORTED_VOICE_EXTS,
+} from "./workspace.ts";
 import type {
     DesktopStoryRegion,
     ExportBundleRequest,
@@ -39,6 +43,45 @@ export function stripPosDirectivesFromMsk(script: string): string {
     return stripMskPositions(script);
 }
 
+function stripQueryAndHash(raw: string): string {
+    const q = raw.indexOf("?");
+    const h = raw.indexOf("#");
+    const cut = q === -1 ? h : h === -1 ? q : Math.min(q, h);
+    return cut === -1 ? raw : raw.slice(0, cut);
+}
+
+const DESKTOP_WORKSPACE_URL_PREFIX_RE = /^moesekai-app:\/\/(?:app\/)?workspace\//i;
+const LEADING_VOICES_PATH_RE = /^\/voices\//i;
+
+function extractLocalVoiceRelPath(rawRef: string): string | null {
+    const trimmed = rawRef.trim();
+    if (!trimmed) return null;
+    if (DESKTOP_WORKSPACE_URL_PREFIX_RE.test(trimmed)) {
+        return stripQueryAndHash(trimmed.replace(DESKTOP_WORKSPACE_URL_PREFIX_RE, ""));
+    }
+    if (LEADING_VOICES_PATH_RE.test(trimmed)) {
+        return stripQueryAndHash(trimmed.slice(1));
+    }
+    if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed) && !trimmed.startsWith("/")) {
+        return stripQueryAndHash(trimmed);
+    }
+    return null;
+}
+
+function normalizeBundledVoiceRel(rawRef: string, bundledRelPaths: Set<string>): string | null {
+    const rel = extractLocalVoiceRelPath(rawRef);
+    if (!rel) return null;
+    const cleanRel = rel.replace(/^\/+/, "").replace(/\\/g, "/");
+    if (bundledRelPaths.has(cleanRel)) return cleanRel;
+    try {
+        const decoded = decodeURIComponent(cleanRel).replace(/^\/+/, "").replace(/\\/g, "/");
+        if (bundledRelPaths.has(decoded)) return decoded;
+    } catch {
+        // Ignore malformed percent-encoding
+    }
+    return null;
+}
+
 function collectLocalVoiceReferences(
     voiceManifest: unknown | null | undefined,
     workspaceRoot: string | null | undefined,
@@ -54,20 +97,18 @@ function collectLocalVoiceReferences(
         if (!line || typeof line !== "object") continue;
         const candidates = [line.objectKey, line.url].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
         for (const rawRef of candidates) {
-            let rel: string | null = null;
-            if (rawRef.startsWith("moesekai-app://workspace/")) {
-                rel = rawRef.slice("moesekai-app://workspace/".length);
-            } else if (rawRef.startsWith("moesekai-app://app/workspace/")) {
-                rel = rawRef.slice("moesekai-app://app/workspace/".length);
-            } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawRef) && !rawRef.startsWith("/")) {
-                rel = rawRef;
-            }
+            const rel = extractLocalVoiceRelPath(rawRef);
             if (!rel) continue;
 
             try {
                 const abs = resolveJailedPath(workspaceRoot, rel, { mustExist: true });
-                if (!fs.statSync(abs).isFile()) continue;
+                const stat = fs.statSync(abs);
+                if (!stat.isFile()) continue;
                 const normalizedRel = path.relative(workspaceRoot, abs).replace(/\\/g, "/");
+                if (!normalizedRel.toLowerCase().startsWith("voices/")) continue;
+                const ext = path.extname(normalizedRel).toLowerCase();
+                if (!SUPPORTED_VOICE_EXTS.has(ext)) continue;
+                if (stat.size <= 0 || stat.size > MAX_LOCAL_VOICE_FILE_BYTES) continue;
                 if (seen.has(normalizedRel)) continue;
                 seen.add(normalizedRel);
                 results.push({ relativePath: normalizedRel, absolutePath: abs });
@@ -91,22 +132,28 @@ function rewriteManifestForPortableBundle(
     const cloned = JSON.parse(JSON.stringify(voiceManifest)) as Record<string, unknown>;
     if (!cloned.lines || typeof cloned.lines !== "object") return cloned;
     const lines = cloned.lines as Record<string, Record<string, unknown>>;
+    let rewroteAnyLine = false;
     for (const line of Object.values(lines)) {
         if (!line || typeof line !== "object") continue;
         const rawUrl = typeof line.url === "string" ? line.url : "";
-        let rel: string | null = null;
-        if (rawUrl.startsWith("moesekai-app://workspace/")) {
-            rel = rawUrl.slice("moesekai-app://workspace/".length);
-        } else if (rawUrl.startsWith("moesekai-app://app/workspace/")) {
-            rel = rawUrl.slice("moesekai-app://app/workspace/".length);
+        const rawKey = typeof line.objectKey === "string" ? line.objectKey : "";
+        const cleanRel =
+            (rawUrl ? normalizeBundledVoiceRel(rawUrl, bundledRelPaths) : null) ??
+            (rawKey ? normalizeBundledVoiceRel(rawKey, bundledRelPaths) : null);
+        if (cleanRel) {
+            line.url = cleanRel;
+            line.objectKey = cleanRel;
+            rewroteAnyLine = true;
         }
-        if (rel) {
-            const cleanRel = rel.replace(/^\/+/, "").replace(/\\/g, "/");
-            if (bundledRelPaths.has(cleanRel)) {
-                line.url = cleanRel;
-                line.objectKey = cleanRel;
-            }
-        }
+    }
+    if (
+        rewroteAnyLine &&
+        typeof cloned.baseUrl === "string" &&
+        (DESKTOP_WORKSPACE_URL_PREFIX_RE.test(cloned.baseUrl) ||
+            /^\/voices(?:\/|$)/i.test(cloned.baseUrl) ||
+            /^voices\/?$/i.test(cloned.baseUrl))
+    ) {
+        delete cloned.baseUrl;
     }
     return cloned;
 }

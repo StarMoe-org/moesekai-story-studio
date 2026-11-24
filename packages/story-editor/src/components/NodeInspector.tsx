@@ -8,9 +8,10 @@ import {
 } from "../md3";
 import {
     mdAdd, mdAltRoute, mdArrowBack, mdBolt, mdCalculate, mdChat, mdClose, mdContentCopy, mdContentCut,
-    mdDelete, mdFlag, mdGroup, mdImage, mdKeyboardArrowDown, mdKeyboardArrowUp, mdLayers, mdLink, mdLinkOff,
-    mdMovie, mdMusicNote, mdMusicOff, mdNotes, mdNumbers, mdPerson, mdPlayArrow, mdPlayArrowFill,
-    mdPlayCircle, mdRecordVoiceOver, mdRemove, mdRestartAlt, mdStopFill, mdTitle, mdVolumeUp, mdWarningFill,
+    mdDelete, mdFlag, mdGroup, mdHourglassTop, mdImage, mdKeyboardArrowDown, mdKeyboardArrowUp, mdLayers,
+    mdLink, mdLinkOff, mdLock, mdMovie, mdMusicNote, mdMusicOff, mdNotes, mdNumbers, mdPerson, mdPlayArrow,
+    mdPlayArrowFill, mdPlayCircle, mdRecordVoiceOver, mdRemove, mdRestartAlt, mdStopFill, mdSync, mdTitle,
+    mdTune, mdVolumeUp, mdWarningFill,
 } from "../md3/icons";
 import { useStoryI18n as useI18n, useStoryStudio } from "../context/StoryStudioContext";
 import type { AssetSourceType } from "@moesekai/story-core";
@@ -22,24 +23,29 @@ import {
 } from "@moesekai/story-core";
 import {
     addActorToSceneCast, addCastKeyToScene, addChoiceOption, addConditionRule, connectEdge, createSceneBeat,
-    defaultConditionForVariable, defaultVarOpForVariable, disconnectPort, duplicateBeat, getIncomingEdges,
-    getOutgoingEdge, insertBeat, removeActorFromSceneCast, removeBeat, removeChoiceOption, removeConditionRule,
-    replaceBeat, setSceneBackground, setSceneBgm, setScenePlace, setSceneStageCast, setSceneTransition,
-    updateActorInSceneCast, updateChoiceOption, updateConditionRule, updateNode,
+    defaultConditionForVariable, defaultVarOpForVariable, deferStageCastAfterTelop, disconnectPort, duplicateBeat,
+    findLeadingTelopEndIndex, getIncomingEdges, getOutgoingEdge, insertBeat, removeActorFromSceneCast, removeBeat,
+    removeChoiceOption, removeConditionRule, replaceBeat, setSceneBackground, setSceneBgm, setScenePlace,
+    setSceneStageCast, setSceneTransition, updateActorInSceneCast, updateChoiceOption, updateConditionRule,
+    updateNode, updateSceneStageCastSettings,
 } from "@moesekai/story-core";
 import {
-    DEFAULT_STORY_BACKGROUND, DEFAULT_STORY_BGM, DEFAULT_STORY_SE, STORY_LIMITS,
+    DEFAULT_STORY_BACKGROUND, DEFAULT_STORY_BGM, DEFAULT_STORY_SE, SLOT_X, STORY_FADE_SECONDS, STORY_LIMITS,
+    clampActorX, clampDelay,
 } from "@moesekai/story-core";
 import { evaluateStageAt } from "@moesekai/story-core";
 import {
-    CONDITION_OPS, CUE_TYPES, EFFECT_COLORS, SCENE_BEAT_KINDS, STAGE_ACTION_KINDS, STORY_SLOTS, TRANSITION_KINDS,
-    VOICE_KINDS,
+    CONDITION_OPS, CUE_TYPES, EFFECT_COLORS, SCENE_BEAT_KINDS, STAGE_ACTION_KINDS, STAGE_CAST_ENTER_TIMINGS,
+    STAGE_LAYOUT_MODES, STAGE_TRANSITION_STYLES, STORY_SLOTS, TELOP_ACTOR_VISIBILITIES, TELOP_POSITIONS,
+    TRANSITION_KINDS, VOICE_KINDS,
     type ActorReaction, type BackgroundSlot, type BgmSlot, type ChoiceNode, type ConditionExpr, type ConditionNode,
     type ConditionOp, type CueBeat, type CueType, type EndNode, type NarrationBeat, type PlaceSlot,
     type SceneActorSlot, type SceneBeat, type SceneBeatKind, type SceneNode, type StageActionBeat,
-    type StageActionKind, type StageCastSlot, type StoryCastMember, type StoryCompileDiagnostic, type StoryDocument,
+    type StageActionItem, type StageActionKind, type StageCastEnterTiming, type StageCastSlot, type StageLayoutMode,
+    type StageTransitionStyle, type StoryCastMember, type StoryCompileDiagnostic, type StoryDocument,
     type StoryEffectColor, type StoryNode, type StorySlot, type StoryVariable, type StoryVoiceKind,
-    type StoryVoiceRef, type TalkBeat, type TelopBeat, type TransitionKind, type VarOp, type VarOpBeat,
+    type StoryVoiceRef, type TalkBeat, type TelopActorVisibility, type TelopBeat, type TelopPosition,
+    type TransitionKind, type VarOp, type VarOpBeat,
 } from "@moesekai/story-core";
 import { AssetNamePickerDialog } from "./AssetNamePickerDialog";
 import { ClipPickerField } from "./ClipPickerField";
@@ -74,6 +80,150 @@ const SCALE_PRESETS = [
     { value: 1.15, labelKey: "page.storyMaker.inspector.scalePresetNear" },
     { value: 1.3, labelKey: "page.storyMaker.inspector.scalePresetCloseup" },
 ] as const;
+
+const PREFERRED_ACTOR_SLOTS: readonly StorySlot[] = ["left", "right", "center", "farLeft", "farRight"];
+
+function formatSignedCoord(value: number): string {
+    return value > 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
+}
+
+/**
+ * Resolves the effective transition style displayed for a scene's `stageCast` (`mode === "set"`),
+ * matching `buildStageCastApplyPlan`: explicit `enterTransition` always wins; otherwise defaults
+ * to `"fade"` when deferred after telop, delayed, given an explicit duration, or paired with a
+ * non-`none` scene transition, and `"instant"` on bare `transition.kind === "none"` scenes.
+ */
+export function resolveSceneCastEnterTransition(scene: SceneNode): StageTransitionStyle {
+    if (scene.stageCast.mode !== "set") return "fade";
+    const castSlot = scene.stageCast;
+    if (castSlot.enterTransition !== undefined) return castSlot.enterTransition;
+    const enterTiming: StageCastEnterTiming = castSlot.enterTiming ?? "immediate";
+    const enterDelay = castSlot.enterDelay ?? 0;
+    const hasFadeDefault =
+        enterTiming === "afterTelop"
+        || enterDelay > 0
+        || castSlot.enterDuration !== undefined
+        || scene.transition.kind !== "none";
+    return hasFadeDefault ? "fade" : "instant";
+}
+
+/** Patches primary fields of a `StageActionBeat`, preserving explicit `false` flags on `move`/`pose`. */
+export function patchStageActionPrimary(
+    beat: StageActionBeat,
+    patch: Partial<StageActionBeat>,
+): StageActionBeat {
+    const next: StageActionBeat = { ...beat, ...patch };
+    if (next.x === undefined) delete next.x;
+    if (next.y === undefined) delete next.y;
+    if (next.scale === undefined) delete next.scale;
+    if (next.z === undefined) delete next.z;
+    if (next.lockX === undefined || (next.action === "enter" && !next.lockX)) delete next.lockX;
+    if (next.mirror === undefined || (next.action === "enter" && !next.mirror)) delete next.mirror;
+    if (next.allowOverlap === undefined || (next.action === "enter" && !next.allowOverlap)) delete next.allowOverlap;
+    if (!next.motion) delete next.motion;
+    if (!next.facial) delete next.facial;
+    if (next.delay === undefined || next.delay <= 0) delete next.delay;
+    if (next.duration === undefined) delete next.duration;
+    if (next.transition === undefined) delete next.transition;
+    if (!next.parallel) delete next.parallel;
+    return next;
+}
+
+/** Patches a `StageActionItem` inside `beat.group`, preserving explicit `false` flags on `move`/`pose`. */
+export function patchStageActionItem(
+    item: StageActionItem,
+    patch: Partial<StageActionItem>,
+): StageActionItem {
+    const next: StageActionItem = { ...item, ...patch };
+    if (next.x === undefined) delete next.x;
+    if (next.y === undefined) delete next.y;
+    if (next.scale === undefined) delete next.scale;
+    if (next.z === undefined) delete next.z;
+    if (next.lockX === undefined || (next.action === "enter" && !next.lockX)) delete next.lockX;
+    if (next.mirror === undefined || (next.action === "enter" && !next.mirror)) delete next.mirror;
+    if (next.allowOverlap === undefined || (next.action === "enter" && !next.allowOverlap)) delete next.allowOverlap;
+    if (!next.motion) delete next.motion;
+    if (!next.facial) delete next.facial;
+    if (next.delay === undefined) delete next.delay;
+    if (next.duration === undefined) delete next.duration;
+    if (next.transition === undefined) delete next.transition;
+    return next;
+}
+
+/** Switches the primary action kind of a `StageActionBeat`, preserving explicit `false` overrides on `move`/`pose`. */
+export function changeStageActionPrimaryKind(
+    beat: StageActionBeat,
+    action: StageActionKind,
+): StageActionBeat {
+    const next: StageActionBeat = {
+        id: beat.id,
+        kind: "stageAction",
+        action,
+        castKey: beat.castKey,
+        ...(beat.delay !== undefined ? { delay: beat.delay } : {}),
+        ...(beat.parallel ? { parallel: true } : {}),
+        ...(beat.group && beat.group.length > 0 ? { group: beat.group } : {}),
+    };
+    if (action === "enter" || action === "move") {
+        next.slot = beat.slot ?? "center";
+        if (beat.x !== undefined) next.x = beat.x;
+        if (beat.scale !== undefined) next.scale = beat.scale;
+        if (beat.y !== undefined) next.y = beat.y;
+        if (action === "move" ? beat.lockX !== undefined : Boolean(beat.lockX)) next.lockX = beat.lockX;
+        if (action === "move" ? beat.allowOverlap !== undefined : Boolean(beat.allowOverlap)) {
+            next.allowOverlap = beat.allowOverlap;
+        }
+    }
+    if (action === "enter" || action === "move" || action === "exit") {
+        if (beat.duration !== undefined) next.duration = beat.duration;
+        else if (action === "move") next.duration = 0.5;
+    }
+    if (action === "enter" || action === "exit") {
+        if (beat.transition) next.transition = beat.transition;
+    }
+    if (action !== "exit") {
+        if (beat.z !== undefined) next.z = beat.z;
+        if (action === "enter" ? Boolean(beat.mirror) : beat.mirror !== undefined) next.mirror = beat.mirror;
+        if (action === "pose" && beat.lockX !== undefined) next.lockX = beat.lockX;
+        if (beat.motion) next.motion = beat.motion;
+        if (beat.facial) next.facial = beat.facial;
+    }
+    return next;
+}
+
+/** Switches the action kind of a `StageActionItem`, preserving explicit `false` overrides on `move`/`pose`. */
+export function changeStageActionItemKind(
+    cur: StageActionItem,
+    nextAction: StageActionKind,
+): StageActionItem {
+    const next: StageActionItem = {
+        action: nextAction,
+        castKey: cur.castKey,
+        ...(cur.delay !== undefined ? { delay: cur.delay } : {}),
+        ...(cur.duration !== undefined ? { duration: cur.duration } : {}),
+    };
+    if (nextAction === "enter" || nextAction === "move") {
+        next.slot = cur.slot ?? "center";
+        if (cur.x !== undefined) next.x = cur.x;
+        if (cur.scale !== undefined) next.scale = cur.scale;
+        if (cur.y !== undefined) next.y = cur.y;
+        if (nextAction === "move" ? cur.lockX !== undefined : Boolean(cur.lockX)) next.lockX = cur.lockX;
+        if (nextAction === "move" ? cur.allowOverlap !== undefined : Boolean(cur.allowOverlap)) {
+            next.allowOverlap = cur.allowOverlap;
+        }
+    }
+    if (nextAction === "enter" || nextAction === "exit") {
+        if (cur.transition) next.transition = cur.transition;
+    }
+    if (nextAction !== "exit") {
+        if (cur.z !== undefined) next.z = cur.z;
+        if (nextAction === "enter" ? Boolean(cur.mirror) : cur.mirror !== undefined) next.mirror = cur.mirror;
+        if (nextAction === "pose" && cur.lockX !== undefined) next.lockX = cur.lockX;
+        if (cur.motion) next.motion = cur.motion;
+        if (cur.facial) next.facial = cur.facial;
+    }
+    return next;
+}
 
 export interface NodeInspectorProps {
     doc: StoryDocument;
@@ -145,6 +295,8 @@ export function NodeInspector({
     const [voicePickerOpen, setVoicePickerOpen] = useState(false);
     const [failedBgUrl, setFailedBgUrl] = useState<string | null>(null);
     const [expandedActorKeys, setExpandedActorKeys] = useState<ReadonlySet<string>>(() => new Set());
+    const [fineTuneOpenKeys, setFineTuneOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
+    const [expandedGroupKeys, setExpandedGroupKeys] = useState<ReadonlySet<string>>(() => new Set());
     const [actorToAdd, setActorToAdd] = useState<string | null>(null);
     const [previewing, setPreviewing] = useState<{ scope: string; key: string } | null>(null);
     const [previewError, setPreviewError] = useState<string | null>(null);
@@ -159,6 +311,24 @@ export function NodeInspector({
         setBgPickerOpen(false);
         setActorToAdd(null);
     }
+
+    const toggleFineTuneKey = (key: string) => {
+        setFineTuneOpenKeys((prev) => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+        });
+    };
+
+    const toggleGroupKey = (key: string) => {
+        setExpandedGroupKeys((prev) => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+        });
+    };
 
     useEffect(() => () => previewStorySound(null), [selectionKey]);
 
@@ -462,16 +632,25 @@ export function NodeInspector({
             const currentNode = prev.nodes[scene.id];
             if (!currentNode || currentNode.type !== "scene") return prev;
             if (currentNode.stageCast.mode === "inherit") {
-                const inherited = evaluateStageAt(prev, scene.id).stage.actors;
-                const actors: SceneActorSlot[] = inherited.slice(0, STORY_LIMITS.stageActors).map(actor => ({
+                const evaluatedStage = evaluateStageAt(prev, scene.id).stage;
+                const actors: SceneActorSlot[] = evaluatedStage.actors.slice(0, STORY_LIMITS.stageActors).map(actor => ({
                     castKey: actor.cast,
                     slot: actor.slot,
+                    ...(actor.explicitX !== undefined ? { x: actor.explicitX } : {}),
+                    ...(actor.lockX ? { lockX: true } : {}),
+                    ...(actor.mirror ? { mirror: true } : {}),
                     ...(actor.scale !== 1 ? { scale: actor.scale } : {}),
                     ...(actor.y !== 0 ? { y: actor.y } : {}),
+                    ...(actor.z !== undefined ? { z: actor.z } : {}),
+                    ...(actor.allowOverlap ? { allowOverlap: true } : {}),
                     ...(actor.motion ? { motion: actor.motion } : {}),
                     ...(actor.facial ? { facial: actor.facial } : {}),
                 }));
-                const withSeed = setSceneStageCast(prev, scene.id, { mode: "set", actors });
+                const withSeed = setSceneStageCast(prev, scene.id, {
+                    mode: "set",
+                    actors,
+                    ...(evaluatedStage.layoutMode !== undefined ? { layoutMode: evaluatedStage.layoutMode } : {}),
+                });
                 return addCastKeyToScene(withSeed, scene.id, speakerKey);
             }
             return addCastKeyToScene(prev, scene.id, speakerKey);
@@ -958,19 +1137,108 @@ export function NodeInspector({
 
                     {selectedBeat.kind === "telop" && (() => {
                         const beat: TelopBeat = selectedBeat;
+                        const leadingTelopEnd = findLeadingTelopEndIndex(selectedScene.beats);
+                        const isLeadingTelop = leadingTelopEnd >= 0 && selectedBeatIndex <= leadingTelopEnd;
+                        const showDeferCastHint = Boolean(
+                            isLeadingTelop
+                            && selectedScene.stageCast.mode === "set"
+                            && selectedScene.stageCast.actors.length > 0
+                            && selectedScene.stageCast.enterTiming !== "afterTelop",
+                        );
+                        const actorVisibility: TelopActorVisibility = beat.actorVisibility ?? "keep";
+                        const position: TelopPosition = beat.position ?? "center";
                         return (
-                            <div className="min-w-0 space-y-3">
-                                <TextField
-                                    label={t("page.storyMaker.inspector.telopText")}
-                                    value={beat.text}
-                                    maxLength={STORY_LIMITS.telop}
-                                    placeholder={t("page.storyMaker.inspector.telopPlaceholder")}
-                                    onChange={event => updateSelectedBeat({ ...beat, text: event.target.value })}
-                                />
-                                <VariableInsertRow
-                                    variables={doc.variables}
-                                    onInsert={token => updateSelectedBeat({ ...beat, text: `${beat.text}${token}`.slice(0, STORY_LIMITS.telop) })}
-                                />
+                            <div className="min-w-0 space-y-4">
+                                {showDeferCastHint && (
+                                    <div className="space-y-2 rounded-md3-md border border-tertiary/40 bg-tertiary-container/60 p-3 text-on-tertiary-container">
+                                        <div className="flex items-start gap-2">
+                                            <Icon path={mdWarningFill} size={18} className="mt-0.5 shrink-0 text-tertiary" />
+                                            <p className="min-w-0 flex-1 break-words type-body-s">
+                                                {t("page.storyMaker.v2.slots.telopOverlapWarning")}
+                                            </p>
+                                        </div>
+                                        <Button
+                                            size="xs"
+                                            variant="filled"
+                                            icon={mdHourglassTop}
+                                            onClick={() => onDocChange(prev => deferStageCastAfterTelop(prev, selectedScene.id, true))}
+                                        >
+                                            {t("page.storyMaker.v2.slots.deferCastAfterTelop")}
+                                        </Button>
+                                    </div>
+                                )}
+
+                                <div className="min-w-0 space-y-3">
+                                    <TextField
+                                        label={t("page.storyMaker.inspector.telopText")}
+                                        value={beat.text}
+                                        maxLength={STORY_LIMITS.telop}
+                                        placeholder={t("page.storyMaker.inspector.telopPlaceholder")}
+                                        onChange={event => updateSelectedBeat({ ...beat, text: event.target.value })}
+                                    />
+                                    <VariableInsertRow
+                                        variables={doc.variables}
+                                        onInsert={token => updateSelectedBeat({ ...beat, text: `${beat.text}${token}`.slice(0, STORY_LIMITS.telop) })}
+                                    />
+                                </div>
+
+                                <div className="space-y-3 rounded-md3-md bg-surface-container p-3">
+                                    <div className="space-y-1.5">
+                                        <span className="block type-label-m text-on-surface-variant">
+                                            {t("page.storyMaker.inspector.telopActorVisibility")}
+                                        </span>
+                                        <SegmentedButton<TelopActorVisibility>
+                                            density={-2}
+                                            value={actorVisibility}
+                                            onValueChange={(nextVis) => {
+                                                const next: TelopBeat = { ...beat };
+                                                if (nextVis === "keep") delete next.actorVisibility;
+                                                else next.actorVisibility = nextVis;
+                                                updateSelectedBeat(next);
+                                            }}
+                                            options={TELOP_ACTOR_VISIBILITIES.map(vis => ({
+                                                value: vis,
+                                                label: t(
+                                                    vis === "keep"
+                                                        ? "page.storyMaker.inspector.telopActorsKeep"
+                                                        : vis === "dim"
+                                                            ? "page.storyMaker.inspector.telopActorsDim"
+                                                            : "page.storyMaker.inspector.telopActorsHide",
+                                                ),
+                                            }))}
+                                            aria-label={t("page.storyMaker.inspector.telopActorVisibility")}
+                                            className="[&>button]:px-1.5"
+                                        />
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <span className="block type-label-m text-on-surface-variant">
+                                            {t("page.storyMaker.inspector.telopPosition")}
+                                        </span>
+                                        <SegmentedButton<TelopPosition>
+                                            density={-2}
+                                            value={position}
+                                            onValueChange={(nextPos) => {
+                                                const next: TelopBeat = { ...beat };
+                                                if (nextPos === "center") delete next.position;
+                                                else next.position = nextPos;
+                                                updateSelectedBeat(next);
+                                            }}
+                                            options={TELOP_POSITIONS.map(pos => ({
+                                                value: pos,
+                                                label: t(
+                                                    pos === "center"
+                                                        ? "page.storyMaker.inspector.telopPosCenter"
+                                                        : pos === "top"
+                                                            ? "page.storyMaker.inspector.telopPosTop"
+                                                            : "page.storyMaker.inspector.telopPosBottom",
+                                                ),
+                                            }))}
+                                            aria-label={t("page.storyMaker.inspector.telopPosition")}
+                                            className="[&>button]:px-1.5"
+                                        />
+                                    </div>
+                                </div>
                             </div>
                         );
                     })()}
@@ -983,141 +1251,545 @@ export function NodeInspector({
                             if (action === "pose") return "page.storyMaker.v2.beats.stageActionPose";
                             return "page.storyMaker.v2.beats.stageActionExit";
                         };
+                        const group = beat.group ?? [];
+                        const allActions: StageActionKind[] = [beat.action, ...group.map(item => item.action)];
+                        const anyHasDuration = allActions.some(a => a === "enter" || a === "move" || a === "exit");
+                        const anyHasTransition = allActions.some(a => a === "enter" || a === "exit");
                         const needsSlot = beat.action === "enter" || beat.action === "move";
                         const supportsClips = beat.action !== "exit";
+                        const primaryFineTuneKey = `beat:${beat.id}:primary`;
+                        const primaryFineTuneOpen = fineTuneOpenKeys.has(primaryFineTuneKey);
+                        const primaryHasFineTune = Boolean(
+                            beat.x !== undefined
+                            || beat.y !== undefined
+                            || beat.scale !== undefined
+                            || beat.z !== undefined
+                            || beat.lockX !== undefined
+                            || beat.mirror !== undefined
+                            || beat.allowOverlap !== undefined,
+                        );
+
+                        const patchPrimary = (patch: Partial<StageActionBeat>) => {
+                            updateSelectedBeat(patchStageActionPrimary(beat, patch));
+                        };
+
+                        const updateGroupItem = (gIdx: number, updater: (item: StageActionItem) => StageActionItem) => {
+                            const nextGroup = group.map((item, idx) => (idx === gIdx ? updater(item) : item));
+                            updateSelectedBeat({ ...beat, group: nextGroup });
+                        };
+
+                        const removeGroupItem = (gIdx: number) => {
+                            const nextGroup = group.filter((_, idx) => idx !== gIdx);
+                            const next: StageActionBeat = { ...beat };
+                            if (nextGroup.length > 0) next.group = nextGroup;
+                            else delete next.group;
+                            updateSelectedBeat(next);
+                        };
+
+                        const addGroupItem = () => {
+                            if (1 + group.length >= STORY_LIMITS.stageActors || doc.cast.length === 0) return;
+                            const usedCast = new Set([beat.castKey, ...group.map(item => item.castKey)].filter(Boolean));
+                            const pickCast = doc.cast.find(c => !usedCast.has(c.key)) ?? doc.cast[0];
+                            if (!pickCast) return;
+                            const usedSlots = new Set<StorySlot>(
+                                [beat.slot, ...group.map(item => item.slot)].filter((s): s is StorySlot => Boolean(s)),
+                            );
+                            const nextAction = beat.action;
+                            const pickSlot = PREFERRED_ACTOR_SLOTS.find(s => !usedSlots.has(s)) ?? STORY_SLOTS[0];
+                            const created: StageActionItem = {
+                                action: nextAction,
+                                castKey: pickCast.key,
+                                ...(nextAction === "enter" || nextAction === "move" ? { slot: pickSlot } : {}),
+                            };
+                            const nextGroup = [...group, created];
+                            updateSelectedBeat({ ...beat, group: nextGroup });
+                            const newKey = `beat:${beat.id}:group:${nextGroup.length - 1}`;
+                            setExpandedGroupKeys(prev => new Set([...prev, newKey]));
+                        };
+
+                        const effectiveBeatDuration = beat.duration ?? (beat.action === "move" ? 0.5 : STORY_FADE_SECONDS);
+                        const effectiveBeatTransition: StageTransitionStyle = beat.transition ?? "fade";
+
                         return (
                             <div className="min-w-0 space-y-4">
-                                <Select<StageActionKind>
-                                    label={t("page.storyMaker.v2.beats.stageAction")}
-                                    value={beat.action}
-                                    onValueChange={(action) => {
-                                        const next: StageActionBeat = {
-                                            id: beat.id,
-                                            kind: "stageAction",
-                                            action,
-                                            castKey: beat.castKey,
-                                        };
-                                        if (action === "enter" || action === "move") {
-                                            next.slot = beat.slot ?? "center";
-                                            if (beat.scale !== undefined) next.scale = beat.scale;
-                                            if (beat.y !== undefined) next.y = beat.y;
-                                        }
-                                        if (action === "move") {
-                                            next.duration = beat.duration ?? 0.5;
-                                        }
-                                        if (action !== "exit") {
-                                            if (beat.z !== undefined) next.z = beat.z;
-                                            if (beat.motion) next.motion = beat.motion;
-                                            if (beat.facial) next.facial = beat.facial;
-                                        }
-                                        updateSelectedBeat(next);
-                                    }}
-                                    options={STAGE_ACTION_KINDS.map(action => ({
-                                        value: action,
-                                        label: t(actionLabelKey(action)),
-                                    }))}
-                                />
-
-                                <Select<string>
-                                    label={t("page.storyMaker.inspector.castMember")}
-                                    value={beat.castKey || null}
-                                    onValueChange={castKey => updateSelectedBeat({ ...beat, castKey })}
-                                    options={castOptions}
-                                    placeholder={t("page.storyMaker.inspector.selectCast")}
-                                    noOptionsLabel={t("page.storyMaker.inspector.noCastOptions")}
-                                />
-
-                                {needsSlot && (
-                                    <>
-                                        <div className="space-y-1.5">
-                                            <span className="block type-label-l text-on-surface-variant">
-                                                {t("page.storyMaker.inspector.slot")}
+                                {/* Primary Actor Choreography */}
+                                <div className="min-w-0 space-y-3 rounded-md3-md border border-outline-variant/60 bg-surface-container p-3">
+                                    {group.length > 0 && (
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="inline-flex items-center gap-1.5 type-label-l text-on-surface">
+                                                <Icon path={mdPerson} size={15} className="text-primary" />
+                                                <span>{t("page.storyMaker.v2.beats.primaryActorBadge")}</span>
                                             </span>
-                                            <SegmentedButton<StorySlot>
-                                                density={-1}
-                                                value={beat.slot ?? "center"}
-                                                onValueChange={slot => updateSelectedBeat({ ...beat, slot })}
-                                                options={slotOptions}
-                                                aria-label={t("page.storyMaker.inspector.slot")}
-                                                className="[&>button]:px-1.5 sm:[&>button]:px-2.5"
+                                            <span className="font-mono type-label-s text-on-surface-variant">#1</span>
+                                        </div>
+                                    )}
+
+                                    <Select<StageActionKind>
+                                        label={t("page.storyMaker.v2.beats.stageAction")}
+                                        value={beat.action}
+                                        onValueChange={(action) => {
+                                            updateSelectedBeat(changeStageActionPrimaryKind(beat, action));
+                                        }}
+                                        options={STAGE_ACTION_KINDS.map(action => ({
+                                            value: action,
+                                            label: t(actionLabelKey(action)),
+                                        }))}
+                                    />
+
+                                    <Select<string>
+                                        label={t("page.storyMaker.inspector.castMember")}
+                                        value={beat.castKey || null}
+                                        onValueChange={castKey => patchPrimary({ castKey })}
+                                        options={castOptions}
+                                        placeholder={t("page.storyMaker.inspector.selectCast")}
+                                        noOptionsLabel={t("page.storyMaker.inspector.noCastOptions")}
+                                    />
+
+                                    {needsSlot && (
+                                        <div className="space-y-2.5">
+                                            <div className="space-y-1.5">
+                                                <div className="flex min-w-0 items-center justify-between gap-2">
+                                                    <span className="min-w-0 truncate type-label-m text-on-surface-variant">
+                                                        {t("page.storyMaker.inspector.slot")}
+                                                    </span>
+                                                    <Button
+                                                        size="xs"
+                                                        variant={primaryFineTuneOpen || primaryHasFineTune ? "filled" : "tonal"}
+                                                        icon={mdTune}
+                                                        onClick={() => toggleFineTuneKey(primaryFineTuneKey)}
+                                                        className="shrink-0"
+                                                    >
+                                                        {t("page.storyMaker.inspector.fineTune")}
+                                                    </Button>
+                                                </div>
+                                                <SegmentedButton<StorySlot>
+                                                    density={-2}
+                                                    value={beat.slot ?? "center"}
+                                                    onValueChange={slot => patchPrimary({ slot, x: undefined })}
+                                                    options={slotOptions}
+                                                    aria-label={t("page.storyMaker.inspector.slot")}
+                                                    className="[&>button]:px-1"
+                                                />
+                                            </div>
+
+                                            {!primaryFineTuneOpen && primaryHasFineTune && (
+                                                <div className="flex flex-wrap items-center gap-1">
+                                                    {beat.x !== undefined && (
+                                                        <span className="rounded-md3-xs bg-primary-container px-1.5 py-0.5 font-mono type-label-s text-on-primary-container">
+                                                            X {formatSignedCoord(beat.x)}
+                                                        </span>
+                                                    )}
+                                                    {(beat.lockX || beat.x !== undefined) && (
+                                                        <span className="inline-flex items-center gap-0.5 rounded-md3-xs bg-secondary-container px-1.5 py-0.5 type-label-s text-on-secondary-container">
+                                                            <Icon path={mdLock} size={11} />
+                                                            <span>{t("page.storyMaker.inspector.lockBadge")}</span>
+                                                        </span>
+                                                    )}
+                                                    {beat.mirror && (
+                                                        <span className="rounded-md3-xs bg-surface-container-high px-1.5 py-0.5 type-label-s text-on-surface-variant">
+                                                            {t("page.storyMaker.inspector.mirrorBadge")}
+                                                        </span>
+                                                    )}
+                                                    {beat.z !== undefined && (
+                                                        <span className="rounded-md3-xs bg-secondary-container px-1.5 py-0.5 font-mono type-label-s text-on-secondary-container">
+                                                            Z{beat.z > 0 ? `+${beat.z}` : beat.z}
+                                                        </span>
+                                                    )}
+                                                    {beat.allowOverlap && (
+                                                        <span className="rounded-md3-xs bg-tertiary-container px-1.5 py-0.5 type-label-s text-on-tertiary-container">
+                                                            {t("page.storyMaker.v2.slots.overlapBadge")}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {primaryFineTuneOpen && (
+                                                <ActorFramingControls
+                                                    mode={beat.action === "move" ? "move" : "enter"}
+                                                    slot={beat.slot ?? "center"}
+                                                    x={beat.x}
+                                                    scale={beat.scale}
+                                                    y={beat.y}
+                                                    z={beat.z}
+                                                    lockX={beat.lockX}
+                                                    mirror={beat.mirror}
+                                                    allowOverlap={beat.allowOverlap}
+                                                    onXChange={x => patchPrimary({ x })}
+                                                    onScaleChange={scale => patchPrimary({ scale })}
+                                                    onYChange={y => patchPrimary({ y })}
+                                                    onZChange={z => patchPrimary({ z })}
+                                                    onLockXChange={lockX => patchPrimary({ lockX })}
+                                                    onMirrorChange={mirror => patchPrimary({ mirror })}
+                                                    onAllowOverlapChange={allowOverlap => patchPrimary({ allowOverlap })}
+                                                    onReset={() => patchPrimary({ x: undefined, scale: undefined, y: undefined })}
+                                                />
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {!needsSlot && supportsClips && (
+                                        <div className="space-y-2.5">
+                                            <Switch
+                                                checked={Boolean(beat.mirror)}
+                                                onCheckedChange={checked => patchPrimary({ mirror: checked })}
+                                                label={t("page.storyMaker.inspector.mirror")}
+                                            />
+                                            <ActorZOrderControl
+                                                value={beat.z}
+                                                onChange={z => patchPrimary({ z })}
                                             />
                                         </div>
+                                    )}
 
-                                        <Switch
-                                            checked={Boolean(beat.allowOverlap)}
-                                            onCheckedChange={(checked) => {
-                                                const next: StageActionBeat = { ...beat };
-                                                if (checked) next.allowOverlap = true;
-                                                else delete next.allowOverlap;
-                                                updateSelectedBeat(next);
-                                            }}
-                                            label={t("page.storyMaker.v2.slots.allowOverlap")}
-                                        />
+                                    {supportsClips && renderClipPair(
+                                        beat.castKey,
+                                        beat.motion,
+                                        beat.facial,
+                                        motion => patchPrimary({ motion }),
+                                        facial => patchPrimary({ facial }),
+                                        { disabled: !beat.castKey },
+                                    )}
+                                </div>
 
-                                        {beat.action === "move" && (
-                                            <DurationSlider
-                                                label={t("page.storyMaker.inspector.duration")}
-                                                value={beat.duration ?? 0.5}
-                                                onChange={duration => updateSelectedBeat({ ...beat, duration })}
-                                            />
-                                        )}
-
-                                        <ActorFramingControls
-                                            mode={beat.action === "move" ? "move" : "enter"}
-                                            scale={beat.scale}
-                                            y={beat.y}
-                                            onScaleChange={(scale) => {
-                                                const next: StageActionBeat = { ...beat };
-                                                if (scale === undefined) delete next.scale;
-                                                else next.scale = scale;
-                                                updateSelectedBeat(next);
-                                            }}
-                                            onYChange={(y) => {
-                                                const next: StageActionBeat = { ...beat };
-                                                if (y === undefined) delete next.y;
-                                                else next.y = y;
-                                                updateSelectedBeat(next);
-                                            }}
-                                            onReset={() => {
-                                                const next: StageActionBeat = { ...beat };
-                                                delete next.scale;
-                                                delete next.y;
-                                                updateSelectedBeat(next);
-                                            }}
-                                        />
-                                    </>
-                                )}
-
-                                {supportsClips && (
-                                    <ActorZOrderControl
-                                        value={beat.z}
-                                        onChange={(z) => {
-                                            const next: StageActionBeat = { ...beat };
-                                            if (z === undefined) delete next.z;
-                                            else next.z = z;
-                                            updateSelectedBeat(next);
-                                        }}
+                                {/* Beat Timing & Synchronization */}
+                                <div className="space-y-3 rounded-md3-md bg-surface-container p-3">
+                                    <SecondsSlider
+                                        label={t("page.storyMaker.inspector.delaySec")}
+                                        value={beat.delay ?? 0}
+                                        min={STORY_LIMITS.delayMin}
+                                        max={STORY_LIMITS.delayMax}
+                                        step={0.1}
+                                        decimals={1}
+                                        onChange={delay => patchPrimary({ delay: delay > 0 ? clampDelay(delay) : undefined })}
                                     />
-                                )}
 
-                                {supportsClips && renderClipPair(
-                                    beat.castKey,
-                                    beat.motion,
-                                    beat.facial,
-                                    (motion) => {
-                                        const next: StageActionBeat = { ...beat };
-                                        if (motion) next.motion = motion;
-                                        else delete next.motion;
-                                        updateSelectedBeat(next);
-                                    },
-                                    (facial) => {
-                                        const next: StageActionBeat = { ...beat };
-                                        if (facial) next.facial = facial;
-                                        else delete next.facial;
-                                        updateSelectedBeat(next);
-                                    },
-                                    { disabled: !beat.castKey },
-                                )}
+                                    {anyHasTransition && (
+                                        <div className="space-y-1.5">
+                                            <span className="block type-label-m text-on-surface-variant">
+                                                {t("page.storyMaker.inspector.transitionStyle")}
+                                            </span>
+                                            <SegmentedButton<StageTransitionStyle>
+                                                density={-2}
+                                                value={effectiveBeatTransition}
+                                                onValueChange={style => patchPrimary({ transition: style === "fade" ? undefined : style })}
+                                                options={STAGE_TRANSITION_STYLES.map(style => ({
+                                                    value: style,
+                                                    label: t(
+                                                        style === "fade"
+                                                            ? "page.storyMaker.inspector.transitionFade"
+                                                            : "page.storyMaker.inspector.transitionInstant",
+                                                    ),
+                                                }))}
+                                                aria-label={t("page.storyMaker.inspector.transitionStyle")}
+                                                className="[&>button]:px-1.5"
+                                            />
+                                        </div>
+                                    )}
+
+                                    {anyHasDuration && (effectiveBeatTransition !== "instant" || allActions.includes("move")) && (
+                                        <SecondsSlider
+                                            label={t("page.storyMaker.inspector.duration")}
+                                            value={effectiveBeatDuration}
+                                            min={0}
+                                            max={5}
+                                            step={0.05}
+                                            decimals={2}
+                                            onChange={duration => patchPrimary({ duration })}
+                                        />
+                                    )}
+
+                                    <Switch
+                                        checked={Boolean(beat.parallel)}
+                                        onCheckedChange={checked => patchPrimary({ parallel: checked || undefined })}
+                                        label={t("page.storyMaker.v2.beats.parallelWithNext")}
+                                    />
+                                </div>
+
+                                {/* Simultaneous Multi-Actor Group (1..5 total actors) */}
+                                <div className="space-y-2.5 rounded-md3-md border border-outline-variant/60 bg-surface-container-low p-3">
+                                    <div className="flex min-w-0 items-center justify-between gap-2">
+                                        <span className="flex min-w-0 items-center gap-1.5 type-label-l text-on-surface">
+                                            <Icon path={mdGroup} size={16} className="shrink-0 text-primary" />
+                                            <span className="truncate">{t("page.storyMaker.v2.beats.simultaneousGroupTitle")}</span>
+                                        </span>
+                                        <span className="shrink-0 font-mono type-label-s text-on-surface-variant">
+                                            {1 + group.length}/{STORY_LIMITS.stageActors}
+                                        </span>
+                                    </div>
+
+                                    {group.length > 0 && (
+                                        <div className="space-y-2">
+                                            {group.map((item, gIdx) => {
+                                                const member = castMemberOf(item.castKey);
+                                                const displayName = member?.name || item.castKey || t("page.storyMaker.inspector.selectCast");
+                                                const groupCardKey = `beat:${beat.id}:group:${gIdx}`;
+                                                const groupFineTuneKey = `${groupCardKey}:fineTune`;
+                                                const isCardExpanded = expandedGroupKeys.has(groupCardKey);
+                                                const isFineTuneOpen = fineTuneOpenKeys.has(groupFineTuneKey);
+                                                const itemNeedsSlot = item.action === "enter" || item.action === "move";
+                                                const itemSupportsClips = item.action !== "exit";
+                                                const itemHasCustom = Boolean(
+                                                    item.x !== undefined
+                                                    || item.y !== undefined
+                                                    || item.scale !== undefined
+                                                    || item.z !== undefined
+                                                    || item.lockX !== undefined
+                                                    || item.mirror !== undefined
+                                                    || item.allowOverlap !== undefined,
+                                                );
+                                                const itemHasTimingOverride = Boolean(
+                                                    item.delay !== undefined
+                                                    || item.duration !== undefined
+                                                    || item.transition !== undefined,
+                                                );
+
+                                                const patchItem = (patch: Partial<StageActionItem>) => {
+                                                    updateGroupItem(gIdx, cur => patchStageActionItem(cur, patch));
+                                                };
+
+                                                return (
+                                                    <div
+                                                        key={`${item.castKey}-${gIdx}`}
+                                                        className="min-w-0 overflow-hidden rounded-md3-sm border border-outline-variant/70 bg-surface-container"
+                                                    >
+                                                        <div className="flex min-w-0 items-center gap-1 px-2 py-1.5">
+                                                            <button
+                                                                type="button"
+                                                                aria-expanded={isCardExpanded}
+                                                                onClick={() => toggleGroupKey(groupCardKey)}
+                                                                className="state-layer focus-ring flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md3-xs text-left"
+                                                            >
+                                                                {member?.characterId ? (
+                                                                    <img
+                                                                        src={getCharacterIconUrl(member.characterId)}
+                                                                        alt=""
+                                                                        className="size-6 shrink-0 rounded-full bg-surface-container-highest object-cover"
+                                                                    />
+                                                                ) : (
+                                                                    <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-secondary-container type-label-s text-on-secondary-container">
+                                                                        {displayName.slice(0, 1)}
+                                                                    </span>
+                                                                )}
+                                                                <span className="min-w-0 flex-1 truncate type-label-m text-on-surface">
+                                                                    {displayName}
+                                                                </span>
+                                                                <span className="shrink-0 rounded-md3-xs bg-primary-container/80 px-1.5 py-0.5 type-label-s text-on-primary-container">
+                                                                    {t(actionLabelKey(item.action))}
+                                                                </span>
+                                                                {itemNeedsSlot && (
+                                                                    <span className="shrink-0 rounded-md3-xs bg-surface-container-high px-1.5 py-0.5 type-label-s text-on-surface-variant">
+                                                                        {item.x !== undefined
+                                                                            ? `X ${formatSignedCoord(item.x)}`
+                                                                            : t(`page.storyMaker.slot.${item.slot ?? "center"}`)}
+                                                                    </span>
+                                                                )}
+                                                                {(item.lockX || item.x !== undefined) && (
+                                                                    <Icon path={mdLock} size={13} className="shrink-0 text-secondary" />
+                                                                )}
+                                                                <Icon
+                                                                    path={isCardExpanded ? mdKeyboardArrowUp : mdKeyboardArrowDown}
+                                                                    size={16}
+                                                                    className="shrink-0 text-on-surface-variant"
+                                                                />
+                                                            </button>
+                                                            {itemNeedsSlot && (
+                                                                <IconButton
+                                                                    size="xs"
+                                                                    variant={isFineTuneOpen || itemHasCustom ? "tonal" : "standard"}
+                                                                    icon={mdTune}
+                                                                    label={t("page.storyMaker.inspector.fineTune")}
+                                                                    onClick={() => {
+                                                                        if (!isCardExpanded) {
+                                                                            setExpandedGroupKeys(prev => new Set([...prev, groupCardKey]));
+                                                                            setFineTuneOpenKeys(prev => new Set([...prev, groupFineTuneKey]));
+                                                                        } else {
+                                                                            toggleFineTuneKey(groupFineTuneKey);
+                                                                        }
+                                                                    }}
+                                                                />
+                                                            )}
+                                                            <IconButton
+                                                                size="xs"
+                                                                icon={mdDelete}
+                                                                label={t("page.storyMaker.cast.remove")}
+                                                                onClick={() => removeGroupItem(gIdx)}
+                                                            />
+                                                        </div>
+
+                                                        {isCardExpanded && (
+                                                            <div className="space-y-3 border-t border-outline-variant/60 p-2.5">
+                                                                <Select<StageActionKind>
+                                                                    label={t("page.storyMaker.v2.beats.stageAction")}
+                                                                    value={item.action}
+                                                                    onValueChange={(nextAction) => {
+                                                                        updateGroupItem(gIdx, cur => changeStageActionItemKind(cur, nextAction));
+                                                                    }}
+                                                                    options={STAGE_ACTION_KINDS.map(action => ({
+                                                                        value: action,
+                                                                        label: t(actionLabelKey(action)),
+                                                                    }))}
+                                                                />
+
+                                                                <Select<string>
+                                                                    label={t("page.storyMaker.inspector.castMember")}
+                                                                    value={item.castKey || null}
+                                                                    onValueChange={castKey => patchItem({ castKey })}
+                                                                    options={castOptions}
+                                                                    placeholder={t("page.storyMaker.inspector.selectCast")}
+                                                                    noOptionsLabel={t("page.storyMaker.inspector.noCastOptions")}
+                                                                />
+
+                                                                {itemNeedsSlot && (
+                                                                    <div className="space-y-2">
+                                                                        <div className="space-y-1">
+                                                                            <div className="flex min-w-0 items-center justify-between gap-2">
+                                                                                <span className="min-w-0 truncate type-label-m text-on-surface-variant">
+                                                                                    {t("page.storyMaker.inspector.slot")}
+                                                                                </span>
+                                                                                <Button
+                                                                                    size="xs"
+                                                                                    variant={isFineTuneOpen || itemHasCustom ? "filled" : "tonal"}
+                                                                                    icon={mdTune}
+                                                                                    onClick={() => toggleFineTuneKey(groupFineTuneKey)}
+                                                                                    className="shrink-0"
+                                                                                >
+                                                                                    {t("page.storyMaker.inspector.fineTune")}
+                                                                                </Button>
+                                                                            </div>
+                                                                            <SegmentedButton<StorySlot>
+                                                                                density={-2}
+                                                                                value={item.slot ?? "center"}
+                                                                                onValueChange={slot => patchItem({ slot, x: undefined })}
+                                                                                options={slotOptions}
+                                                                                aria-label={t("page.storyMaker.inspector.slot")}
+                                                                                className="[&>button]:px-1"
+                                                                            />
+                                                                        </div>
+
+                                                                        {isFineTuneOpen && (
+                                                                            <ActorFramingControls
+                                                                                mode={item.action === "move" ? "move" : "enter"}
+                                                                                slot={item.slot ?? "center"}
+                                                                                x={item.x}
+                                                                                scale={item.scale}
+                                                                                y={item.y}
+                                                                                z={item.z}
+                                                                                lockX={item.lockX}
+                                                                                mirror={item.mirror}
+                                                                                allowOverlap={item.allowOverlap}
+                                                                                onXChange={x => patchItem({ x })}
+                                                                                onScaleChange={scale => patchItem({ scale })}
+                                                                                onYChange={y => patchItem({ y })}
+                                                                                onZChange={z => patchItem({ z })}
+                                                                                onLockXChange={lockX => patchItem({ lockX })}
+                                                                                onMirrorChange={mirror => patchItem({ mirror })}
+                                                                                onAllowOverlapChange={allowOverlap => patchItem({ allowOverlap })}
+                                                                                onReset={() => patchItem({ x: undefined, scale: undefined, y: undefined })}
+                                                                            />
+                                                                        )}
+                                                                    </div>
+                                                                )}
+
+                                                                {!itemNeedsSlot && itemSupportsClips && (
+                                                                    <div className="space-y-2">
+                                                                        <Switch
+                                                                            checked={Boolean(item.mirror)}
+                                                                            onCheckedChange={checked => patchItem({ mirror: checked })}
+                                                                            label={t("page.storyMaker.inspector.mirror")}
+                                                                        />
+                                                                        <ActorZOrderControl
+                                                                            value={item.z}
+                                                                            onChange={z => patchItem({ z })}
+                                                                        />
+                                                                    </div>
+                                                                )}
+
+                                                                {/* Optional Per-Item Delay / Duration Override */}
+                                                                <div className="space-y-2 rounded-md3-xs bg-surface-container-low p-2">
+                                                                    <div className="flex min-w-0 items-center justify-between gap-2">
+                                                                        <span className="truncate type-label-s text-on-surface-variant">
+                                                                            {t("page.storyMaker.v2.beats.timingOverride")}
+                                                                        </span>
+                                                                        {itemHasTimingOverride && (
+                                                                            <Button
+                                                                                size="xs"
+                                                                                variant="text"
+                                                                                icon={mdRestartAlt}
+                                                                                onClick={() => patchItem({
+                                                                                    delay: undefined,
+                                                                                    duration: undefined,
+                                                                                    transition: undefined,
+                                                                                })}
+                                                                            >
+                                                                                {t("page.storyMaker.v2.beats.inheritBeatTiming")}
+                                                                            </Button>
+                                                                        )}
+                                                                    </div>
+                                                                    <SecondsSlider
+                                                                        label={t("page.storyMaker.inspector.delaySec")}
+                                                                        value={item.delay ?? beat.delay ?? 0}
+                                                                        min={STORY_LIMITS.delayMin}
+                                                                        max={STORY_LIMITS.delayMax}
+                                                                        step={0.1}
+                                                                        decimals={1}
+                                                                        onChange={delay => patchItem({ delay: clampDelay(delay) })}
+                                                                    />
+                                                                    {(item.action === "enter" || item.action === "move" || item.action === "exit") && (
+                                                                        <SecondsSlider
+                                                                            label={t("page.storyMaker.inspector.duration")}
+                                                                            value={item.duration ?? effectiveBeatDuration}
+                                                                            min={0}
+                                                                            max={5}
+                                                                            step={0.05}
+                                                                            decimals={2}
+                                                                            onChange={duration => patchItem({ duration })}
+                                                                        />
+                                                                    )}
+                                                                    {(item.action === "enter" || item.action === "exit") && (
+                                                                        <SegmentedButton<StageTransitionStyle>
+                                                                            density={-2}
+                                                                            value={item.transition ?? effectiveBeatTransition}
+                                                                            onValueChange={transition => patchItem({ transition })}
+                                                                            options={STAGE_TRANSITION_STYLES.map(style => ({
+                                                                                value: style,
+                                                                                label: t(
+                                                                                    style === "fade"
+                                                                                        ? "page.storyMaker.inspector.transitionFade"
+                                                                                        : "page.storyMaker.inspector.transitionInstant",
+                                                                                ),
+                                                                            }))}
+                                                                            aria-label={t("page.storyMaker.inspector.transitionStyle")}
+                                                                            className="[&>button]:px-1.5"
+                                                                        />
+                                                                    )}
+                                                                </div>
+
+                                                                {itemSupportsClips && renderClipPair(
+                                                                    item.castKey,
+                                                                    item.motion,
+                                                                    item.facial,
+                                                                    motion => patchItem({ motion }),
+                                                                    facial => patchItem({ facial }),
+                                                                    { disabled: !item.castKey },
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+
+                                    <Button
+                                        size="xs"
+                                        variant="tonal"
+                                        icon={mdAdd}
+                                        disabled={1 + group.length >= STORY_LIMITS.stageActors || doc.cast.length === 0}
+                                        onClick={addGroupItem}
+                                    >
+                                        {t("page.storyMaker.v2.beats.addSimultaneousActor")}
+                                    </Button>
+                                </div>
                             </div>
                         );
                     })()}
@@ -1690,7 +2362,9 @@ export function NodeInspector({
                                         value={scene.stageCast.mode}
                                         onValueChange={(mode) => {
                                             const slot: StageCastSlot = mode === "set"
-                                                ? { mode: "set", actors: sceneActors }
+                                                ? (scene.stageCast.mode === "set"
+                                                    ? scene.stageCast
+                                                    : { mode: "set", actors: sceneActors })
                                                 : { mode };
                                             onDocChange(prev => setSceneStageCast(prev, scene.id, slot));
                                         }}
@@ -1703,174 +2377,349 @@ export function NodeInspector({
                                         className="[&>button]:px-1.5"
                                     />
 
-                                    {scene.stageCast.mode === "set" && (
-                                        <div className="space-y-2.5">
-                                            {sceneActors.length >= STORY_LIMITS.stageActors ? (
-                                                <p className="type-label-s text-on-surface-variant">
-                                                    {t("page.storyMaker.v2.slots.actorMaxReached")}
-                                                </p>
-                                            ) : doc.cast.length === 0 ? (
-                                                <p className="type-body-s text-on-surface-variant">
-                                                    {t("page.storyMaker.inspector.noCastOptions")}
-                                                </p>
-                                            ) : availableCast.length > 0 ? (
-                                                <div className="flex min-w-0 items-end gap-1.5">
-                                                    <div className="min-w-0 flex-1">
-                                                        <Select<string>
-                                                            label={t("page.storyMaker.v2.slots.addActor")}
-                                                            value={actorToAdd && !mountedKeys.has(actorToAdd) ? actorToAdd : availableCast[0]?.key ?? null}
-                                                            onValueChange={setActorToAdd}
-                                                            options={availableCastOptions}
-                                                            placeholder={t("page.storyMaker.inspector.selectCast")}
+                                    {scene.stageCast.mode === "set" && (() => {
+                                        const castSlot = scene.stageCast;
+                                        const layoutMode: StageLayoutMode = castSlot.layoutMode ?? "auto";
+                                        const enterTiming: StageCastEnterTiming = castSlot.enterTiming ?? "immediate";
+                                        const enterTransition: StageTransitionStyle = resolveSceneCastEnterTransition(scene);
+                                        const enterDelay = castSlot.enterDelay ?? 0;
+                                        const enterDuration = castSlot.enterDuration ?? STORY_FADE_SECONDS;
+                                        const showTelopDeferBanner = sceneActors.length > 0
+                                            && enterTiming !== "afterTelop"
+                                            && findLeadingTelopEndIndex(scene.beats) >= 0;
+
+                                        return (
+                                            <div className="space-y-2.5">
+                                                {showTelopDeferBanner && (
+                                                    <div className="space-y-2 rounded-md3-md border border-tertiary/40 bg-tertiary-container/60 p-2.5 text-on-tertiary-container">
+                                                        <div className="flex items-start gap-2">
+                                                            <Icon path={mdWarningFill} size={16} className="mt-0.5 shrink-0 text-tertiary" />
+                                                            <p className="min-w-0 flex-1 break-words type-body-s">
+                                                                {t("page.storyMaker.v2.slots.telopOverlapWarning")}
+                                                            </p>
+                                                        </div>
+                                                        <Button
+                                                            size="xs"
+                                                            variant="filled"
+                                                            icon={mdHourglassTop}
+                                                            onClick={() => onDocChange(prev => deferStageCastAfterTelop(prev, scene.id, true))}
+                                                        >
+                                                            {t("page.storyMaker.v2.slots.deferCastAfterTelop")}
+                                                        </Button>
+                                                    </div>
+                                                )}
+
+                                                {/* Scene-level Layout Mode & Entry Timing Controls */}
+                                                <div className="space-y-2.5 rounded-md3-sm border border-outline-variant/60 bg-surface-container-low p-2.5">
+                                                    <div className="space-y-1">
+                                                        <span className="block type-label-s text-on-surface-variant">
+                                                            {t("page.storyMaker.v2.slots.layoutMode")}
+                                                        </span>
+                                                        <SegmentedButton<StageLayoutMode>
+                                                            density={-2}
+                                                            value={layoutMode}
+                                                            onValueChange={nextMode => onDocChange(prev => updateSceneStageCastSettings(prev, scene.id, {
+                                                                layoutMode: nextMode === "auto" ? undefined : nextMode,
+                                                            }))}
+                                                            options={STAGE_LAYOUT_MODES.map(mode => ({
+                                                                value: mode,
+                                                                label: t(mode === "auto" ? "page.storyMaker.v2.slots.layoutAuto" : "page.storyMaker.v2.slots.layoutFixed"),
+                                                            }))}
+                                                            aria-label={t("page.storyMaker.v2.slots.layoutMode")}
+                                                            className="[&>button]:px-1.5"
                                                         />
                                                     </div>
-                                                    <Button
-                                                        size="s"
-                                                        variant="tonal"
-                                                        icon={mdAdd}
-                                                        className="shrink-0"
-                                                        onClick={() => {
-                                                            const key = actorToAdd && !mountedKeys.has(actorToAdd)
-                                                                ? actorToAdd
-                                                                : availableCast[0]?.key;
-                                                            if (!key) return;
-                                                            onDocChange(prev => addCastKeyToScene(prev, scene.id, key));
-                                                            setExpandedActorKeys(prev => new Set([...prev, key]));
-                                                            setActorToAdd(null);
-                                                        }}
-                                                    >
-                                                        {t("page.storyMaker.v2.slots.addActor")}
-                                                    </Button>
+
+                                                    <div className="space-y-1">
+                                                        <span className="block type-label-s text-on-surface-variant">
+                                                            {t("page.storyMaker.v2.slots.enterTiming")}
+                                                        </span>
+                                                        <SegmentedButton<StageCastEnterTiming>
+                                                            density={-2}
+                                                            value={enterTiming}
+                                                            onValueChange={nextTiming => onDocChange(prev => updateSceneStageCastSettings(prev, scene.id, {
+                                                                enterTiming: nextTiming === "immediate" ? undefined : nextTiming,
+                                                            }))}
+                                                            options={STAGE_CAST_ENTER_TIMINGS.map(timing => ({
+                                                                value: timing,
+                                                                label: t(timing === "immediate" ? "page.storyMaker.v2.slots.enterImmediate" : "page.storyMaker.v2.slots.enterAfterTelop"),
+                                                            }))}
+                                                            aria-label={t("page.storyMaker.v2.slots.enterTiming")}
+                                                            className="[&>button]:px-1.5"
+                                                        />
+                                                    </div>
+
+                                                    <div className="space-y-1">
+                                                        <span className="block type-label-s text-on-surface-variant">
+                                                            {t("page.storyMaker.inspector.transitionStyle")}
+                                                        </span>
+                                                        <SegmentedButton<StageTransitionStyle>
+                                                            density={-2}
+                                                            value={enterTransition}
+                                                            onValueChange={nextStyle => onDocChange(prev => updateSceneStageCastSettings(prev, scene.id, {
+                                                                enterTransition: nextStyle,
+                                                            }))}
+                                                            options={STAGE_TRANSITION_STYLES.map(style => ({
+                                                                value: style,
+                                                                label: t(style === "fade" ? "page.storyMaker.inspector.transitionFade" : "page.storyMaker.inspector.transitionInstant"),
+                                                            }))}
+                                                            aria-label={t("page.storyMaker.inspector.transitionStyle")}
+                                                            className="[&>button]:px-1.5"
+                                                        />
+                                                    </div>
+
+                                                    <SecondsSlider
+                                                        label={t("page.storyMaker.v2.slots.enterDelay")}
+                                                        value={enterDelay}
+                                                        min={STORY_LIMITS.delayMin}
+                                                        max={STORY_LIMITS.delayMax}
+                                                        step={0.1}
+                                                        decimals={1}
+                                                        onChange={val => onDocChange(prev => updateSceneStageCastSettings(prev, scene.id, {
+                                                            enterDelay: val > 0 ? clampDelay(val) : undefined,
+                                                        }))}
+                                                    />
+
+                                                    {enterTransition !== "instant" && (
+                                                        <SecondsSlider
+                                                            label={t("page.storyMaker.v2.slots.enterDuration")}
+                                                            value={enterDuration}
+                                                            min={0}
+                                                            max={5}
+                                                            step={0.05}
+                                                            decimals={2}
+                                                            onChange={val => onDocChange(prev => updateSceneStageCastSettings(prev, scene.id, {
+                                                                enterDuration: val,
+                                                            }))}
+                                                        />
+                                                    )}
                                                 </div>
-                                            ) : null}
 
-                                            {sceneActors.length === 0 ? (
-                                                <p className="type-body-s text-on-surface-variant">
-                                                    {t("page.storyMaker.v2.slots.emptyCastSlot")}
-                                                </p>
-                                            ) : (
-                                                <div className="space-y-2">
-                                                    {sceneActors.map((actor) => {
-                                                        const member = castMemberOf(actor.castKey);
-                                                        const expanded = expandedActorKeys.has(actor.castKey);
-                                                        const displayName = member?.name || actor.castKey;
-                                                        return (
-                                                            <div
-                                                                key={actor.castKey}
-                                                                className="min-w-0 overflow-hidden rounded-md3-sm border border-outline-variant/70 bg-surface-container-low"
-                                                            >
-                                                                <div className="flex min-w-0 items-center gap-2 px-2.5 py-2">
-                                                                    <button
-                                                                        type="button"
-                                                                        aria-expanded={expanded}
-                                                                        onClick={() => toggleActorExpanded(actor.castKey)}
-                                                                        className="state-layer focus-ring flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md3-xs text-left"
-                                                                    >
-                                                                        {member?.characterId ? (
-                                                                            <img
-                                                                                src={getCharacterIconUrl(member.characterId)}
-                                                                                alt=""
-                                                                                className="size-7 shrink-0 rounded-full bg-surface-container-highest object-cover"
-                                                                            />
-                                                                        ) : (
-                                                                            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-secondary-container type-label-m text-on-secondary-container">
-                                                                                {displayName.slice(0, 1)}
-                                                                            </span>
-                                                                        )}
-                                                                        <span className="min-w-0 flex-1 truncate type-label-l text-on-surface">
-                                                                            {displayName}
-                                                                        </span>
-                                                                        <span className="shrink-0 rounded-md3-xs bg-surface-container-high px-1.5 py-0.5 type-label-s text-on-surface-variant">
-                                                                            {t(`page.storyMaker.slot.${actor.slot}`)}
-                                                                        </span>
-                                                                        {actor.z !== undefined && (
-                                                                            <span className="shrink-0 rounded-md3-xs bg-secondary-container px-1.5 py-0.5 font-mono type-label-s text-on-secondary-container">
-                                                                                Z{actor.z > 0 ? `+${actor.z}` : actor.z}
-                                                                            </span>
-                                                                        )}
-                                                                        {actor.allowOverlap && (
-                                                                            <span className="shrink-0 rounded-md3-xs bg-tertiary-container px-1.5 py-0.5 type-label-s text-on-tertiary-container">
-                                                                                {t("page.storyMaker.v2.slots.overlapBadge")}
-                                                                            </span>
-                                                                        )}
-                                                                        <Icon
-                                                                            path={expanded ? mdKeyboardArrowUp : mdKeyboardArrowDown}
-                                                                            size={18}
-                                                                            className="shrink-0 text-on-surface-variant"
-                                                                        />
-                                                                    </button>
-                                                                    <IconButton
-                                                                        size="xs"
-                                                                        icon={mdDelete}
-                                                                        label={t("page.storyMaker.cast.remove")}
-                                                                        onClick={() => onDocChange(prev => removeActorFromSceneCast(prev, scene.id, actor.castKey))}
-                                                                    />
-                                                                </div>
+                                                {sceneActors.length >= STORY_LIMITS.stageActors ? (
+                                                    <p className="type-label-s text-on-surface-variant">
+                                                        {t("page.storyMaker.v2.slots.actorMaxReached")}
+                                                    </p>
+                                                ) : doc.cast.length === 0 ? (
+                                                    <p className="type-body-s text-on-surface-variant">
+                                                        {t("page.storyMaker.inspector.noCastOptions")}
+                                                    </p>
+                                                ) : availableCast.length > 0 ? (
+                                                    <div className="flex min-w-0 items-end gap-1.5">
+                                                        <div className="min-w-0 flex-1">
+                                                            <Select<string>
+                                                                label={t("page.storyMaker.v2.slots.addActor")}
+                                                                value={actorToAdd && !mountedKeys.has(actorToAdd) ? actorToAdd : availableCast[0]?.key ?? null}
+                                                                onValueChange={setActorToAdd}
+                                                                options={availableCastOptions}
+                                                                placeholder={t("page.storyMaker.inspector.selectCast")}
+                                                            />
+                                                        </div>
+                                                        <Button
+                                                            size="s"
+                                                            variant="tonal"
+                                                            icon={mdAdd}
+                                                            className="shrink-0"
+                                                            onClick={() => {
+                                                                const key = actorToAdd && !mountedKeys.has(actorToAdd)
+                                                                    ? actorToAdd
+                                                                    : availableCast[0]?.key;
+                                                                if (!key) return;
+                                                                onDocChange(prev => addCastKeyToScene(prev, scene.id, key));
+                                                                setExpandedActorKeys(prev => new Set([...prev, key]));
+                                                                setActorToAdd(null);
+                                                            }}
+                                                        >
+                                                            {t("page.storyMaker.v2.slots.addActor")}
+                                                        </Button>
+                                                    </div>
+                                                ) : null}
 
-                                                                {expanded && (
-                                                                    <div className="space-y-3 border-t border-outline-variant/60 p-2.5">
-                                                                        <div className="space-y-1">
-                                                                            <span className="block type-label-m text-on-surface-variant">
-                                                                                {t("page.storyMaker.inspector.slot")}
-                                                                            </span>
-                                                                            <SegmentedButton<StorySlot>
-                                                                                density={-2}
-                                                                                value={actor.slot}
-                                                                                onValueChange={slot => onDocChange(prev => updateActorInSceneCast(prev, scene.id, actor.castKey, { slot }))}
-                                                                                options={slotOptions}
-                                                                                aria-label={t("page.storyMaker.inspector.slot")}
-                                                                                className="[&>button]:px-1"
-                                                                            />
-                                                                        </div>
-
-                                                                        <Switch
-                                                                            checked={Boolean(actor.allowOverlap)}
-                                                                            onCheckedChange={checked => onDocChange(prev => updateActorInSceneCast(prev, scene.id, actor.castKey, { allowOverlap: checked || undefined }))}
-                                                                            label={t("page.storyMaker.v2.slots.allowOverlap")}
-                                                                        />
-
-                                                                        <ActorFramingControls
-                                                                            mode="enter"
-                                                                            scale={actor.scale}
-                                                                            y={actor.y}
-                                                                            onScaleChange={scale => onDocChange(prev => updateActorInSceneCast(prev, scene.id, actor.castKey, { scale }))}
-                                                                            onYChange={y => onDocChange(prev => updateActorInSceneCast(prev, scene.id, actor.castKey, { y }))}
-                                                                            onReset={() => onDocChange(prev => addActorToSceneCast(prev, scene.id, {
-                                                                                castKey: actor.castKey,
-                                                                                slot: actor.slot,
-                                                                                ...(actor.z !== undefined ? { z: actor.z } : {}),
-                                                                                ...(actor.allowOverlap ? { allowOverlap: true } : {}),
-                                                                                ...(actor.motion ? { motion: actor.motion } : {}),
-                                                                                ...(actor.facial ? { facial: actor.facial } : {}),
-                                                                            }))}
-                                                                        />
-
-                                                                        <ActorZOrderControl
-                                                                            value={actor.z}
-                                                                            onChange={z => onDocChange(prev => updateActorInSceneCast(prev, scene.id, actor.castKey, { z }))}
-                                                                        />
-
-                                                                        <div className="space-y-2">
-                                                                            <p className="type-label-m text-on-surface-variant">
-                                                                                {t("page.storyMaker.v2.slots.idleMotion")} / {t("page.storyMaker.v2.slots.idleFacial")}
-                                                                            </p>
-                                                                            {renderClipPair(
-                                                                                actor.castKey,
-                                                                                actor.motion,
-                                                                                actor.facial,
-                                                                                motion => onDocChange(prev => updateActorInSceneCast(prev, scene.id, actor.castKey, { motion })),
-                                                                                facial => onDocChange(prev => updateActorInSceneCast(prev, scene.id, actor.castKey, { facial })),
+                                                {sceneActors.length === 0 ? (
+                                                    <p className="type-body-s text-on-surface-variant">
+                                                        {t("page.storyMaker.v2.slots.emptyCastSlot")}
+                                                    </p>
+                                                ) : (
+                                                    <div className="space-y-2">
+                                                        {sceneActors.map((actor) => {
+                                                            const member = castMemberOf(actor.castKey);
+                                                            const expanded = expandedActorKeys.has(actor.castKey);
+                                                            const actorFineTuneKey = `scene:${scene.id}:${actor.castKey}`;
+                                                            const isFineTuneOpen = fineTuneOpenKeys.has(actorFineTuneKey);
+                                                            const hasCustomFraming = Boolean(
+                                                                actor.x !== undefined
+                                                                || actor.y !== undefined
+                                                                || actor.scale !== undefined
+                                                                || actor.z !== undefined
+                                                                || actor.lockX
+                                                                || actor.mirror
+                                                                || actor.allowOverlap,
+                                                            );
+                                                            const displayName = member?.name || actor.castKey;
+                                                            const patchActor = (patch: Partial<Omit<SceneActorSlot, "castKey">>) => {
+                                                                onDocChange(prev => updateActorInSceneCast(prev, scene.id, actor.castKey, patch));
+                                                            };
+                                                            return (
+                                                                <div
+                                                                    key={actor.castKey}
+                                                                    className="min-w-0 overflow-hidden rounded-md3-sm border border-outline-variant/70 bg-surface-container-low"
+                                                                >
+                                                                    <div className="flex min-w-0 items-center gap-1 px-2 py-2">
+                                                                        <button
+                                                                            type="button"
+                                                                            aria-expanded={expanded}
+                                                                            onClick={() => toggleActorExpanded(actor.castKey)}
+                                                                            className="state-layer focus-ring flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md3-xs text-left"
+                                                                        >
+                                                                            {member?.characterId ? (
+                                                                                <img
+                                                                                    src={getCharacterIconUrl(member.characterId)}
+                                                                                    alt=""
+                                                                                    className="size-7 shrink-0 rounded-full bg-surface-container-highest object-cover"
+                                                                                />
+                                                                            ) : (
+                                                                                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-secondary-container type-label-m text-on-secondary-container">
+                                                                                    {displayName.slice(0, 1)}
+                                                                                </span>
                                                                             )}
-                                                                        </div>
+                                                                            <span className="min-w-0 flex-1 truncate type-label-l text-on-surface">
+                                                                                {displayName}
+                                                                            </span>
+                                                                            <span className="shrink-0 rounded-md3-xs bg-surface-container-high px-1.5 py-0.5 type-label-s text-on-surface-variant">
+                                                                                {actor.x !== undefined
+                                                                                    ? `X ${formatSignedCoord(actor.x)}`
+                                                                                    : t(`page.storyMaker.slot.${actor.slot}`)}
+                                                                            </span>
+                                                                            {(actor.lockX || actor.x !== undefined) && (
+                                                                                <span
+                                                                                    title={t("page.storyMaker.inspector.lockBadge")}
+                                                                                    className="inline-flex shrink-0 items-center rounded-md3-xs bg-secondary-container px-1 py-0.5 text-on-secondary-container"
+                                                                                >
+                                                                                    <Icon path={mdLock} size={12} />
+                                                                                </span>
+                                                                            )}
+                                                                            {actor.mirror && (
+                                                                                <span className="shrink-0 rounded-md3-xs bg-surface-container-high px-1 py-0.5 type-label-s text-on-surface-variant">
+                                                                                    {t("page.storyMaker.inspector.mirrorBadge")}
+                                                                                </span>
+                                                                            )}
+                                                                            {actor.z !== undefined && (
+                                                                                <span className="shrink-0 rounded-md3-xs bg-secondary-container px-1.5 py-0.5 font-mono type-label-s text-on-secondary-container">
+                                                                                    Z{actor.z > 0 ? `+${actor.z}` : actor.z}
+                                                                                </span>
+                                                                            )}
+                                                                            {actor.allowOverlap && (
+                                                                                <span className="shrink-0 rounded-md3-xs bg-tertiary-container px-1.5 py-0.5 type-label-s text-on-tertiary-container">
+                                                                                    {t("page.storyMaker.v2.slots.overlapBadge")}
+                                                                                </span>
+                                                                            )}
+                                                                            <Icon
+                                                                                path={expanded ? mdKeyboardArrowUp : mdKeyboardArrowDown}
+                                                                                size={18}
+                                                                                className="shrink-0 text-on-surface-variant"
+                                                                            />
+                                                                        </button>
+                                                                        <IconButton
+                                                                            size="xs"
+                                                                            variant={isFineTuneOpen || hasCustomFraming ? "tonal" : "standard"}
+                                                                            icon={mdTune}
+                                                                            label={t("page.storyMaker.inspector.fineTune")}
+                                                                            onClick={() => {
+                                                                                if (!expanded) {
+                                                                                    setExpandedActorKeys(prev => new Set([...prev, actor.castKey]));
+                                                                                    setFineTuneOpenKeys(prev => new Set([...prev, actorFineTuneKey]));
+                                                                                } else {
+                                                                                    toggleFineTuneKey(actorFineTuneKey);
+                                                                                }
+                                                                            }}
+                                                                        />
+                                                                        <IconButton
+                                                                            size="xs"
+                                                                            icon={mdDelete}
+                                                                            label={t("page.storyMaker.cast.remove")}
+                                                                            onClick={() => onDocChange(prev => removeActorFromSceneCast(prev, scene.id, actor.castKey))}
+                                                                        />
                                                                     </div>
-                                                                )}
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
+
+                                                                    {expanded && (
+                                                                        <div className="space-y-3 border-t border-outline-variant/60 p-2.5">
+                                                                            <div className="space-y-1.5">
+                                                                                <div className="flex min-w-0 items-center justify-between gap-2">
+                                                                                    <span className="min-w-0 truncate type-label-m text-on-surface-variant">
+                                                                                        {t("page.storyMaker.inspector.slot")}
+                                                                                    </span>
+                                                                                    <Button
+                                                                                        size="xs"
+                                                                                        variant={isFineTuneOpen || hasCustomFraming ? "filled" : "tonal"}
+                                                                                        icon={mdTune}
+                                                                                        onClick={() => toggleFineTuneKey(actorFineTuneKey)}
+                                                                                        className="shrink-0"
+                                                                                    >
+                                                                                        {t("page.storyMaker.inspector.fineTune")}
+                                                                                    </Button>
+                                                                                </div>
+                                                                                <SegmentedButton<StorySlot>
+                                                                                    density={-2}
+                                                                                    value={actor.slot}
+                                                                                    onValueChange={slot => patchActor({ slot, x: undefined })}
+                                                                                    options={slotOptions}
+                                                                                    aria-label={t("page.storyMaker.inspector.slot")}
+                                                                                    className="[&>button]:px-1"
+                                                                                />
+                                                                            </div>
+
+                                                                            {isFineTuneOpen && (
+                                                                                <ActorFramingControls
+                                                                                    mode="enter"
+                                                                                    slot={actor.slot}
+                                                                                    x={actor.x}
+                                                                                    scale={actor.scale}
+                                                                                    y={actor.y}
+                                                                                    z={actor.z}
+                                                                                    lockX={actor.lockX}
+                                                                                    mirror={actor.mirror}
+                                                                                    allowOverlap={actor.allowOverlap}
+                                                                                    onXChange={x => patchActor({ x })}
+                                                                                    onScaleChange={scale => patchActor({ scale })}
+                                                                                    onYChange={y => patchActor({ y })}
+                                                                                    onZChange={z => patchActor({ z })}
+                                                                                    onLockXChange={lockX => patchActor({ lockX })}
+                                                                                    onMirrorChange={mirror => patchActor({ mirror })}
+                                                                                    onAllowOverlapChange={allowOverlap => patchActor({ allowOverlap })}
+                                                                                    onReset={() => onDocChange(prev => addActorToSceneCast(prev, scene.id, {
+                                                                                        castKey: actor.castKey,
+                                                                                        slot: actor.slot,
+                                                                                        ...(actor.z !== undefined ? { z: actor.z } : {}),
+                                                                                        ...(actor.lockX ? { lockX: true } : {}),
+                                                                                        ...(actor.mirror ? { mirror: true } : {}),
+                                                                                        ...(actor.allowOverlap ? { allowOverlap: true } : {}),
+                                                                                        ...(actor.motion ? { motion: actor.motion } : {}),
+                                                                                        ...(actor.facial ? { facial: actor.facial } : {}),
+                                                                                    }))}
+                                                                                />
+                                                                            )}
+
+                                                                            <div className="space-y-2">
+                                                                                <p className="type-label-m text-on-surface-variant">
+                                                                                    {t("page.storyMaker.v2.slots.idleMotion")} / {t("page.storyMaker.v2.slots.idleFacial")}
+                                                                                </p>
+                                                                                {renderClipPair(
+                                                                                    actor.castKey,
+                                                                                    actor.motion,
+                                                                                    actor.facial,
+                                                                                    motion => patchActor({ motion }),
+                                                                                    facial => patchActor({ facial }),
+                                                                                )}
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             </div>
 
@@ -1923,8 +2772,13 @@ export function NodeInspector({
                                                                 ? (beat.body || t("page.storyMaker.v2.beats.narration"))
                                                                 : beat.kind === "telop"
                                                                     ? (beat.text || t("page.storyMaker.v2.beats.telop"))
-                                                                    : t(`page.storyMaker.v2.beats.${beat.kind}`)}
+                                                                    : beat.kind === "stageAction" && (beat.group?.length ?? 0) > 0
+                                                                        ? `${t("page.storyMaker.v2.beats.stageAction")} (${1 + (beat.group?.length ?? 0)})`
+                                                                        : t(`page.storyMaker.v2.beats.${beat.kind}`)}
                                                     </span>
+                                                    {beat.kind === "stageAction" && beat.parallel && (
+                                                        <Icon path={mdSync} size={13} className="shrink-0 text-tertiary" />
+                                                    )}
                                                 </button>
                                                 {onContinueScene && idx > 0 && (
                                                     <IconButton
@@ -2713,31 +3567,103 @@ function VarOpListEditor({
 
 function ActorFramingControls({
     mode,
+    slot,
+    x,
     scale,
     y,
+    z,
+    lockX,
+    mirror,
+    allowOverlap,
+    onXChange,
     onScaleChange,
     onYChange,
+    onZChange,
+    onLockXChange,
+    onMirrorChange,
+    onAllowOverlapChange,
     onReset,
 }: {
     mode: "enter" | "move";
+    slot: StorySlot;
+    x: number | undefined;
     scale: number | undefined;
     y: number | undefined;
+    z: number | undefined;
+    lockX: boolean | undefined;
+    mirror: boolean | undefined;
+    allowOverlap: boolean | undefined;
+    onXChange: (x: number | undefined) => void;
     onScaleChange: (scale: number | undefined) => void;
     onYChange: (y: number | undefined) => void;
+    onZChange: (z: number | undefined) => void;
+    onLockXChange: (lockX: boolean | undefined) => void;
+    onMirrorChange: (mirror: boolean | undefined) => void;
+    onAllowOverlapChange: (allowOverlap: boolean | undefined) => void;
     onReset: () => void;
 }) {
     const { t } = useI18n();
+    const slotDefaultX = SLOT_X[slot];
+    const effectiveX = x ?? slotDefaultX;
+    const sliderX = Math.min(1, Math.max(-1, effectiveX));
     const effectiveScale = scale ?? 1;
     const effectiveY = y ?? 0;
-    const hasCustom = mode === "enter"
-        ? (scale !== undefined && Math.abs(scale - 1) > 0.001) || (y !== undefined && Math.abs(y) > 0.001)
-        : scale !== undefined || y !== undefined;
+    const hasCustomX = x !== undefined;
+    const hasCustomY = mode === "enter" ? (y !== undefined && Math.abs(y) > 0.001) : y !== undefined;
+    const hasCustomScale = mode === "enter" ? (scale !== undefined && Math.abs(scale - 1) > 0.001) : scale !== undefined;
+    const hasCustom = hasCustomX || hasCustomY || hasCustomScale;
+    const effectiveLocked = Boolean(lockX || hasCustomX);
+
+    const externalXText = x === undefined ? "" : x.toFixed(2);
+    const [xDraft, setXDraft] = useState(externalXText);
+    const [syncedExternalX, setSyncedExternalX] = useState(externalXText);
+    if (externalXText !== syncedExternalX) {
+        setSyncedExternalX(externalXText);
+        setXDraft(externalXText);
+    }
+
+    const handleXInputChange = (raw: string) => {
+        setXDraft(raw);
+        const trimmed = raw.trim();
+        if (trimmed === "") {
+            setSyncedExternalX("");
+            onXChange(undefined);
+            return;
+        }
+        if (trimmed === "-" || trimmed === "+" || trimmed === "." || trimmed === "-." || trimmed === "+.") return;
+        const parsed = Number(trimmed);
+        if (!Number.isFinite(parsed)) return;
+        const clamped = clampActorX(parsed);
+        setSyncedExternalX(clamped.toFixed(2));
+        onXChange(clamped);
+    };
+
+    const handleXInputBlur = () => {
+        const trimmed = xDraft.trim();
+        if (trimmed === "") {
+            if (x !== undefined) onXChange(undefined);
+            setXDraft("");
+            setSyncedExternalX("");
+            return;
+        }
+        const parsed = Number(trimmed);
+        if (Number.isFinite(parsed)) {
+            const clamped = clampActorX(parsed);
+            const formatted = clamped.toFixed(2);
+            setXDraft(formatted);
+            setSyncedExternalX(formatted);
+            if (clamped !== x) onXChange(clamped);
+        } else {
+            setXDraft(externalXText);
+        }
+    };
 
     return (
-        <div className="min-w-0 space-y-2.5 rounded-md3-md bg-surface-container-low p-2.5">
+        <div className="min-w-0 space-y-3 rounded-md3-md border border-outline-variant/60 bg-surface-container-low p-2.5">
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                <span className="min-w-0 type-label-m text-on-surface-variant">
-                    {t("page.storyMaker.inspector.actorFraming")}
+                <span className="inline-flex min-w-0 items-center gap-1.5 type-label-m text-on-surface">
+                    <Icon path={mdTune} size={15} className="shrink-0 text-primary" />
+                    <span className="truncate">{t("page.storyMaker.inspector.actorFraming")}</span>
                 </span>
                 <Button
                     size="xs"
@@ -2750,55 +3676,149 @@ function ActorFramingControls({
                 </Button>
             </div>
 
-            <div className="flex flex-wrap gap-1">
-                {SCALE_PRESETS.map(preset => (
-                    <Chip
-                        key={preset.value}
-                        variant="filter"
-                        showCheckmark={false}
-                        selected={Math.abs(effectiveScale - preset.value) < 0.01 && (mode === "enter" || scale !== undefined)}
-                        onClick={() => onScaleChange(preset.value)}
-                    >
-                        {t(preset.labelKey)}
-                    </Chip>
-                ))}
-            </div>
-
+            {/* Horizontal Position (X) Slider + Numeric Input (-1.20 .. +1.20) + Snap to Slot */}
             <div className="space-y-1">
-                <div className="flex min-w-0 items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center justify-between gap-1.5">
                     <span className="min-w-0 truncate type-label-s text-on-surface-variant">
-                        {t("page.storyMaker.inspector.scale")}
+                        {t("page.storyMaker.inspector.horizontalPosition")}
                     </span>
-                    <span className="shrink-0 font-mono type-label-s text-on-surface">{effectiveScale.toFixed(2)}×</span>
+                    <div className="flex shrink-0 items-center gap-1">
+                        <input
+                            type="text"
+                            inputMode="decimal"
+                            value={xDraft}
+                            placeholder={slotDefaultX.toFixed(2)}
+                            aria-label={t("page.storyMaker.inspector.horizontalPosition")}
+                            onChange={event => handleXInputChange(event.target.value)}
+                            onBlur={handleXInputBlur}
+                            className="focus-ring h-6 w-16 rounded-md3-xs border border-outline bg-surface-container-lowest px-1.5 text-center font-mono type-label-s text-on-surface placeholder:text-on-surface-variant"
+                        />
+                        {hasCustomX && (
+                            <IconButton
+                                size="xs"
+                                icon={mdRestartAlt}
+                                label={t("page.storyMaker.inspector.resetToSlot")}
+                                onClick={() => onXChange(undefined)}
+                            />
+                        )}
+                    </div>
                 </div>
                 <Slider
-                    min={STORY_LIMITS.scaleMin}
-                    max={STORY_LIMITS.scaleMax}
-                    step={0.05}
-                    value={effectiveScale}
-                    onValueChange={next => onScaleChange(Number(next.toFixed(2)))}
-                    aria-label={t("page.storyMaker.inspector.scale")}
-                    formatValue={val => `${val.toFixed(2)}×`}
+                    min={-1}
+                    max={1}
+                    step={0.01}
+                    value={sliderX}
+                    onValueChange={next => onXChange(clampActorX(Number(next.toFixed(2))))}
+                    aria-label={t("page.storyMaker.inspector.horizontalPosition")}
+                    formatValue={val => formatSignedCoord(val)}
                 />
             </div>
 
+            {/* Vertical Offset (Y) Slider + Reset */}
             <div className="space-y-1">
                 <div className="flex min-w-0 items-center justify-between gap-2">
                     <span className="min-w-0 truncate type-label-s text-on-surface-variant">
                         {t("page.storyMaker.inspector.verticalOffset")}
                     </span>
-                    <span className="shrink-0 font-mono type-label-s text-on-surface">
-                        {effectiveY > 0 ? `+${effectiveY.toFixed(2)}` : effectiveY.toFixed(2)}
-                    </span>
+                    <div className="flex shrink-0 items-center gap-1">
+                        <span className="font-mono type-label-s text-on-surface">
+                            {formatSignedCoord(effectiveY)}
+                        </span>
+                        {hasCustomY && (
+                            <IconButton
+                                size="xs"
+                                icon={mdRestartAlt}
+                                label={t("common.action.reset")}
+                                onClick={() => onYChange(undefined)}
+                            />
+                        )}
+                    </div>
                 </div>
                 <Slider
                     min={STORY_LIMITS.yMin}
                     max={STORY_LIMITS.yMax}
-                    step={0.02}
+                    step={0.01}
                     value={effectiveY}
                     onValueChange={next => onYChange(Number(next.toFixed(2)))}
                     aria-label={t("page.storyMaker.inspector.verticalOffset")}
-                    formatValue={val => (val > 0 ? `+${val.toFixed(2)}` : val.toFixed(2))}
+                    formatValue={val => formatSignedCoord(val)}
+                />
+            </div>
+
+            {/* Scale Presets + Scale Slider + Reset */}
+            <div className="space-y-1.5">
+                <div className="flex flex-wrap gap-1">
+                    {SCALE_PRESETS.map(preset => (
+                        <Chip
+                            key={preset.value}
+                            variant="filter"
+                            showCheckmark={false}
+                            selected={Math.abs(effectiveScale - preset.value) < 0.01 && (mode === "enter" || scale !== undefined)}
+                            onClick={() => onScaleChange(preset.value)}
+                        >
+                            {t(preset.labelKey)}
+                        </Chip>
+                    ))}
+                </div>
+                <div className="space-y-1">
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="min-w-0 truncate type-label-s text-on-surface-variant">
+                            {t("page.storyMaker.inspector.scale")}
+                        </span>
+                        <div className="flex shrink-0 items-center gap-1">
+                            <span className="font-mono type-label-s text-on-surface">{effectiveScale.toFixed(2)}×</span>
+                            {hasCustomScale && (
+                                <IconButton
+                                    size="xs"
+                                    icon={mdRestartAlt}
+                                    label={t("common.action.reset")}
+                                    onClick={() => onScaleChange(undefined)}
+                                />
+                            )}
+                        </div>
+                    </div>
+                    <Slider
+                        min={STORY_LIMITS.scaleMin}
+                        max={STORY_LIMITS.scaleMax}
+                        step={0.02}
+                        value={effectiveScale}
+                        onValueChange={next => onScaleChange(Number(next.toFixed(2)))}
+                        aria-label={t("page.storyMaker.inspector.scale")}
+                        formatValue={val => `${val.toFixed(2)}×`}
+                    />
+                </div>
+            </div>
+
+            {/* Z-Order Slider (-20..+20) + Numeric Stepper (-99..+99) */}
+            <ActorZOrderControl
+                value={z}
+                onChange={onZChange}
+            />
+
+            {/* Lock Position, Mirror & Allow Overlap Switches */}
+            <div className="space-y-2 border-t border-outline-variant/50 pt-2">
+                <div className="space-y-0.5">
+                    <Switch
+                        checked={effectiveLocked}
+                        disabled={hasCustomX}
+                        onCheckedChange={checked => onLockXChange(mode === "move" ? checked : (checked || undefined))}
+                        label={t("page.storyMaker.inspector.lockPosition")}
+                    />
+                    {hasCustomX && (
+                        <p className="type-label-s text-on-surface-variant">
+                            {t("page.storyMaker.inspector.lockPositionPinnedHint")}
+                        </p>
+                    )}
+                </div>
+                <Switch
+                    checked={Boolean(mirror)}
+                    onCheckedChange={checked => onMirrorChange(mode === "move" ? checked : (checked || undefined))}
+                    label={t("page.storyMaker.inspector.mirror")}
+                />
+                <Switch
+                    checked={Boolean(allowOverlap)}
+                    onCheckedChange={checked => onAllowOverlapChange(mode === "move" ? checked : (checked || undefined))}
+                    label={t("page.storyMaker.v2.slots.allowOverlap")}
                 />
             </div>
         </div>
@@ -2870,8 +3890,10 @@ function ActorZOrderControl({
         }
     };
 
+    const sliderValue = Math.min(20, Math.max(-20, value ?? 0));
+
     return (
-        <div className="min-w-0 space-y-1.5 rounded-md3-md bg-surface-container-low p-2.5">
+        <div className="min-w-0 space-y-1.5 rounded-md3-md bg-surface-container p-2.5">
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                 <span className="inline-flex min-w-0 items-center gap-1.5 type-label-m text-on-surface-variant">
                     <Icon path={mdLayers} size={15} className="shrink-0 text-on-surface-variant" />
@@ -2916,6 +3938,20 @@ function ActorZOrderControl({
                     )}
                 </div>
             </div>
+            <Slider
+                min={-20}
+                max={20}
+                step={1}
+                value={sliderValue}
+                onValueChange={next => {
+                    const rounded = Math.trunc(next);
+                    setDraft(String(rounded));
+                    setSyncedExternal(String(rounded));
+                    onChange(rounded);
+                }}
+                aria-label={t("page.storyMaker.inspector.zOrder")}
+                formatValue={val => (val > 0 ? `+${val}` : String(val))}
+            />
             <p className="type-label-s text-on-surface-variant">
                 {t("page.storyMaker.inspector.zOrderHint")}
             </p>
@@ -2923,22 +3959,52 @@ function ActorZOrderControl({
     );
 }
 
-function DurationSlider({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+function SecondsSlider({
+    label,
+    value,
+    min = STORY_LIMITS.duration.min,
+    max = STORY_LIMITS.duration.max,
+    step = 0.1,
+    decimals = 1,
+    onChange,
+}: {
+    label: string;
+    value: number;
+    min?: number;
+    max?: number;
+    step?: number;
+    decimals?: number;
+    onChange: (value: number) => void;
+}) {
     return (
         <div className="space-y-1">
             <div className="flex min-w-0 items-center justify-between gap-2">
-                <span className="min-w-0 truncate type-label-m text-on-surface-variant">{label}</span>
-                <span className="shrink-0 font-mono type-label-m text-on-surface">{value.toFixed(1)}s</span>
+                <span className="min-w-0 truncate type-label-s text-on-surface-variant">{label}</span>
+                <span className="shrink-0 font-mono type-label-s text-on-surface">{value.toFixed(decimals)}s</span>
             </div>
             <Slider
-                min={STORY_LIMITS.duration.min}
-                max={STORY_LIMITS.duration.max}
-                step={0.1}
-                value={value}
-                onValueChange={next => onChange(Number(next.toFixed(1)))}
+                min={min}
+                max={max}
+                step={step}
+                value={Math.min(max, Math.max(min, value))}
+                onValueChange={next => onChange(Number(next.toFixed(decimals)))}
                 aria-label={label}
-                formatValue={val => `${val.toFixed(1)}s`}
+                formatValue={val => `${val.toFixed(decimals)}s`}
             />
         </div>
+    );
+}
+
+function DurationSlider({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+    return (
+        <SecondsSlider
+            label={label}
+            value={value}
+            min={STORY_LIMITS.duration.min}
+            max={STORY_LIMITS.duration.max}
+            step={0.1}
+            decimals={1}
+            onChange={onChange}
+        />
     );
 }

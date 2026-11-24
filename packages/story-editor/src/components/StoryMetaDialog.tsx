@@ -51,12 +51,16 @@ export interface StoryMetaDialogProps {
     confirmLabel: string;
     initial: StoryMetaValues;
     showRegionHint?: boolean;
+    /** Whether opening/closing syncs browser history. Disable when submitting immediately navigates away. */
+    syncHistory?: boolean;
+    /** Disables confirmation while an async create/save action is in flight. */
+    submitting?: boolean;
     onSubmit: (values: StoryMetaValues) => void;
 }
 
 /** Dialog for creating a new v2 story draft or editing an existing story's `meta` & `region`. */
 export function StoryMetaDialog({
-    isOpen, onClose, title, confirmLabel, initial, showRegionHint, onSubmit,
+    isOpen, onClose, title, confirmLabel, initial, showRegionHint, syncHistory, submitting = false, onSubmit,
 }: StoryMetaDialogProps) {
     const { t, locale } = useI18n();
     const [draft, setDraft] = useState<StoryMetaValues>(initial);
@@ -70,6 +74,7 @@ export function StoryMetaDialog({
     }
 
     const submit = () => {
+        if (submitting) return;
         onSubmit({
             title: draft.title.trim().slice(0, STORY_LIMITS.title),
             author: draft.author.trim().slice(0, STORY_LIMITS.author),
@@ -85,10 +90,11 @@ export function StoryMetaDialog({
             onClose={onClose}
             title={title}
             size="md"
+            syncHistory={syncHistory}
             actions={(
                 <>
-                    <Button variant="text" onClick={onClose}>{t("common.action.cancel")}</Button>
-                    <Button variant="filled" onClick={submit}>{confirmLabel}</Button>
+                    <Button variant="text" disabled={submitting} onClick={onClose}>{t("common.action.cancel")}</Button>
+                    <Button variant="filled" disabled={submitting} onClick={submit}>{confirmLabel}</Button>
                 </>
             )}
         >

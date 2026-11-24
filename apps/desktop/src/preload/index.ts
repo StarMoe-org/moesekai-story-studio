@@ -44,6 +44,10 @@ const api: MoesekaiDesktopApi = {
         createSnapshot: reason => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_CREATE_SNAPSHOT, reason),
         rollbackSnapshot: snapshotId => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_ROLLBACK_SNAPSHOT, snapshotId),
         importVoiceFile: beatId => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_IMPORT_VOICE_FILE, beatId),
+        importVoiceFiles: req => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_IMPORT_VOICE_FILES, req),
+        listVoiceFiles: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_LIST_VOICE_FILES),
+        saveVoiceManifest: manifest => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_SAVE_VOICE_MANIFEST, manifest),
+        openVoicesDir: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_OPEN_VOICES_DIR),
         revealPath: targetPath => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_REVEAL_PATH, targetPath),
         onExternalChange: listener =>
             subscribeChannel<WorkspaceExternalChangeEvent>(IPC_CHANNELS.EVENT_WORKSPACE_EXTERNAL_CHANGE, listener),

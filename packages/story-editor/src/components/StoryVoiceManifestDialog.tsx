@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-    Banner, Button, Dialog, Divider, Icon, LoadingIndicator, Surface, Tabs, TextField,
+    Banner, Button, Dialog, Divider, Icon, LoadingIndicator, Surface, Switch, Tabs, TextField,
 } from "../md3";
 import {
     mdCheckCircle, mdDelete, mdLink, mdRecordVoiceOver, mdTranslate, mdUploadFile,
@@ -22,12 +22,28 @@ import {
     type UiLocale,
     type VoiceManifestMatchSummary,
 } from "@moesekai/story-core";
+import { VoiceCueSheetExportBar } from "./VoiceCueSheetExportBar";
+import {
+    detectAudioFilesForManifestDrop,
+    resolveVoiceManifestDialogTab,
+    type AudioFileDropDetection,
+    type VoiceManifestDialogTab,
+} from "./voiceTrackUtils";
+
+export {
+    detectAudioFilesForManifestDrop,
+    resolveVoiceManifestDialogTab,
+    type AudioFileDropDetection,
+    type VoiceManifestDialogTab,
+};
 
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 
 export interface VoiceManifestUploadTabContext {
     closeDialog: () => void;
+    applyManifest: (manifest: StoryVoiceManifest | null) => void;
     applyManifestUrl: (url: string) => Promise<void>;
+    currentManifest: StoryVoiceManifest | null;
     notify: (msg: string) => void;
 }
 
@@ -46,19 +62,21 @@ export interface StoryVoiceManifestDialogProps {
     onSwitchToStoryImport?: (doc: StoryDocument) => void;
     /** Optional 1-click rescue when the user uploads/pastes a `.i18n.json` subtitle pack here. */
     onApplyLocalePack?: (pack: StoryLocalePack) => void;
-    /** Optional host-injected second tab (e.g. Web's Community Audio Upload panel or Desktop local voice directory matcher). */
+    /** Optional host-injected primary tab (e.g. Web's Community Audio Upload panel or Desktop local voice directory matcher). */
     uploadTab?: VoiceManifestUploadTabConfig | null;
-    initialTab?: "import" | "upload";
+    /** Optional tab override when opening; defaults to `"upload"` when `uploadTab` is provided, else `"import"`. */
+    initialTab?: VoiceManifestDialogTab;
     onNotify?: (message: string) => void;
 }
 
-type ManifestEvaluation =
+export type ManifestEvaluation =
     | { kind: "manifest"; manifest: StoryVoiceManifest; match: VoiceManifestMatchSummary }
     | { kind: "story"; storyDoc: StoryDocument | null }
     | { kind: "localePack"; localePack: StoryLocalePack | null; locale: UiLocale | null }
+    | AudioFileDropDetection
     | { kind: "invalid" };
 
-function evaluateManifestText(rawText: string, doc: StoryDocument): ManifestEvaluation {
+export function evaluateManifestText(rawText: string, doc: StoryDocument): ManifestEvaluation {
     let parsed: unknown;
     try {
         parsed = JSON.parse(rawText);
@@ -100,8 +118,9 @@ function evaluateManifestText(rawText: string, doc: StoryDocument): ManifestEval
 }
 
 /**
- * Interactive MD3 Expressive dialog for mounting, inspecting, and unmounting a custom
- * `StoryVoiceManifest` (`moesekai-story-voice/1`) from an HTTPS URL, local file, or pasted JSON.
+ * Interactive MD3 Expressive dialog for managing custom voice tracks: host-provided audio upload/local
+ * directory management (`uploadTab`, shown first by default) plus advanced external `manifest.json`
+ * (`moesekai-story-voice/1`) import via HTTPS URL, local file, or pasted JSON.
  */
 export function StoryVoiceManifestDialog({
     isOpen,
@@ -112,7 +131,7 @@ export function StoryVoiceManifestDialog({
     onSwitchToStoryImport,
     onApplyLocalePack,
     uploadTab = null,
-    initialTab = "import",
+    initialTab,
     onNotify,
 }: StoryVoiceManifestDialogProps) {
     const { t } = useI18n();
@@ -122,8 +141,8 @@ export function StoryVoiceManifestDialog({
     const mountedRef = useRef(true);
     const hasUploadTab = Boolean(uploadTab);
 
-    const [activeTab, setActiveTab] = useState<"import" | "upload">(
-        hasUploadTab ? initialTab : "import",
+    const [activeTab, setActiveTab] = useState<VoiceManifestDialogTab>(
+        () => resolveVoiceManifestDialogTab(hasUploadTab, initialTab),
     );
     const [urlInput, setUrlInput] = useState("");
     const [fetching, setFetching] = useState(false);
@@ -131,10 +150,13 @@ export function StoryVoiceManifestDialog({
     const [text, setText] = useState("");
     const [fileError, setFileError] = useState<string | null>(null);
     const [evaluation, setEvaluation] = useState<ManifestEvaluation | null>(null);
+    const [candidateOverrideOfficial, setCandidateOverrideOfficial] = useState(false);
+
+    const effectiveTab: VoiceManifestDialogTab = hasUploadTab ? activeTab : "import";
 
     useEffect(() => {
         if (isOpen) {
-            setActiveTab(hasUploadTab ? initialTab : "import");
+            setActiveTab(resolveVoiceManifestDialogTab(hasUploadTab, initialTab));
         }
     }, [hasUploadTab, initialTab, isOpen]);
 
@@ -168,6 +190,7 @@ export function StoryVoiceManifestDialog({
         setFileError(null);
         setText("");
         setEvaluation(null);
+        setCandidateOverrideOfficial(false);
     };
 
     const handleClose = () => {
@@ -181,17 +204,35 @@ export function StoryVoiceManifestDialog({
         setFetchError(null);
         if (!raw.trim()) {
             setEvaluation(null);
+            setCandidateOverrideOfficial(false);
             return;
         }
-        setEvaluation(evaluateManifestText(raw, doc));
+        const result = evaluateManifestText(raw, doc);
+        setEvaluation(result);
+        setCandidateOverrideOfficial(
+            result.kind === "manifest" ? Boolean(result.manifest.overrideOfficialVoice) : false,
+        );
     };
 
-    const loadFile = async (file: File | undefined) => {
-        if (!file) return;
+    const loadFiles = async (files: FileList | readonly File[] | null | undefined) => {
+        if (!files || files.length === 0) return;
         setFetchError(null);
+        setFileError(null);
+
+        const audioDrop = detectAudioFilesForManifestDrop(files);
+        if (audioDrop) {
+            setText("");
+            setEvaluation(audioDrop);
+            setCandidateOverrideOfficial(false);
+            return;
+        }
+
+        const file = files[0];
+        if (!file) return;
         if (file.size > MAX_MANIFEST_BYTES) {
             setFileError(t("page.storyMaker.i18n.fileTooLarge"));
             setEvaluation(null);
+            setCandidateOverrideOfficial(false);
             return;
         }
         try {
@@ -200,6 +241,7 @@ export function StoryVoiceManifestDialog({
         } catch {
             setFileError(t("page.storyMaker.i18n.readFailed"));
             setEvaluation(null);
+            setCandidateOverrideOfficial(false);
         }
     };
 
@@ -251,6 +293,9 @@ export function StoryVoiceManifestDialog({
             }
             setText(rawText);
             setEvaluation(result);
+            setCandidateOverrideOfficial(
+                result.kind === "manifest" ? Boolean(result.manifest.overrideOfficialVoice) : false,
+            );
         } catch (error) {
             if (!mountedRef.current || requestSeqRef.current !== seq) return;
             if (error instanceof DOMException && error.name === "AbortError") return;
@@ -268,7 +313,11 @@ export function StoryVoiceManifestDialog({
 
     const handleApplyEvaluated = () => {
         if (!evaluation || evaluation.kind !== "manifest") return;
-        onApplyManifest(evaluation.manifest);
+        const nextManifest: StoryVoiceManifest = {
+            ...evaluation.manifest,
+            overrideOfficialVoice: candidateOverrideOfficial,
+        };
+        onApplyManifest(nextManifest);
         onNotify?.(t("page.storyMaker.voiceTrack.loadedToast", {
             count: evaluation.match.matchedCount,
         }));
@@ -311,7 +360,7 @@ export function StoryVoiceManifestDialog({
         onNotify?.(t("page.storyMaker.voiceTrack.clearedToast"));
     };
 
-    const canSubmitCandidate = activeTab === "import" && evaluation?.kind === "manifest";
+    const canSubmitCandidate = effectiveTab === "import" && evaluation?.kind === "manifest";
     const candidateZeroMatch = evaluation?.kind === "manifest" && evaluation.match.matchedCount === 0;
 
     return (
@@ -344,19 +393,21 @@ export function StoryVoiceManifestDialog({
                 {uploadTab && (
                     <Tabs
                         items={[
-                            { value: "import", label: t("page.storyMaker.voiceTrack.tabImport") },
                             { value: "upload", label: uploadTab.label },
+                            { value: "import", label: t("page.storyMaker.voiceTrack.tabImport") },
                         ]}
-                        value={activeTab}
+                        value={effectiveTab}
                         onValueChange={setActiveTab}
                         variant="secondary"
                     />
                 )}
 
-                {activeTab === "upload" && uploadTab ? (
+                {effectiveTab === "upload" && uploadTab ? (
                     uploadTab.render({
                         closeDialog: handleClose,
+                        applyManifest: onApplyManifest,
                         applyManifestUrl: handleAutoMountPublishedManifest,
+                        currentManifest,
                         notify: (msg) => onNotify?.(msg),
                     })
                 ) : (
@@ -365,232 +416,302 @@ export function StoryVoiceManifestDialog({
                             {t("page.storyMaker.voiceTrack.dialogSubtitle")}
                         </p>
 
-                {/* Current mounted manifest status */}
-                {currentManifest && currentMatch && (
-                    <Surface tone="low" radius="lg" className="min-w-0 space-y-2.5 border border-outline-variant/60 p-3.5">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex min-w-0 items-center gap-2 text-primary">
-                                <Icon path={mdCheckCircle} size={18} className="shrink-0" />
-                                <span className="type-title-s">{t("page.storyMaker.voiceTrack.currentTitle")}</span>
-                            </div>
-                            <Button
-                                size="xs"
-                                variant="outlined"
-                                icon={mdDelete}
-                                onClick={handleClearCurrent}
-                            >
-                                {t("page.storyMaker.voiceTrack.clearAction")}
-                            </Button>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2 type-label-m text-on-surface-variant">
-                            <span className="font-mono text-on-surface">{currentManifest.storyId}</span>
-                            {currentManifest.title && (
-                                <>
-                                    <span>·</span>
-                                    <span className="text-on-surface">{currentManifest.title}</span>
-                                </>
-                            )}
-                            {currentManifest.locale && (
-                                <span className="rounded-md3-full bg-secondary-container px-2 py-0.5 type-label-s text-on-secondary-container">
-                                    {UI_LOCALE_LABELS[currentManifest.locale]}
-                                </span>
-                            )}
-                        </div>
-                        <p className="type-body-s text-on-surface">
-                            {t("page.storyMaker.voiceTrack.matchedSummary", {
-                                matched: currentMatch.matchedCount,
-                                total: currentMatch.totalTalkBeats,
-                                lines: currentMatch.totalManifestLines,
-                            })}
-                        </p>
-                        {currentMatch.matchedCount === 0 && (
-                            <Banner tone="warning">
-                                {t("page.storyMaker.voiceTrack.zeroMatchWarning", {
-                                    total: currentMatch.totalTalkBeats,
-                                })}
-                            </Banner>
+                        {/* Current mounted voice track card (external manifest tab & standalone player; host uploadTab owns its integrated controls) */}
+                        {currentManifest && currentMatch && (
+                            <Surface tone="low" radius="lg" className="min-w-0 space-y-2.5 border border-outline-variant/60 p-3.5">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                        <Icon path={mdCheckCircle} size={18} className="shrink-0 text-primary" />
+                                        <span className="type-title-s text-on-surface">
+                                            {t("page.storyMaker.voiceTrack.currentTitle")}
+                                        </span>
+                                        {currentManifest.locale && (
+                                            <span className="rounded-md3-full bg-secondary-container px-2 py-0.5 type-label-s text-on-secondary-container">
+                                                {UI_LOCALE_LABELS[currentManifest.locale]}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <Button
+                                        size="xs"
+                                        variant="outlined"
+                                        icon={mdDelete}
+                                        onClick={handleClearCurrent}
+                                    >
+                                        {t("page.storyMaker.voiceTrack.clearAction")}
+                                    </Button>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 type-body-s text-on-surface">
+                                    <span>
+                                        {t("page.storyMaker.voiceTrack.matchedSummary", {
+                                            matched: currentMatch.matchedCount,
+                                            total: currentMatch.totalTalkBeats,
+                                            lines: currentMatch.totalManifestLines,
+                                        })}
+                                    </span>
+                                    {(currentManifest.title || currentManifest.storyId) && (
+                                        <span className="font-mono type-label-m text-on-surface-variant">
+                                            · {currentManifest.title || currentManifest.storyId}
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="rounded-md3-md border border-outline-variant/50 bg-surface-container px-3 py-2">
+                                    <Switch
+                                        checked={Boolean(currentManifest.overrideOfficialVoice)}
+                                        onCheckedChange={(checked) => {
+                                            onApplyManifest({
+                                                ...currentManifest,
+                                                overrideOfficialVoice: checked,
+                                            });
+                                        }}
+                                        label={
+                                            <span className="type-label-l text-on-surface">
+                                                {t("page.storyMaker.voiceTrack.overrideOfficialLabel")}
+                                            </span>
+                                        }
+                                        description={
+                                            <span className="type-body-s text-on-surface-variant">
+                                                {t("page.storyMaker.voiceTrack.overrideOfficialHint")}
+                                            </span>
+                                        }
+                                    />
+                                </div>
+                                {currentMatch.matchedCount === 0 && (
+                                    <Banner tone="warning">
+                                        {t("page.storyMaker.voiceTrack.zeroMatchWarning", {
+                                            total: currentMatch.totalTalkBeats,
+                                        })}
+                                    </Banner>
+                                )}
+                            </Surface>
                         )}
-                    </Surface>
-                )}
 
-                {/* Section 1: Fetch online manifest.json URL */}
-                <div className="min-w-0 space-y-2">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
-                        <TextField
-                            variant="outlined"
-                            label={t("page.storyMaker.voiceTrack.urlLabel")}
-                            placeholder={t("page.storyMaker.voiceTrack.urlPlaceholder")}
-                            icon={mdLink}
-                            value={urlInput}
-                            onValueChange={(next) => {
-                                setUrlInput(next);
-                                setFetchError(null);
-                            }}
-                            onKeyDown={(event) => {
-                                if (event.key === "Enter" && !fetching && urlInput.trim()) {
+                        {/* Dialogue cue sheet export bar for manual manifest & external TTS workflows */}
+                        <VoiceCueSheetExportBar doc={doc} onNotify={onNotify} />
+
+                        {/* Section 1: Fetch online manifest.json URL */}
+                        <div className="min-w-0 space-y-2">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+                                <TextField
+                                    variant="outlined"
+                                    label={t("page.storyMaker.voiceTrack.urlLabel")}
+                                    placeholder={t("page.storyMaker.voiceTrack.urlPlaceholder")}
+                                    icon={mdLink}
+                                    value={urlInput}
+                                    onValueChange={(next) => {
+                                        setUrlInput(next);
+                                        setFetchError(null);
+                                    }}
+                                    onKeyDown={(event) => {
+                                        if (event.key === "Enter" && !fetching && urlInput.trim()) {
+                                            event.preventDefault();
+                                            void handleFetchUrl();
+                                        }
+                                    }}
+                                    clearable
+                                    containerClassName="min-w-0 flex-1"
+                                />
+                                <Button
+                                    variant="filled"
+                                    disabled={fetching || !urlInput.trim()}
+                                    onClick={() => void handleFetchUrl()}
+                                    className="shrink-0 sm:mt-1.5"
+                                >
+                                    {fetching && <LoadingIndicator size={18} contained />}
+                                    <span>
+                                        {t(fetching
+                                            ? "page.storyMaker.voiceTrack.fetching"
+                                            : "page.storyMaker.voiceTrack.fetchButton")}
+                                    </span>
+                                </Button>
+                            </div>
+                            {fetchError && <Banner tone="error">{fetchError}</Banner>}
+                        </div>
+
+                        <Divider />
+
+                        {/* Section 2: Local file upload + paste raw JSON */}
+                        <div className="min-w-0 space-y-3">
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                multiple
+                                accept=".json,application/json"
+                                className="hidden"
+                                onChange={(event) => {
+                                    void loadFiles(event.target.files);
+                                    event.target.value = "";
+                                }}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => fileInputRef.current?.click()}
+                                onDragOver={event => event.preventDefault()}
+                                onDrop={(event) => {
                                     event.preventDefault();
-                                    void handleFetchUrl();
-                                }
-                            }}
-                            clearable
-                            containerClassName="min-w-0 flex-1"
-                        />
-                        <Button
-                            variant="filled"
-                            disabled={fetching || !urlInput.trim()}
-                            onClick={() => void handleFetchUrl()}
-                            className="shrink-0 sm:mt-1.5"
-                        >
-                            {fetching && <LoadingIndicator size={18} contained />}
-                            <span>
-                                {t(fetching
-                                    ? "page.storyMaker.voiceTrack.fetching"
-                                    : "page.storyMaker.voiceTrack.fetchButton")}
-                            </span>
-                        </Button>
-                    </div>
-                    {fetchError && <Banner tone="error">{fetchError}</Banner>}
-                </div>
-
-                <Divider />
-
-                {/* Section 2: Local file upload + paste raw JSON */}
-                <div className="min-w-0 space-y-3">
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".json,application/json"
-                        className="hidden"
-                        onChange={(event) => {
-                            void loadFile(event.target.files?.[0]);
-                            event.target.value = "";
-                        }}
-                    />
-                    <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        onDragOver={event => event.preventDefault()}
-                        onDrop={(event) => {
-                            event.preventDefault();
-                            void loadFile(event.dataTransfer.files?.[0]);
-                        }}
-                        className="state-layer focus-ring flex w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md3-lg border-2 border-dashed border-outline-variant bg-surface-container px-4 py-5 text-center"
-                    >
-                        <Icon path={mdUploadFile} size={26} className="text-primary" />
-                        <span className="type-title-s text-on-surface">
-                            {t("page.storyMaker.voiceTrack.fileDropLabel")}
-                        </span>
-                    </button>
-
-                    <div className="space-y-1">
-                        <label htmlFor="story-voice-manifest-json" className="block type-label-l text-on-surface-variant">
-                            {t("page.storyMaker.voiceTrack.pasteLabel")}
-                        </label>
-                        <textarea
-                            id="story-voice-manifest-json"
-                            rows={5}
-                            value={text}
-                            placeholder={t("page.storyMaker.voiceTrack.pastePlaceholder")}
-                            onChange={event => evaluate(event.target.value)}
-                            className="w-full rounded-md3-xs border border-outline bg-transparent px-3.5 py-2.5 font-mono type-body-s text-on-surface placeholder:text-on-surface-variant focus:border-2 focus:border-primary focus:outline-none"
-                        />
-                    </div>
-                </div>
-
-                {fileError && <Banner tone="error">{fileError}</Banner>}
-
-                {/* Cross-format rescue: user dropped .story.json */}
-                {evaluation?.kind === "story" && (
-                    <Banner
-                        tone="warning"
-                        action={evaluation.storyDoc && onSwitchToStoryImport ? (
-                            <Button
-                                size="xs"
-                                variant="filled"
-                                onClick={() => {
-                                    const rescuedDoc = evaluation.storyDoc;
-                                    if (!rescuedDoc) return;
-                                    resetDraftState();
-                                    onClose();
-                                    onSwitchToStoryImport(rescuedDoc);
+                                    void loadFiles(event.dataTransfer.files);
                                 }}
+                                className="state-layer focus-ring flex w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md3-lg border-2 border-dashed border-outline-variant bg-surface-container px-4 py-5 text-center"
                             >
-                                {t("page.storyMaker.voiceTrack.importStoryInstead")}
-                            </Button>
-                        ) : undefined}
-                    >
-                        {t("page.storyMaker.voiceTrack.wrongFormatStory")}
-                    </Banner>
-                )}
-
-                {/* Cross-format rescue: user dropped .i18n.json */}
-                {evaluation?.kind === "localePack" && (
-                    <Banner
-                        tone="warning"
-                        action={evaluation.localePack && onApplyLocalePack ? (
-                            <Button
-                                size="xs"
-                                variant="filled"
-                                icon={mdTranslate}
-                                onClick={() => {
-                                    const pack = evaluation.localePack;
-                                    if (!pack) return;
-                                    onApplyLocalePack(pack);
-                                    onNotify?.(t("page.storyMaker.i18n.loadedLocalePackToast", {
-                                        locale: UI_LOCALE_LABELS[pack.locale],
-                                    }));
-                                    resetDraftState();
-                                    onClose();
-                                }}
-                            >
-                                {t("page.storyMaker.voiceTrack.applyLocaleInstead")}
-                            </Button>
-                        ) : undefined}
-                    >
-                        {t("page.storyMaker.voiceTrack.wrongFormatLocale")}
-                    </Banner>
-                )}
-
-                {/* Invalid JSON / wrong schema */}
-                {evaluation?.kind === "invalid" && (
-                    <Banner tone="error">
-                        {t("page.storyMaker.voiceTrack.invalidToast")}
-                    </Banner>
-                )}
-
-                {/* Valid manifest preview */}
-                {evaluation?.kind === "manifest" && (
-                    <Surface tone="default" radius="md" className="min-w-0 space-y-2.5 p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 text-primary">
-                                <Icon path={mdCheckCircle} size={20} />
-                                <span className="font-mono type-title-s">{evaluation.manifest.storyId}</span>
-                            </div>
-                            {evaluation.manifest.locale && (
-                                <span className="rounded-md3-full bg-secondary-container px-2.5 py-0.5 type-label-s text-on-secondary-container">
-                                    {UI_LOCALE_LABELS[evaluation.manifest.locale]}
+                                <Icon path={mdUploadFile} size={26} className="text-primary" />
+                                <span className="type-title-s text-on-surface">
+                                    {t("page.storyMaker.voiceTrack.fileDropLabel")}
                                 </span>
-                            )}
+                            </button>
+
+                            <div className="space-y-1">
+                                <label htmlFor="story-voice-manifest-json" className="block type-label-l text-on-surface-variant">
+                                    {t("page.storyMaker.voiceTrack.pasteLabel")}
+                                </label>
+                                <textarea
+                                    id="story-voice-manifest-json"
+                                    rows={5}
+                                    value={text}
+                                    placeholder={t("page.storyMaker.voiceTrack.pastePlaceholder")}
+                                    onChange={event => evaluate(event.target.value)}
+                                    className="w-full rounded-md3-xs border border-outline bg-transparent px-3.5 py-2.5 font-mono type-body-s text-on-surface placeholder:text-on-surface-variant focus:border-2 focus:border-primary focus:outline-none"
+                                />
+                            </div>
                         </div>
-                        {evaluation.manifest.title && (
-                            <p className="type-label-l text-on-surface">{evaluation.manifest.title}</p>
-                        )}
-                        <p className="type-body-s text-on-surface">
-                            {t("page.storyMaker.voiceTrack.matchedSummary", {
-                                matched: evaluation.match.matchedCount,
-                                total: evaluation.match.totalTalkBeats,
-                                lines: evaluation.match.totalManifestLines,
-                            })}
-                        </p>
-                        {evaluation.match.matchedCount === 0 && (
-                            <Banner tone="warning">
-                                {t("page.storyMaker.voiceTrack.zeroMatchWarning", {
-                                    total: evaluation.match.totalTalkBeats,
-                                })}
+
+                        {fileError && <Banner tone="error">{fileError}</Banner>}
+
+                        {/* Audio file drop rescue: user dropped .mp3 / .ogg / .wav etc. into manifest.json tab */}
+                        {evaluation?.kind === "audioFile" && (
+                            <Banner
+                                tone="warning"
+                                action={uploadTab ? (
+                                    <Button
+                                        size="xs"
+                                        variant="filled"
+                                        icon={mdRecordVoiceOver}
+                                        onClick={() => {
+                                            resetDraftState();
+                                            setActiveTab("upload");
+                                        }}
+                                    >
+                                        {t("page.storyMaker.voiceTrack.switchToUploadTab")}
+                                    </Button>
+                                ) : undefined}
+                            >
+                                {evaluation.count > 1
+                                    ? t("page.storyMaker.voiceTrack.wrongFormatAudioMulti", {
+                                        fileName: evaluation.fileName,
+                                        count: evaluation.count,
+                                    })
+                                    : t("page.storyMaker.voiceTrack.wrongFormatAudioSingle", {
+                                        fileName: evaluation.fileName,
+                                    })}
                             </Banner>
                         )}
-                    </Surface>
-                )}
+
+                        {/* Cross-format rescue: user dropped .story.json */}
+                        {evaluation?.kind === "story" && (
+                            <Banner
+                                tone="warning"
+                                action={evaluation.storyDoc && onSwitchToStoryImport ? (
+                                    <Button
+                                        size="xs"
+                                        variant="filled"
+                                        onClick={() => {
+                                            const rescuedDoc = evaluation.storyDoc;
+                                            if (!rescuedDoc) return;
+                                            resetDraftState();
+                                            onClose();
+                                            onSwitchToStoryImport(rescuedDoc);
+                                        }}
+                                    >
+                                        {t("page.storyMaker.voiceTrack.importStoryInstead")}
+                                    </Button>
+                                ) : undefined}
+                            >
+                                {t("page.storyMaker.voiceTrack.wrongFormatStory")}
+                            </Banner>
+                        )}
+
+                        {/* Cross-format rescue: user dropped .i18n.json */}
+                        {evaluation?.kind === "localePack" && (
+                            <Banner
+                                tone="warning"
+                                action={evaluation.localePack && onApplyLocalePack ? (
+                                    <Button
+                                        size="xs"
+                                        variant="filled"
+                                        icon={mdTranslate}
+                                        onClick={() => {
+                                            const pack = evaluation.localePack;
+                                            if (!pack) return;
+                                            onApplyLocalePack(pack);
+                                            onNotify?.(t("page.storyMaker.i18n.loadedLocalePackToast", {
+                                                locale: UI_LOCALE_LABELS[pack.locale],
+                                            }));
+                                            resetDraftState();
+                                            onClose();
+                                        }}
+                                    >
+                                        {t("page.storyMaker.voiceTrack.applyLocaleInstead")}
+                                    </Button>
+                                ) : undefined}
+                            >
+                                {t("page.storyMaker.voiceTrack.wrongFormatLocale")}
+                            </Banner>
+                        )}
+
+                        {/* Invalid JSON / wrong schema */}
+                        {evaluation?.kind === "invalid" && (
+                            <Banner tone="error">
+                                {t("page.storyMaker.voiceTrack.invalidToast")}
+                            </Banner>
+                        )}
+
+                        {/* Valid manifest preview */}
+                        {evaluation?.kind === "manifest" && (
+                            <Surface tone="default" radius="md" className="min-w-0 space-y-2.5 p-4">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2 text-primary">
+                                        <Icon path={mdCheckCircle} size={20} />
+                                        <span className="font-mono type-title-s">{evaluation.manifest.storyId}</span>
+                                    </div>
+                                    {evaluation.manifest.locale && (
+                                        <span className="rounded-md3-full bg-secondary-container px-2.5 py-0.5 type-label-s text-on-secondary-container">
+                                            {UI_LOCALE_LABELS[evaluation.manifest.locale]}
+                                        </span>
+                                    )}
+                                </div>
+                                {evaluation.manifest.title && (
+                                    <p className="type-label-l text-on-surface">{evaluation.manifest.title}</p>
+                                )}
+                                <p className="type-body-s text-on-surface">
+                                    {t("page.storyMaker.voiceTrack.matchedSummary", {
+                                        matched: evaluation.match.matchedCount,
+                                        total: evaluation.match.totalTalkBeats,
+                                        lines: evaluation.match.totalManifestLines,
+                                    })}
+                                </p>
+                                <div className="rounded-md3-md border border-outline-variant/50 bg-surface-container px-3 py-2">
+                                    <Switch
+                                        checked={candidateOverrideOfficial}
+                                        onCheckedChange={setCandidateOverrideOfficial}
+                                        label={
+                                            <span className="type-label-l text-on-surface">
+                                                {t("page.storyMaker.voiceTrack.overrideOfficialLabel")}
+                                            </span>
+                                        }
+                                        description={
+                                            <span className="type-body-s text-on-surface-variant">
+                                                {t("page.storyMaker.voiceTrack.overrideOfficialHint")}
+                                            </span>
+                                        }
+                                    />
+                                </div>
+                                {evaluation.match.matchedCount === 0 && (
+                                    <Banner tone="warning">
+                                        {t("page.storyMaker.voiceTrack.zeroMatchWarning", {
+                                            total: evaluation.match.totalTalkBeats,
+                                        })}
+                                    </Banner>
+                                )}
+                            </Surface>
+                        )}
                     </>
                 )}
             </div>

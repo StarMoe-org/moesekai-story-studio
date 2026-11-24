@@ -2,7 +2,7 @@
  * Limits of a `moesekai-story/2` graph document and the stage geometry the story maker uses.
  * Shared by the validator, compiler, runtime VM, MoeSekai Script parser, editor inputs, and stage adapter.
  */
-import type { StorySlot } from "../types/storyMaker";
+import type { StageLayoutMode, StorySlot } from "../types/storyMaker";
 
 export const STORY_LIMITS = {
     nodes: 200,
@@ -35,10 +35,16 @@ export const STORY_LIMITS = {
     choiceText: 80,
     /** Seconds, for transitions, moves, flashes, shakes and waits. */
     duration: { min: 0, max: 10 },
+    /** Start delay bounds in seconds (`stageCast` / `stageAction`). */
+    delayMin: 0,
+    delayMax: 10,
     volume: { min: 0, max: 1 },
     /** Bounded finite numeric range for low-code counter variables and expressions. */
     varNumberMin: -1_000_000,
     varNumberMax: 1_000_000,
+    /** Character explicit horizontal stage coordinate bounds (`-1.2..1.2`, fractions of half a 16:9 frame width). */
+    xMin: -1.2,
+    xMax: 1.2,
     /** Character scale multiplier (`stageCast` / `stageAction`, default 1.0). */
     scaleMin: 0.5,
     scaleMax: 2.0,
@@ -126,98 +132,370 @@ function roundStageX(value: number): number {
     return Math.round(value * 1000) / 1000;
 }
 
+/** Clamps an explicit actor horizontal world coordinate to `[STORY_LIMITS.xMin, STORY_LIMITS.xMax]` (`-1.2..1.2`). */
+export function clampActorX(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    const clamped = Math.min(STORY_LIMITS.xMax, Math.max(STORY_LIMITS.xMin, value));
+    return roundStageX(clamped);
+}
+
+/** Clamps a choreography start delay (seconds) to `[STORY_LIMITS.delayMin, STORY_LIMITS.delayMax]` (`0..10`). */
+export function clampDelay(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    const clamped = Math.min(STORY_LIMITS.delayMax, Math.max(STORY_LIMITS.delayMin, value));
+    return roundStageX(clamped);
+}
+
+export interface LayoutStageActorsOptions {
+    /** `"initial"` (default, canonical scene entry framing) or `"incremental"` (preserves stationary actors). */
+    mode?: "initial" | "incremental";
+    /** `"auto"` (default anti-overlap) or `"fixed"` (exact authored/current coordinates, zero displacement). */
+    layoutMode?: StageLayoutMode;
+    /** Cast keys that did not enter or move in the current wave and should remain stationary whenever possible. */
+    stationaryKeys?: ReadonlySet<string>;
+}
+
+type LayoutActorInput = {
+    cast?: string;
+    slot: StorySlot;
+    x: number;
+    scale?: number;
+    allowOverlap?: boolean;
+    explicitX?: number;
+    lockX?: boolean;
+};
+
+function isPinnedActor(actor: LayoutActorInput): boolean {
+    return (actor.explicitX !== undefined && Number.isFinite(actor.explicitX)) || actor.lockX === true;
+}
+
+function getPinnedActorX(actor: LayoutActorInput): number {
+    if (actor.explicitX !== undefined && Number.isFinite(actor.explicitX)) {
+        return roundStageX(actor.explicitX);
+    }
+    if (Number.isFinite(actor.x)) {
+        return roundStageX(actor.x);
+    }
+    return SLOT_X[actor.slot];
+}
+
+function computePairGap(a: LayoutActorInput, b: LayoutActorInput, n: number): number {
+    const baseNormal = n >= 5 ? 0.4 : 0.48;
+    const pairScale = ((a.scale ?? 1) + (b.scale ?? 1)) / 2;
+    const pairHuddle = Boolean(a.allowOverlap && b.allowOverlap);
+    return (pairHuddle ? STAGE_SAFE_BOUNDS.huddleGap : baseNormal) * pairScale;
+}
+
+/**
+ * Solves a contiguous movable run `[s..e]` via weighted 1D PAV subject to `[leftBound, rightBound]`
+ * and pairwise minimum separations `internalGaps`. When `strictFeasible` is true, returns `null`
+ * if `[leftBound, rightBound]` cannot accommodate `internalGaps` without shrinking.
+ */
+function solveWeightedRun(
+    anchors: readonly number[],
+    weights: readonly number[],
+    internalGaps: readonly number[],
+    leftBound: number,
+    rightBound: number,
+    strictFeasible: boolean,
+): number[] | null {
+    const m = anchors.length;
+    if (m === 0) return [];
+
+    const rawPrefix: number[] = [0];
+    for (let i = 0; i < internalGaps.length; i += 1) {
+        rawPrefix.push(rawPrefix[i] + internalGaps[i]);
+    }
+    const totalGap = rawPrefix[m - 1];
+    const available = rightBound - leftBound;
+
+    if (strictFeasible) {
+        if (leftBound + totalGap > rightBound + 1e-9) {
+            return null;
+        }
+    }
+
+    let prefix: number[];
+    let uMin: number;
+    let uMax: number;
+    if (available <= 1e-9) {
+        // Hard bounds met or crossed: collapse to bounded midpoint (strictFeasible already returned null above).
+        const mid = roundStageX((leftBound + rightBound) / 2);
+        return new Array<number>(m).fill(mid);
+    } else if (totalGap > available) {
+        const gapScale = available / totalGap;
+        prefix = rawPrefix.map(g => g * gapScale);
+        uMin = leftBound;
+        uMax = leftBound;
+    } else {
+        prefix = rawPrefix;
+        uMin = leftBound;
+        uMax = rightBound - totalGap;
+    }
+
+    const blocks: Array<{ start: number; count: number; wSum: number; wzSum: number }> = [];
+    for (let i = 0; i < m; i += 1) {
+        const z = anchors[i] - prefix[i];
+        const w = weights[i];
+        blocks.push({ start: i, count: 1, wSum: w, wzSum: w * z });
+        while (blocks.length >= 2) {
+            const last = blocks[blocks.length - 1];
+            const prev = blocks[blocks.length - 2];
+            if (prev.wzSum / prev.wSum <= last.wzSum / last.wSum) break;
+            prev.count += last.count;
+            prev.wSum += last.wSum;
+            prev.wzSum += last.wzSum;
+            blocks.pop();
+        }
+    }
+
+    const out = new Array<number>(m);
+    for (const block of blocks) {
+        const u = Math.min(uMax, Math.max(uMin, block.wzSum / block.wSum));
+        for (let k = 0; k < block.count; k += 1) {
+            const idx = block.start + k;
+            out[idx] = roundStageX(u + prefix[idx]);
+        }
+    }
+    return out;
+}
+
+/**
+ * Solves 1D positions for `ordered` actors where `fixedFlags[i]` marks hard immovable actors at
+ * `fixedXs[i]`, and movable actors have anchor `anchors[i]` and weight `weights[i]`.
+ */
+function solveWithFixedObstacles(
+    ordered: readonly { actor: LayoutActorInput; index: number }[],
+    fixedFlags: readonly boolean[],
+    fixedXs: readonly number[],
+    anchors: readonly number[],
+    weights: readonly number[],
+    maxEdge: number,
+    strictFeasible: boolean,
+): number[] | null {
+    const n = ordered.length;
+    const xs = new Array<number>(n);
+
+    let i = 0;
+    while (i < n) {
+        if (fixedFlags[i]) {
+            xs[i] = roundStageX(fixedXs[i]);
+            i += 1;
+            continue;
+        }
+        const s = i;
+        while (i < n && !fixedFlags[i]) i += 1;
+        const e = i - 1;
+
+        const leftBound = s === 0
+            ? -maxEdge
+            : Math.max(-maxEdge, fixedXs[s - 1] + computePairGap(ordered[s - 1].actor, ordered[s].actor, n));
+        const rightBound = e === n - 1
+            ? maxEdge
+            : Math.min(maxEdge, fixedXs[e + 1] - computePairGap(ordered[e].actor, ordered[e + 1].actor, n));
+
+        const runAnchors: number[] = [];
+        const runWeights: number[] = [];
+        const runGaps: number[] = [];
+        for (let k = s; k <= e; k += 1) {
+            runAnchors.push(anchors[k]);
+            runWeights.push(weights[k]);
+            if (k < e) {
+                runGaps.push(computePairGap(ordered[k].actor, ordered[k + 1].actor, n));
+            }
+        }
+
+        const solved = solveWeightedRun(runAnchors, runWeights, runGaps, leftBound, rightBound, strictFeasible);
+        if (!solved) return null;
+        for (let k = s; k <= e; k += 1) {
+            xs[k] = solved[k - s];
+        }
+    }
+
+    return xs;
+}
+
 /**
  * Computes balanced stage X coordinates for mounted actors while preserving left-to-right semantic
- * slot order, array draw order, authentic Project SEKAI framing, and explicit `allowOverlap`
+ * slot order, array draw order, authentic Project SEKAI framing, explicit `x` / `lockX` pinning,
+ * `layoutMode: "fixed"`, incremental stationary-actor preservation, and explicit `allowOverlap`
  * (close huddle) declarations:
- * - 1 actor: exact `SLOT_X[slot]`
- * - Standard non-overlapping 2/3/4/5-actor formations: authentic `±0.365`, `±0.573/0`, `±0.75/±0.25`, `±0.80/±0.40/0`
- * - Pairs where either actor declares `allowOverlap: true`: relaxed to `STAGE_SAFE_BOUNDS.huddleGap`
- *   (`0.22`), allowing snug cheek-to-cheek huddles (e.g. `[-0.11, +0.11]` on shared `center`) while
- *   keeping non-overlapping bystanders safely separated via generalized variable-gap 1D PAV projection.
+ * - `layoutMode === "fixed"`: uses exact `explicitX ?? x ?? SLOT_X[slot]` with zero displacement.
+ * - Pinned actors (`explicitX !== undefined || lockX === true`): NEVER displaced by auto-layout.
+ * - `mode === "initial"` (default): authentic `±0.365`, `±0.573/0`, `±0.75/±0.25`, `±0.80/±0.40/0`
+ *   when unpinned, or constrained projection around pinned actors when partially pinned.
+ * - `mode === "incremental"`: keeps stationary actors (`stationaryKeys`) at their exact current `x`
+ *   in Phase 1 (zero-displacement placement around stationary + pinned obstacles), falling back to
+ *   Phase 2 weighted constrained projection (pinned hard-fixed, stationary weight `8`, moving weight `1`)
+ *   only when free stage space is genuinely exhausted.
  */
-export function layoutStageActors<T extends { slot: StorySlot; x: number; scale?: number; allowOverlap?: boolean }>(
+export function layoutStageActors<T extends LayoutActorInput>(
     actors: readonly T[],
+    options?: LayoutStageActorsOptions,
 ): T[] {
     const n = actors.length;
     if (n === 0) return [];
-    if (n === 1) {
-        const single = actors[0];
-        const x = SLOT_X[single.slot];
-        return single.x === x ? [...actors] : [{ ...single, x }];
+
+    if (options?.layoutMode === "fixed") {
+        return actors.map((actor) => {
+            const nextX = actor.explicitX !== undefined && Number.isFinite(actor.explicitX)
+                ? roundStageX(actor.explicitX)
+                : Number.isFinite(actor.x)
+                    ? roundStageX(actor.x)
+                    : SLOT_X[actor.slot];
+            return actor.x === nextX ? actor : { ...actor, x: nextX };
+        });
     }
 
-    const ordered = actors
-        .map((actor, index) => ({ actor, index, slotRank: SLOT_ORDER[actor.slot] }))
-        .sort((a, b) => a.slotRank - b.slotRank || a.index - b.index);
+    const mode = options?.mode ?? "initial";
+    const stationaryKeys = options?.stationaryKeys;
 
-    const hasExplicitOverlap = ordered.some(item => Boolean(item.actor.allowOverlap));
-    const slotsKey = ordered.map(item => item.actor.slot).join(",");
+    if (n === 1) {
+        const single = actors[0];
+        let nextX: number;
+        if (isPinnedActor(single)) {
+            nextX = getPinnedActorX(single);
+        } else if (
+            mode === "incremental"
+            && single.cast !== undefined
+            && stationaryKeys?.has(single.cast)
+            && Number.isFinite(single.x)
+        ) {
+            nextX = roundStageX(single.x);
+        } else {
+            nextX = SLOT_X[single.slot];
+        }
+        return single.x === nextX ? [...actors] : [{ ...single, x: nextX }];
+    }
+
+    const maxEdge = n >= 5
+        ? STAGE_SAFE_BOUNDS.maxEdge5
+        : n === 4
+            ? STAGE_SAFE_BOUNDS.maxEdge4
+            : STAGE_SAFE_BOUNDS.maxEdge3;
+
+    const anyPinned = actors.some(isPinnedActor);
+
+    // Classic initial scene-entry framing when no actors are pinned (100% legacy-preserving).
+    if (mode === "initial" && !anyPinned) {
+        const ordered = actors
+            .map((actor, index) => ({ actor, index, slotRank: SLOT_ORDER[actor.slot] }))
+            .sort((a, b) => a.slotRank - b.slotRank || a.index - b.index);
+
+        const hasExplicitOverlap = ordered.some(item => Boolean(item.actor.allowOverlap));
+        const slotsKey = ordered.map(item => item.actor.slot).join(",");
+        let xs: number[] | null = null;
+
+        if (!hasExplicitOverlap) {
+            if (slotsKey === "left,center,right") {
+                xs = [...STAGE_SAFE_BOUNDS.trioX];
+            } else if (slotsKey === "farLeft,left,right,farRight") {
+                xs = [...STAGE_SAFE_BOUNDS.quartetX];
+            } else if (slotsKey === "farLeft,left,center,right,farRight") {
+                xs = [...STAGE_SAFE_BOUNDS.quintetX];
+            }
+        }
+
+        if (!xs) {
+            const avgScale = ordered.reduce((sum, item) => sum + (item.actor.scale ?? 1), 0) / n;
+            const baseNormalGap = (n >= 5 ? 0.4 : 0.48) * Math.min(1.15, Math.max(0.85, avgScale));
+            const baseHuddleGap = STAGE_SAFE_BOUNDS.huddleGap * Math.min(1.15, Math.max(0.85, avgScale));
+
+            const rawPairGaps: number[] = [];
+            for (let i = 0; i < n - 1; i += 1) {
+                const pairHuddle = Boolean(ordered[i].actor.allowOverlap && ordered[i + 1].actor.allowOverlap);
+                rawPairGaps.push(pairHuddle ? baseHuddleGap : baseNormalGap);
+            }
+            const totalGap = rawPairGaps.reduce((sum, g) => sum + g, 0);
+            const gapScale = totalGap > 2 * maxEdge ? (2 * maxEdge) / totalGap : 1;
+            const prefixGap: number[] = [0];
+            for (let i = 0; i < rawPairGaps.length; i += 1) {
+                prefixGap.push(prefixGap[i] + rawPairGaps[i] * gapScale);
+            }
+
+            const uMin = -maxEdge;
+            const uMax = maxEdge - prefixGap[n - 1];
+
+            const blocks: Array<{ start: number; count: number; sum: number }> = [];
+            for (let i = 0; i < n; i += 1) {
+                const z = SLOT_X[ordered[i].actor.slot] - prefixGap[i];
+                blocks.push({ start: i, count: 1, sum: z });
+                while (blocks.length >= 2) {
+                    const last = blocks[blocks.length - 1];
+                    const prev = blocks[blocks.length - 2];
+                    if (prev.sum / prev.count <= last.sum / last.count) break;
+                    prev.count += last.count;
+                    prev.sum += last.sum;
+                    blocks.pop();
+                }
+            }
+            xs = new Array<number>(n);
+            for (const block of blocks) {
+                const u = Math.min(uMax, Math.max(uMin, block.sum / block.count));
+                for (let k = 0; k < block.count; k += 1) {
+                    const idx = block.start + k;
+                    xs[idx] = roundStageX(u + prefixGap[idx]);
+                }
+            }
+        }
+
+        const xByOrigIndex = new Array<number>(n);
+        for (let i = 0; i < n; i += 1) {
+            xByOrigIndex[ordered[i].index] = xs[i];
+        }
+        return actors.map((actor, index) => {
+            const nextX = xByOrigIndex[index];
+            return actor.x === nextX ? actor : { ...actor, x: nextX };
+        });
+    }
+
+    // Pin-aware & incremental layout: sort by effective geometric anchor X (preserving pinned/stationary positions).
+    const decorated = actors.map((actor, index) => {
+        const pinned = isPinnedActor(actor);
+        const stationary = !pinned
+            && mode === "incremental"
+            && actor.cast !== undefined
+            && Boolean(stationaryKeys?.has(actor.cast))
+            && Number.isFinite(actor.x);
+        const anchorX = pinned
+            ? getPinnedActorX(actor)
+            : stationary
+                ? roundStageX(actor.x)
+                : SLOT_X[actor.slot];
+        return {
+            actor,
+            index,
+            pinned,
+            stationary,
+            anchorX,
+            slotRank: SLOT_ORDER[actor.slot],
+        };
+    });
+
+    decorated.sort((a, b) => a.anchorX - b.anchorX || a.slotRank - b.slotRank || a.index - b.index);
+
+    const anchors = decorated.map(item => item.anchorX);
+    const fixedXs = decorated.map(item => item.anchorX);
     let xs: number[] | null = null;
 
-    if (!hasExplicitOverlap) {
-        if (slotsKey === "left,center,right") {
-            xs = [...STAGE_SAFE_BOUNDS.trioX];
-        } else if (slotsKey === "farLeft,left,right,farRight") {
-            xs = [...STAGE_SAFE_BOUNDS.quartetX];
-        } else if (slotsKey === "farLeft,left,center,right,farRight") {
-            xs = [...STAGE_SAFE_BOUNDS.quintetX];
-        }
+    if (mode === "incremental") {
+        // Phase 1: Zero-displacement placement treating all stationary + pinned actors as hard immovable obstacles.
+        const phase1Fixed = decorated.map(item => item.pinned || item.stationary);
+        const phase1Weights = decorated.map(() => 1);
+        xs = solveWithFixedObstacles(decorated, phase1Fixed, fixedXs, anchors, phase1Weights, maxEdge, true);
     }
 
     if (!xs) {
-        const maxEdge = n >= 5
-            ? STAGE_SAFE_BOUNDS.maxEdge5
-            : n === 4
-                ? STAGE_SAFE_BOUNDS.maxEdge4
-                : STAGE_SAFE_BOUNDS.maxEdge3;
-        const avgScale = ordered.reduce((sum, item) => sum + (item.actor.scale ?? 1), 0) / n;
-        const baseNormalGap = (n >= 5 ? 0.4 : 0.48) * Math.min(1.15, Math.max(0.85, avgScale));
-        const baseHuddleGap = STAGE_SAFE_BOUNDS.huddleGap * Math.min(1.15, Math.max(0.85, avgScale));
-
-        const rawPairGaps: number[] = [];
-        for (let i = 0; i < n - 1; i += 1) {
-            // Only shrink gap to cheek-to-cheek huddleGap when BOTH adjacent actors opt into overlap,
-            // keeping non-overlapping bystanders safely separated from a huddling pair.
-            const pairHuddle = Boolean(ordered[i].actor.allowOverlap && ordered[i + 1].actor.allowOverlap);
-            rawPairGaps.push(pairHuddle ? baseHuddleGap : baseNormalGap);
-        }
-        const totalGap = rawPairGaps.reduce((sum, g) => sum + g, 0);
-        const gapScale = totalGap > 2 * maxEdge ? (2 * maxEdge) / totalGap : 1;
-        const prefixGap: number[] = [0];
-        for (let i = 0; i < rawPairGaps.length; i += 1) {
-            prefixGap.push(prefixGap[i] + rawPairGaps[i] * gapScale);
-        }
-
-        const uMin = -maxEdge;
-        const uMax = maxEdge - prefixGap[n - 1];
-
-        const blocks: Array<{ start: number; count: number; sum: number }> = [];
-        for (let i = 0; i < n; i += 1) {
-            const z = SLOT_X[ordered[i].actor.slot] - prefixGap[i];
-            blocks.push({ start: i, count: 1, sum: z });
-            while (blocks.length >= 2) {
-                const last = blocks[blocks.length - 1];
-                const prev = blocks[blocks.length - 2];
-                if (prev.sum / prev.count <= last.sum / last.count) break;
-                prev.count += last.count;
-                prev.sum += last.sum;
-                blocks.pop();
-            }
-        }
-        xs = new Array<number>(n);
-        for (const block of blocks) {
-            const u = Math.min(uMax, Math.max(uMin, block.sum / block.count));
-            for (let k = 0; k < block.count; k += 1) {
-                const idx = block.start + k;
-                xs[idx] = roundStageX(u + prefixGap[idx]);
-            }
-        }
+        // Phase 2 (or initial mode with pinned actors): weighted 1D constrained projection.
+        // Pinned actors are hard-fixed; stationary actors have high anchor weight (8); dynamic actors have weight (1).
+        const phase2Fixed = decorated.map(item => item.pinned);
+        const phase2Weights = decorated.map(item => (item.stationary ? 8 : 1));
+        xs = solveWithFixedObstacles(decorated, phase2Fixed, fixedXs, anchors, phase2Weights, maxEdge, false)!;
     }
 
     const xByOrigIndex = new Array<number>(n);
     for (let i = 0; i < n; i += 1) {
-        xByOrigIndex[ordered[i].index] = xs[i];
+        xByOrigIndex[decorated[i].index] = xs[i];
     }
     return actors.map((actor, index) => {
         const nextX = xByOrigIndex[index];
@@ -244,14 +522,25 @@ export interface StageOverlapAudit {
 
 /**
  * Checks a set of mounted actors for undeclared overlaps:
- * 1. `duplicateSlots`: two or more actors sharing the same semantic `slot` unless all sharing
- *    actors explicitly declared `allowOverlap: true`.
- * 2. `overlaps`: adjacent actors whose resolved distance `|x_b - x_a|` is smaller than their
+ * 1. `duplicateSlots`: two or more non-explicit-`x` actors sharing the same semantic `slot` unless
+ *    all sharing actors explicitly declared `allowOverlap: true`.
+ * 2. `overlaps`: adjacent actors whose actual resolved distance `|x_b - x_a|` is smaller than their
  *    combined safe visual envelope (`actorHalfWidth * (scale_a + scale_b)`) when neither actor
  *    explicitly declared `allowOverlap: true`.
+ *
+ * Audits actual finite `actor.x` directly without overwriting explicit or incremental positions;
+ * only falls back to `layoutStageActors` if any actor lacks a finite `x`.
  */
 export function detectStageActorOverlaps(
-    actors: readonly { cast: string; slot: StorySlot; x: number; scale?: number; allowOverlap?: boolean }[],
+    actors: readonly {
+        cast: string;
+        slot: StorySlot;
+        x?: number;
+        scale?: number;
+        allowOverlap?: boolean;
+        explicitX?: number;
+        lockX?: boolean;
+    }[],
 ): StageOverlapAudit {
     const duplicateSlots: StageSlotCollision[] = [];
     const overlaps: StageOverlapWarning[] = [];
@@ -259,6 +548,7 @@ export function detectStageActorOverlaps(
 
     const bySlot = new Map<StorySlot, Array<{ cast: string; allowOverlap: boolean }>>();
     for (const actor of actors) {
+        if (actor.explicitX !== undefined && Number.isFinite(actor.explicitX)) continue;
         const entry = { cast: actor.cast, allowOverlap: Boolean(actor.allowOverlap) };
         const list = bySlot.get(actor.slot);
         if (list) list.push(entry);
@@ -270,7 +560,24 @@ export function detectStageActorOverlaps(
         }
     }
 
-    const resolved = layoutStageActors(actors);
+    const allHaveFiniteX = actors.every(
+        actor => (actor.explicitX !== undefined && Number.isFinite(actor.explicitX))
+            || (typeof actor.x === "number" && Number.isFinite(actor.x)),
+    );
+    const resolved = allHaveFiniteX
+        ? actors.map(actor => ({
+            ...actor,
+            x: actor.explicitX !== undefined && Number.isFinite(actor.explicitX)
+                ? roundStageX(actor.explicitX)
+                : roundStageX(actor.x as number),
+        }))
+        : layoutStageActors(
+            actors.map(actor => ({
+                ...actor,
+                x: typeof actor.x === "number" && Number.isFinite(actor.x) ? actor.x : SLOT_X[actor.slot],
+            })),
+        );
+
     const byX = [...resolved].sort((a, b) => a.x - b.x || SLOT_ORDER[a.slot] - SLOT_ORDER[b.slot]);
     for (let i = 0; i < byX.length - 1; i += 1) {
         const left = byX[i];

@@ -1737,12 +1737,118 @@ export function isSafeVoiceManifestUrl(url: string): boolean {
     }
 }
 
+export interface ParseStoryVoiceManifestOptions {
+    allowLocalWorkspaceUrls?: boolean;
+    allowBlobUrls?: boolean;
+}
+
+export interface ResolveVoiceManifestUrlOptions {
+    localWorkspaceBaseUrl?: string | ((relativePath: string) => string | null);
+    allowBlobUrls?: boolean;
+}
+
+const VOICE_URL_SCHEME_PREFIX_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+const DESKTOP_WORKSPACE_ROOT_RE = /^moesekai-app:\/\/(?:app\/)?workspace\/?$/i;
+const DESKTOP_WORKSPACE_REL_RE = /^moesekai-app:\/\/(?:app\/)?workspace\/(.+)$/i;
+
+function hasUnsafePathSegments(pathOnly: string): boolean {
+    if (/[\s\u0000-\u001f\u007f\\]/.test(pathOnly)) return true;
+    const segments = pathOnly.split("/");
+    for (const seg of segments) {
+        if (seg === "..") return true;
+        let decoded = seg;
+        if (seg.includes("%")) {
+            try {
+                decoded = decodeURIComponent(seg);
+            } catch {
+                if (/%2e/i.test(seg) || /%2f/i.test(seg) || /%5c/i.test(seg) || /%00/i.test(seg)) {
+                    return true;
+                }
+                decoded = seg;
+            }
+        }
+        if (
+            decoded === ".."
+            || decoded.includes("/")
+            || decoded.includes("\\")
+            || /[\u0000-\u001f\u007f]/.test(decoded)
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Returns `true` iff `rawPath` is a safe relative local workspace voice path (e.g. `voices/b1.ogg`
+ * or legacy `/voices/b1.ogg`) with no `..` traversal, backslashes, whitespace/control chars,
+ * scheme prefixes, or `//`.
+ */
+export function isSafeLocalWorkspaceVoicePath(rawPath: string): boolean {
+    if (!rawPath || /[\s\u0000-\u001f\u007f\\]/.test(rawPath)) return false;
+    if (rawPath.includes("//") || VOICE_URL_SCHEME_PREFIX_RE.test(rawPath)) return false;
+    const pathOnly = rawPath.split(/[?#]/, 1)[0] ?? "";
+    const stripped = pathOnly.startsWith("/") ? pathOnly.slice(1) : pathOnly;
+    if (!stripped || stripped === "." || stripped === "./") return false;
+    if (VOICE_URL_SCHEME_PREFIX_RE.test(stripped)) return false;
+    if (hasUnsafePathSegments(stripped)) return false;
+    return true;
+}
+
+function extractDesktopWorkspaceRelPath(url: string): string | null {
+    if (!url || /[\s\u0000-\u001f\u007f\\]/.test(url)) return null;
+    const match = DESKTOP_WORKSPACE_REL_RE.exec(url);
+    if (!match) return null;
+    const rel = match[1];
+    if (!rel || rel.startsWith("/") || !isSafeLocalWorkspaceVoicePath(rel)) return null;
+    return rel;
+}
+
+function extractDesktopWorkspaceBaseRelPath(url: string): string | null {
+    if (!url || /[\s\u0000-\u001f\u007f\\?#]/.test(url)) return null;
+    if (DESKTOP_WORKSPACE_ROOT_RE.test(url)) return "";
+    const rel = extractDesktopWorkspaceRelPath(url);
+    if (rel === null) return null;
+    return rel.replace(/\/+$/, "");
+}
+
+function isDesktopWorkspaceBaseUrl(url: string): boolean {
+    return extractDesktopWorkspaceBaseRelPath(url) !== null;
+}
+
+/**
+ * Returns `true` iff `url` is a safe Electron desktop workspace URL
+ * (`moesekai-app://workspace/<safe-rel>` or `moesekai-app://app/workspace/<safe-rel>`)
+ * with no `..`, backslashes, whitespace, or control chars.
+ */
+export function isSafeDesktopWorkspaceUrl(url: string): boolean {
+    return extractDesktopWorkspaceRelPath(url) !== null;
+}
+
+/**
+ * Returns `true` iff `url` is a safe browser `blob:` URL (`parsed.protocol === "blob:"`)
+ * with no whitespace or control characters.
+ */
+export function isSafeVoiceBlobUrl(url: string): boolean {
+    if (!url || /[\s\u0000-\u001f\u007f\\]/.test(url)) return false;
+    try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "blob:") return false;
+        const rest = parsed.pathname;
+        if (!rest || rest === "/") return false;
+        if (/^(?:javascript|data|vbscript):/i.test(rest)) return false;
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 function resolveRelativeAgainstBase(baseUrl: string | undefined, relativePath: string): string | null {
     if (!baseUrl) return null;
     const base = baseUrl.trim();
     const rel = relativePath.trim();
     if (!base || !rel || /[\s\u0000-\u001f\\]/.test(rel)) return null;
-    if (rel.startsWith("//") || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rel)) return null;
+    if (rel.startsWith("//") || VOICE_URL_SCHEME_PREFIX_RE.test(rel)) return null;
     const pathOnly = rel.split(/[?#]/, 1)[0] ?? "";
     if (pathOnly.split("/").some(seg => seg === "..")) return null;
 
@@ -1763,60 +1869,252 @@ function resolveRelativeAgainstBase(baseUrl: string | undefined, relativePath: s
     }
 }
 
+function validateResolvedLocalUrl(candidate: string | null | undefined, allowBlobUrls: boolean): string | null {
+    if (!candidate || typeof candidate !== "string") return null;
+    const trimmed = candidate.trim();
+    if (!trimmed) return null;
+    if (allowBlobUrls && isSafeVoiceBlobUrl(trimmed)) return trimmed;
+    if (isSafeDesktopWorkspaceUrl(trimmed)) return trimmed;
+    if (isSafeVoiceManifestUrl(trimmed)) {
+        if (trimmed.startsWith("/") && !isSafeLocalWorkspaceVoicePath(trimmed)) return null;
+        return trimmed;
+    }
+    return null;
+}
+
+function joinLocalWorkspaceBaseString(baseUrl: string, relativePath: string): string | null {
+    const base = baseUrl.trim();
+    const cleanRel = relativePath.trim().replace(/^\/+/, "");
+    if (!base || !cleanRel || !isSafeLocalWorkspaceVoicePath(cleanRel)) return null;
+
+    if (isDesktopWorkspaceBaseUrl(base)) {
+        const normalizedBase = base.endsWith("/") ? base : `${base}/`;
+        const joined = `${normalizedBase}${cleanRel}`;
+        return isSafeDesktopWorkspaceUrl(joined) ? joined : null;
+    }
+
+    if (isSafeVoiceManifestUrl(base)) {
+        return resolveRelativeAgainstBase(base, cleanRel);
+    }
+
+    return null;
+}
+
+function resolveAgainstLocalWorkspaceBase(
+    localWorkspaceBaseUrl: string | ((relativePath: string) => string | null),
+    relativePath: string,
+    allowBlobUrls: boolean,
+): string | null {
+    const cleanRel = relativePath.trim().replace(/^\/+/, "");
+    if (!cleanRel || !isSafeLocalWorkspaceVoicePath(cleanRel)) return null;
+    if (typeof localWorkspaceBaseUrl === "function") {
+        const resolved = localWorkspaceBaseUrl(cleanRel);
+        return validateResolvedLocalUrl(resolved, allowBlobUrls);
+    }
+    return joinLocalWorkspaceBaseString(localWorkspaceBaseUrl, cleanRel);
+}
+
+function resolveRelativePathWithOptionalLocalBase(
+    relativePath: string,
+    manifestBaseUrl: string | undefined,
+    localWorkspaceBaseUrl: string | ((relativePath: string) => string | null) | undefined,
+    allowBlobUrls: boolean,
+): string | null {
+    const trimmedRel = relativePath.trim();
+    if (!trimmedRel) return null;
+    const base = manifestBaseUrl?.trim() ?? "";
+
+    if (base) {
+        if (!base.startsWith("/") && isSafeVoiceManifestUrl(base)) {
+            return resolveRelativeAgainstBase(base, trimmedRel);
+        }
+        if (base.startsWith("/") && isSafeVoiceManifestUrl(base)) {
+            const joined = resolveRelativeAgainstBase(base, trimmedRel);
+            if (!joined) return null;
+            if (localWorkspaceBaseUrl) {
+                if (!isSafeLocalWorkspaceVoicePath(joined)) return null;
+                return resolveAgainstLocalWorkspaceBase(localWorkspaceBaseUrl, joined.slice(1), allowBlobUrls);
+            }
+            return joined;
+        }
+        if (localWorkspaceBaseUrl && isSafeLocalWorkspaceVoicePath(trimmedRel)) {
+            const cleanRel = trimmedRel.replace(/^\/+/, "");
+            const desktopBaseRel = extractDesktopWorkspaceBaseRelPath(base);
+            if (desktopBaseRel !== null) {
+                const combinedRel = desktopBaseRel ? `${desktopBaseRel}/${cleanRel}` : cleanRel;
+                if (!isSafeLocalWorkspaceVoicePath(combinedRel)) return null;
+                if (typeof localWorkspaceBaseUrl === "function") {
+                    const mapped = localWorkspaceBaseUrl(combinedRel);
+                    if (mapped === null) {
+                        const normalizedBase = base.endsWith("/") ? base : `${base}/`;
+                        const direct = `${normalizedBase}${cleanRel}`;
+                        return isSafeDesktopWorkspaceUrl(direct) ? direct : null;
+                    }
+                    return validateResolvedLocalUrl(mapped, allowBlobUrls);
+                }
+                return joinLocalWorkspaceBaseString(localWorkspaceBaseUrl, combinedRel);
+            }
+            if (isSafeLocalWorkspaceVoicePath(base)) {
+                const cleanBase = base.replace(/^\/+|\/+$/g, "");
+                const combinedRel = cleanBase ? `${cleanBase}/${cleanRel}` : cleanRel;
+                if (!isSafeLocalWorkspaceVoicePath(combinedRel)) return null;
+                return resolveAgainstLocalWorkspaceBase(localWorkspaceBaseUrl, combinedRel, allowBlobUrls);
+            }
+        }
+        return null;
+    }
+
+    if (localWorkspaceBaseUrl && isSafeLocalWorkspaceVoicePath(trimmedRel)) {
+        return resolveAgainstLocalWorkspaceBase(localWorkspaceBaseUrl, trimmedRel, allowBlobUrls);
+    }
+
+    return null;
+}
+
 function resolveLineUrlCandidates(
     rawUrl: string | undefined,
     rawObjectKey: string | undefined,
     baseUrl: string | undefined,
+    options?: ResolveVoiceManifestUrlOptions,
 ): string[] {
+    const allowBlobUrls = Boolean(options?.allowBlobUrls);
+    const localBase = typeof options?.localWorkspaceBaseUrl === "string"
+        ? (options.localWorkspaceBaseUrl.trim() || undefined)
+        : options?.localWorkspaceBaseUrl;
+
     const urls: string[] = [];
     const push = (candidate: string | null | undefined) => {
         if (!candidate) return;
         const trimmed = candidate.trim();
-        if (isSafeVoiceManifestUrl(trimmed) && !urls.includes(trimmed)) {
+        if (trimmed && !urls.includes(trimmed)) {
             urls.push(trimmed);
         }
     };
 
     const trimmedUrl = rawUrl?.trim() ?? "";
     if (trimmedUrl) {
-        if (isSafeVoiceManifestUrl(trimmedUrl)) {
+        if (allowBlobUrls && isSafeVoiceBlobUrl(trimmedUrl)) {
             push(trimmedUrl);
+        } else if (!trimmedUrl.startsWith("/") && isSafeVoiceManifestUrl(trimmedUrl)) {
+            push(trimmedUrl);
+        } else if (/^moesekai-app:/i.test(trimmedUrl)) {
+            if (localBase) {
+                const desktopRel = extractDesktopWorkspaceRelPath(trimmedUrl);
+                if (desktopRel) {
+                    if (typeof localBase === "function") {
+                        const mapped = localBase(desktopRel);
+                        if (mapped === null) {
+                            push(trimmedUrl);
+                        } else {
+                            push(validateResolvedLocalUrl(mapped, allowBlobUrls));
+                        }
+                    } else {
+                        push(joinLocalWorkspaceBaseString(localBase, desktopRel));
+                    }
+                }
+            }
+        } else if (trimmedUrl.startsWith("/")) {
+            if (localBase) {
+                if (isSafeLocalWorkspaceVoicePath(trimmedUrl)) {
+                    push(resolveAgainstLocalWorkspaceBase(localBase, trimmedUrl.slice(1), allowBlobUrls));
+                }
+            } else if (isSafeVoiceManifestUrl(trimmedUrl)) {
+                push(trimmedUrl);
+            }
         } else {
-            push(resolveRelativeAgainstBase(baseUrl, trimmedUrl));
+            push(resolveRelativePathWithOptionalLocalBase(trimmedUrl, baseUrl, localBase, allowBlobUrls));
         }
     }
+
     const trimmedKey = rawObjectKey?.trim() ?? "";
     if (trimmedKey) {
-        push(resolveRelativeAgainstBase(baseUrl, trimmedKey));
+        push(resolveRelativePathWithOptionalLocalBase(trimmedKey, baseUrl, localBase, allowBlobUrls));
     }
+
     return urls;
 }
 
 /**
- * Resolves playable HTTPS / same-origin audio URL candidates for `beatId` from a mounted
- * `StoryVoiceManifest`. Supports absolute `line.url`, relative `line.url` against `manifest.baseUrl`,
- * and `${manifest.baseUrl}/${line.objectKey}`.
+ * Resolves playable audio URL candidates for `beatId` from a mounted `StoryVoiceManifest`.
+ * Default (`options` omitted): strictly public `https://` and same-origin `/...` URLs.
+ * Opt-in `options.localWorkspaceBaseUrl` resolves workspace-relative paths (`voices/b1.ogg`,
+ * legacy `/voices/b1.ogg`) and normalizes `moesekai-app://(app/)?workspace/...` URLs.
+ * Opt-in `options.allowBlobUrls` passes through safe `blob:` preview URLs.
  */
 export function resolveVoiceManifestLineUrl(
     manifest: StoryVoiceManifest | null | undefined,
     beatId: string | undefined,
+    options?: ResolveVoiceManifestUrlOptions,
 ): string[] {
     if (!manifest || !beatId) return [];
     const line = manifest.lines[beatId];
     if (!line) return [];
-    return resolveLineUrlCandidates(line.url, line.objectKey, manifest.baseUrl);
+    return resolveLineUrlCandidates(line.url, line.objectKey, manifest.baseUrl, options);
+}
+
+function isValidManifestLineUrlForParse(
+    rawUrl: string,
+    baseUrl: string | undefined,
+    allowLocalWorkspaceUrls: boolean,
+    allowBlobUrls: boolean,
+): boolean {
+    if (!rawUrl) return false;
+    if (allowBlobUrls && isSafeVoiceBlobUrl(rawUrl)) return true;
+    if (allowLocalWorkspaceUrls) {
+        if (isSafeDesktopWorkspaceUrl(rawUrl)) return true;
+        if (rawUrl.startsWith("/")) {
+            return isSafeLocalWorkspaceVoicePath(rawUrl);
+        }
+        if (isSafeVoiceManifestUrl(rawUrl)) return true;
+        if (isSafeLocalWorkspaceVoicePath(rawUrl)) return true;
+        if (baseUrl && resolveRelativeAgainstBase(baseUrl, rawUrl)) return true;
+        return false;
+    }
+    if (isSafeVoiceManifestUrl(rawUrl)) return true;
+    if (baseUrl && resolveRelativeAgainstBase(baseUrl, rawUrl)) return true;
+    return false;
+}
+
+function resolveParsedFallbackUrlFromObjectKey(
+    objectKey: string,
+    baseUrl: string | undefined,
+    allowLocalWorkspaceUrls: boolean,
+): string | null {
+    if (!objectKey) return null;
+    if (baseUrl) {
+        const httpsOrSameOrigin = resolveRelativeAgainstBase(baseUrl, objectKey);
+        if (httpsOrSameOrigin) return httpsOrSameOrigin;
+        if (allowLocalWorkspaceUrls && isSafeLocalWorkspaceVoicePath(objectKey)) {
+            if (isDesktopWorkspaceBaseUrl(baseUrl) || isSafeLocalWorkspaceVoicePath(baseUrl)) {
+                return objectKey;
+            }
+        }
+        return null;
+    }
+    if (allowLocalWorkspaceUrls && isSafeLocalWorkspaceVoicePath(objectKey)) {
+        return objectKey;
+    }
+    return null;
 }
 
 /**
- * Strictly validates an untrusted custom voice track manifest (`moesekai-story-voice/1`).
- * Requires only `schema`, `storyId`, and `lines` (with playable safe HTTPS / relative audio URLs);
- * `locale`, `title`, `baseUrl`, `storyRev`, `generatedAt`, and per-line metadata are optional.
+ * Strictly validates a custom voice track manifest (`moesekai-story-voice/1`).
+ * Default (`options` omitted): strictly public `https://` and same-origin `/...` audio URLs.
+ * Optional `options.allowLocalWorkspaceUrls` permits safe workspace-relative paths (`voices/...`),
+ * `/voices/...`, and `moesekai-app://(app/)?workspace/...` URLs.
+ * Optional `options.allowBlobUrls` permits safe `blob:` URLs in `line.url`.
  */
-export function parseStoryVoiceManifest(raw: unknown): StoryVoiceManifest | null {
+export function parseStoryVoiceManifest(
+    raw: unknown,
+    options?: ParseStoryVoiceManifestOptions,
+): StoryVoiceManifest | null {
     if (!isPlainObject(raw)) return null;
     if (raw.schema !== STORY_VOICE_MANIFEST_SCHEMA_VERSION) return null;
     if (typeof raw.storyId !== "string" || !raw.storyId.trim()) return null;
     if (!isPlainObject(raw.lines)) return null;
+
+    const allowLocalWorkspaceUrls = Boolean(options?.allowLocalWorkspaceUrls);
+    const allowBlobUrls = Boolean(options?.allowBlobUrls);
 
     let locale: UiLocale | undefined;
     if (raw.locale !== undefined && raw.locale !== null && raw.locale !== "") {
@@ -1825,11 +2123,18 @@ export function parseStoryVoiceManifest(raw: unknown): StoryVoiceManifest | null
     }
 
     const baseUrlRaw = typeof raw.baseUrl === "string" ? raw.baseUrl.trim() : "";
-    if (baseUrlRaw && !isSafeVoiceManifestUrl(baseUrlRaw)) return null;
+    if (baseUrlRaw) {
+        const baseValid = isSafeVoiceManifestUrl(baseUrlRaw)
+            || (allowLocalWorkspaceUrls && (isDesktopWorkspaceBaseUrl(baseUrlRaw) || isSafeLocalWorkspaceVoicePath(baseUrlRaw)));
+        if (!baseValid) return null;
+    }
     const baseUrl = baseUrlRaw || undefined;
 
     const title = typeof raw.title === "string" && raw.title.trim()
         ? raw.title.trim().slice(0, 160)
+        : undefined;
+    const overrideOfficialVoice = typeof raw.overrideOfficialVoice === "boolean"
+        ? raw.overrideOfficialVoice
         : undefined;
     const storyRev = typeof raw.storyRev === "number" && Number.isFinite(raw.storyRev) && raw.storyRev >= 0
         ? Math.trunc(raw.storyRev)
@@ -1844,8 +2149,9 @@ export function parseStoryVoiceManifest(raw: unknown): StoryVoiceManifest | null
         if (FORBIDDEN_KEYS.has(beatId) || !STORY_VOICE_MANIFEST_BEAT_ID_PATTERN.test(beatId) || !isPlainObject(item)) continue;
         const url = typeof item.url === "string" ? item.url.trim() : "";
         const objectKey = typeof item.objectKey === "string" ? item.objectKey.trim() : "";
-        const resolvedUrls = resolveLineUrlCandidates(url, objectKey, baseUrl);
-        if (resolvedUrls.length === 0) continue;
+        const urlValid = isValidManifestLineUrlForParse(url, baseUrl, allowLocalWorkspaceUrls, allowBlobUrls);
+        const fallbackFromKey = resolveParsedFallbackUrlFromObjectKey(objectKey, baseUrl, allowLocalWorkspaceUrls);
+        if (!urlValid && !fallbackFromKey) continue;
 
         let lineLocale: UiLocale | undefined;
         if (item.locale !== undefined && item.locale !== null && item.locale !== "") {
@@ -1867,13 +2173,14 @@ export function parseStoryVoiceManifest(raw: unknown): StoryVoiceManifest | null
         const sizeBytes = typeof item.sizeBytes === "number" && Number.isFinite(item.sizeBytes) && item.sizeBytes >= 0
             ? item.sizeBytes
             : undefined;
+        const safeObjectKey = objectKey && isSafeLocalWorkspaceVoicePath(objectKey) ? objectKey : undefined;
 
         lines[beatId] = {
-            url: url || resolvedUrls[0],
+            url: urlValid ? url : fallbackFromKey!,
             ...(durationMs !== undefined ? { durationMs } : {}),
             ...(lineLocale !== undefined ? { locale: lineLocale } : {}),
             ...(speaker !== undefined ? { speaker } : {}),
-            ...(objectKey ? { objectKey } : {}),
+            ...(safeObjectKey ? { objectKey: safeObjectKey } : {}),
             ...(audioHash !== undefined ? { audioHash } : {}),
             ...(codec !== undefined ? { codec } : {}),
             ...(sizeBytes !== undefined ? { sizeBytes } : {}),
@@ -1891,6 +2198,7 @@ export function parseStoryVoiceManifest(raw: unknown): StoryVoiceManifest | null
         ...(locale !== undefined ? { locale } : {}),
         ...(title !== undefined ? { title } : {}),
         ...(baseUrl !== undefined ? { baseUrl } : {}),
+        ...(overrideOfficialVoice !== undefined ? { overrideOfficialVoice } : {}),
         ...(storyRev !== undefined ? { storyRev } : {}),
         ...(generatedAt !== undefined ? { generatedAt } : {}),
         lines,

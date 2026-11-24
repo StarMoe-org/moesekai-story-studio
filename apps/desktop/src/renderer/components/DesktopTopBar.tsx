@@ -641,7 +641,7 @@ export const DesktopEditorTopBar: React.FC<DesktopEditorTopBarProps> = ({
                             size="xs"
                             icon={mdRecordVoiceOver}
                             label={t("voiceTooltip")}
-                            onClick={() => ctx.openVoiceManifestDialog("import")}
+                            onClick={() => ctx.openVoiceManifestDialog()}
                         />
                     </Tooltip>
                 </div>

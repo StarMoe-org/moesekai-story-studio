@@ -276,6 +276,53 @@ export interface DesktopMessageTable {
     noticePrivacyBody: string;
     noticeDisclaimerTitle: string;
     noticeDisclaimerBody: string;
+    // Desktop Local Voice Manager Panel
+    voiceManagerTabLabel: string;
+    voiceManagerSubtitle: string;
+    voiceManagerLocaleLabel: string;
+    voiceManagerOverrideLabel: string;
+    voiceManagerOverrideDesc: string;
+    voiceManagerCueSheetTitle: string;
+    voiceManagerCueSheetHint: string;
+    voiceManagerExportCsv: string;
+    voiceManagerExportTxt: string;
+    voiceManagerExportJson: string;
+    voiceManagerOpenFolder: string;
+    voiceManagerRescanFolder: string;
+    voiceManagerDropTitle: string;
+    voiceManagerDropSubtitle: string;
+    voiceManagerPickFiles: string;
+    voiceManagerPickFolder: string;
+    voiceManagerProgressSummary: string;
+    voiceManagerClearAll: string;
+    voiceManagerUnmatchedTitle: string;
+    voiceManagerUnmatchedDesc: string;
+    voiceManagerBindBeatPlaceholder: string;
+    voiceManagerBindAction: string;
+    voiceManagerSearchPlaceholder: string;
+    voiceManagerFilterAll: string;
+    voiceManagerFilterUnassigned: string;
+    voiceManagerFilterAssigned: string;
+    voiceManagerNoTalkBeats: string;
+    voiceManagerNoFilterMatches: string;
+    voiceManagerOfficialVoiceBadge: string;
+    voiceManagerPickBeatAudio: string;
+    voiceManagerReplaceAudio: string;
+    voiceManagerRemoveAudio: string;
+    voiceManagerPreviewPlay: string;
+    voiceManagerPreviewStop: string;
+    voiceManagerNarratorFallback: string;
+    voiceManagerMatchedToast: string;
+    voiceManagerMatchedWithUnmatchedToast: string;
+    voiceManagerUnmatchedOnlyToast: string;
+    voiceManagerUnsupportedSkippedToast: string;
+    voiceManagerBoundBeatToast: string;
+    voiceManagerRemovedBeatToast: string;
+    voiceManagerClearedToast: string;
+    voiceManagerRescanEmptyToast: string;
+    voiceManagerRescanResultToast: string;
+    voiceManagerCueSheetExportedToast: string;
+    voiceManagerPreviewErrorToast: string;
 }
 
 export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
@@ -550,6 +597,52 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         noticePrivacyBody: "您的剧情工程、对话历史与资源缓存均仅存储于本机磁盘；API Key 通过系统级加密存储，并直接连接至您自行选择的模型服务商，不经过 MoeSekai 服务器中转或留存。使用 AI 辅助生成的剧本文本以及您自行导入的音频素材，其合法合规性与版权责任由创作者本人审核并承担。",
         noticeDisclaimerTitle: "无担保免责声明（AS-IS）",
         noticeDisclaimerBody: "本软件按「现状（AS-IS）」提供，不附带任何明示或默示的适销性、特定用途适用性或不侵权担保。请妥善保管并定期备份您的重要 .msk 剧情工程文件。",
+        voiceManagerTabLabel: "本地配音",
+        voiceManagerSubtitle: "将配音音频导入项目 voices/ 目录并按台词 ID 自动匹配，立即在试播与剧场生效。",
+        voiceManagerLocaleLabel: "配音语言",
+        voiceManagerOverrideLabel: "覆盖已有官方语音",
+        voiceManagerOverrideDesc: "开启后，已绑定的自定义配音将优先于官方预设语音播放。",
+        voiceManagerCueSheetTitle: "台词编号表",
+        voiceManagerCueSheetHint: "音频文件按 <beatId>.ogg / .mp3 / .wav 命名即可自动匹配。",
+        voiceManagerExportCsv: "导出 CSV",
+        voiceManagerExportTxt: "导出 TXT",
+        voiceManagerExportJson: "导出 JSON",
+        voiceManagerOpenFolder: "打开 voices 文件夹",
+        voiceManagerRescanFolder: "从 voices/ 目录重新扫描匹配",
+        voiceManagerDropTitle: "拖拽音频文件到此处，自动按台词 ID 匹配",
+        voiceManagerDropSubtitle: "支持 {formats} · 单文件最大 50 MiB，自动复制到项目 voices/ 目录",
+        voiceManagerPickFiles: "选择音频文件",
+        voiceManagerPickFolder: "选择配音文件夹",
+        voiceManagerProgressSummary: "已匹配 {matched} / {total} 句台词",
+        voiceManagerClearAll: "清空配音",
+        voiceManagerUnmatchedTitle: "待手动绑定 ({count})",
+        voiceManagerUnmatchedDesc: "以下文件名未直接匹配台词 ID，可试听后选择对应台词进行绑定。",
+        voiceManagerBindBeatPlaceholder: "选择目标台词…",
+        voiceManagerBindAction: "绑定",
+        voiceManagerSearchPlaceholder: "搜索台词 ID、角色或内容…",
+        voiceManagerFilterAll: "全部 ({count})",
+        voiceManagerFilterUnassigned: "未配音 ({count})",
+        voiceManagerFilterAssigned: "已配音 ({count})",
+        voiceManagerNoTalkBeats: "当前剧本尚无对话台词，请先在场景中添加对话。",
+        voiceManagerNoFilterMatches: "没有符合筛选条件的台词。",
+        voiceManagerOfficialVoiceBadge: "含官方语音",
+        voiceManagerPickBeatAudio: "选音频",
+        voiceManagerReplaceAudio: "替换",
+        voiceManagerRemoveAudio: "移除",
+        voiceManagerPreviewPlay: "试听",
+        voiceManagerPreviewStop: "停止",
+        voiceManagerNarratorFallback: "旁白",
+        voiceManagerMatchedToast: "已自动匹配 {matched} 条配音",
+        voiceManagerMatchedWithUnmatchedToast: "已匹配 {matched} 条，另有 {unmatched} 个文件待手动绑定",
+        voiceManagerUnmatchedOnlyToast: "已导入 {count} 个文件，请在下方手动绑定到台词",
+        voiceManagerUnsupportedSkippedToast: "已跳过 {count} 个不支持或超大的文件",
+        voiceManagerBoundBeatToast: "已为 {beatId} 绑定配音",
+        voiceManagerRemovedBeatToast: "已移除 {beatId} 的配音",
+        voiceManagerClearedToast: "已清空本地配音清单",
+        voiceManagerRescanEmptyToast: "voices/ 目录中未发现可匹配的音频文件",
+        voiceManagerRescanResultToast: "已从 voices/ 匹配 {matched} 条配音",
+        voiceManagerCueSheetExportedToast: "已导出 {format} 台词编号表",
+        voiceManagerPreviewErrorToast: "无法播放音频预览，请检查文件是否完整",
     },
     "zh-TW": {
         appName: "MoeSekai Story Studio",
@@ -822,6 +915,52 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         noticePrivacyBody: "您的劇情工程、對話紀錄與資源快取皆僅儲存於本機磁碟；API Key 經由系統級加密儲存，並直接連線至您自行選擇的模型服務商，不經 MoeSekai 伺服器中轉或留存。使用 AI 輔助生成的劇本文本以及您自行匯入的音訊素材，其合規性與版權責任由創作者自行審核並承擔。",
         noticeDisclaimerTitle: "無擔保免責聲明（AS-IS）",
         noticeDisclaimerBody: "本軟體依「現狀（AS-IS）」提供，不附帶任何明示或默示之適售性、特定用途適用性或不侵權擔保。請妥善保管並定期備份您的重要 .msk 劇情工程檔案。",
+        voiceManagerTabLabel: "本機語音",
+        voiceManagerSubtitle: "將語音音訊匯入專案 voices/ 目錄並依台詞 ID 自動配對，立即於試播與劇場生效。",
+        voiceManagerLocaleLabel: "語音語言",
+        voiceManagerOverrideLabel: "覆蓋既有官方語音",
+        voiceManagerOverrideDesc: "開啟後，已綁定的自訂語音將優先於官方預設語音播放。",
+        voiceManagerCueSheetTitle: "台詞編號表",
+        voiceManagerCueSheetHint: "音訊檔案依 <beatId>.ogg / .mp3 / .wav 命名即可自動配對。",
+        voiceManagerExportCsv: "匯出 CSV",
+        voiceManagerExportTxt: "匯出 TXT",
+        voiceManagerExportJson: "匯出 JSON",
+        voiceManagerOpenFolder: "開啟 voices 資料夾",
+        voiceManagerRescanFolder: "從 voices/ 目錄重新掃描配對",
+        voiceManagerDropTitle: "拖曳音訊檔案至此，自動依台詞 ID 配對",
+        voiceManagerDropSubtitle: "支援 {formats} · 單檔最大 50 MiB，自動複製至專案 voices/ 目錄",
+        voiceManagerPickFiles: "選擇音訊檔案",
+        voiceManagerPickFolder: "選擇語音資料夾",
+        voiceManagerProgressSummary: "已配對 {matched} / {total} 句台詞",
+        voiceManagerClearAll: "清空語音",
+        voiceManagerUnmatchedTitle: "待手動綁定 ({count})",
+        voiceManagerUnmatchedDesc: "以下檔名未直接符合台詞 ID，可試聽後選擇對應台詞進行綁定。",
+        voiceManagerBindBeatPlaceholder: "選擇目標台詞…",
+        voiceManagerBindAction: "綁定",
+        voiceManagerSearchPlaceholder: "搜尋台詞 ID、角色或內容…",
+        voiceManagerFilterAll: "全部 ({count})",
+        voiceManagerFilterUnassigned: "未配音 ({count})",
+        voiceManagerFilterAssigned: "已配音 ({count})",
+        voiceManagerNoTalkBeats: "目前劇本尚無對話台詞，請先在場景中新增對話。",
+        voiceManagerNoFilterMatches: "沒有符合篩選條件的台詞。",
+        voiceManagerOfficialVoiceBadge: "含官方語音",
+        voiceManagerPickBeatAudio: "選音訊",
+        voiceManagerReplaceAudio: "取代",
+        voiceManagerRemoveAudio: "移除",
+        voiceManagerPreviewPlay: "試聽",
+        voiceManagerPreviewStop: "停止",
+        voiceManagerNarratorFallback: "旁白",
+        voiceManagerMatchedToast: "已自動配對 {matched} 條語音",
+        voiceManagerMatchedWithUnmatchedToast: "已配對 {matched} 條，另有 {unmatched} 個檔案待手動綁定",
+        voiceManagerUnmatchedOnlyToast: "已匯入 {count} 個檔案，請於下方手動綁定至台詞",
+        voiceManagerUnsupportedSkippedToast: "已略過 {count} 個不支援或過大的檔案",
+        voiceManagerBoundBeatToast: "已為 {beatId} 綁定語音",
+        voiceManagerRemovedBeatToast: "已移除 {beatId} 的語音",
+        voiceManagerClearedToast: "已清空本機語音清單",
+        voiceManagerRescanEmptyToast: "voices/ 目錄中未發現可配對的音訊檔案",
+        voiceManagerRescanResultToast: "已從 voices/ 配對 {matched} 條語音",
+        voiceManagerCueSheetExportedToast: "已匯出 {format} 台詞編號表",
+        voiceManagerPreviewErrorToast: "無法播放音訊預覽，請檢查檔案是否完整",
     },
     "en-US": {
         appName: "MoeSekai Story Studio",
@@ -1094,6 +1233,52 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         noticePrivacyBody: "Your story projects, conversation histories, and asset caches are stored strictly on your local machine. API keys are encrypted with OS-level credential storage and sent directly to your chosen model provider—never relayed or retained by MoeSekai. Creators remain solely responsible for reviewing AI-assisted text and ensuring rights for any custom audio imported.",
         noticeDisclaimerTitle: "Disclaimer of Warranty (AS-IS)",
         noticeDisclaimerBody: "This software is provided \"AS IS\", without warranty of any kind, express or implied. Please maintain regular backups of your important .msk story projects.",
+        voiceManagerTabLabel: "Local Voices",
+        voiceManagerSubtitle: "Import audio clips into your project's voices/ folder and auto-match them by beat ID for instant playtest and theater playback.",
+        voiceManagerLocaleLabel: "Voice Language",
+        voiceManagerOverrideLabel: "Override official voice lines",
+        voiceManagerOverrideDesc: "When enabled, assigned custom audio plays instead of official beat voices.",
+        voiceManagerCueSheetTitle: "Dialogue Cue Sheet",
+        voiceManagerCueSheetHint: "Name audio files <beatId>.ogg / .mp3 / .wav for automatic matching.",
+        voiceManagerExportCsv: "Export CSV",
+        voiceManagerExportTxt: "Export TXT",
+        voiceManagerExportJson: "Export JSON",
+        voiceManagerOpenFolder: "Open voices folder",
+        voiceManagerRescanFolder: "Rescan voices/ folder",
+        voiceManagerDropTitle: "Drop audio files here to auto-match by beat ID",
+        voiceManagerDropSubtitle: "Supports {formats} · up to 50 MiB per file, copied into voices/",
+        voiceManagerPickFiles: "Select Audio Files",
+        voiceManagerPickFolder: "Select Voice Folder",
+        voiceManagerProgressSummary: "Matched {matched} / {total} lines",
+        voiceManagerClearAll: "Clear All",
+        voiceManagerUnmatchedTitle: "Unmatched Files ({count})",
+        voiceManagerUnmatchedDesc: "These filenames didn't match a beat ID automatically. Preview and bind each file below.",
+        voiceManagerBindBeatPlaceholder: "Choose target beat…",
+        voiceManagerBindAction: "Bind",
+        voiceManagerSearchPlaceholder: "Search beat ID, speaker, or text…",
+        voiceManagerFilterAll: "All ({count})",
+        voiceManagerFilterUnassigned: "Unassigned ({count})",
+        voiceManagerFilterAssigned: "Assigned ({count})",
+        voiceManagerNoTalkBeats: "No dialogue beats found in this story yet. Add talk beats in a scene first.",
+        voiceManagerNoFilterMatches: "No dialogue beats match the current filter.",
+        voiceManagerOfficialVoiceBadge: "Official Voice",
+        voiceManagerPickBeatAudio: "Pick Audio",
+        voiceManagerReplaceAudio: "Replace",
+        voiceManagerRemoveAudio: "Remove",
+        voiceManagerPreviewPlay: "Preview",
+        voiceManagerPreviewStop: "Stop",
+        voiceManagerNarratorFallback: "Narration",
+        voiceManagerMatchedToast: "Auto-matched {matched} voice line(s)",
+        voiceManagerMatchedWithUnmatchedToast: "Matched {matched} line(s); {unmatched} file(s) need manual binding",
+        voiceManagerUnmatchedOnlyToast: "Imported {count} file(s) — bind them to beats below",
+        voiceManagerUnsupportedSkippedToast: "Skipped {count} unsupported or oversized file(s)",
+        voiceManagerBoundBeatToast: "Bound audio to {beatId}",
+        voiceManagerRemovedBeatToast: "Removed custom voice for {beatId}",
+        voiceManagerClearedToast: "Cleared local voice manifest",
+        voiceManagerRescanEmptyToast: "No matching audio files found in voices/",
+        voiceManagerRescanResultToast: "Matched {matched} voice line(s) from voices/",
+        voiceManagerCueSheetExportedToast: "Exported {format} cue sheet",
+        voiceManagerPreviewErrorToast: "Unable to play audio preview; check the file format",
     },
     "ja-JP": {
         appName: "MoeSekai Story Studio",
@@ -1366,6 +1551,52 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         noticePrivacyBody: "プロジェクト、会話履歴、キャッシュはすべてお使いの端末内にのみ保存されます。API キーは OS の暗号化機能で保護され、選択したモデル提供元へ直接送信されます（MoeSekai サーバーを経由・保存しません）。AI 支援によるテキストやカスタム音声の適法性・権利確認は利用者ご自身の責任で行ってください。",
         noticeDisclaimerTitle: "無保証・免責事項（AS-IS）",
         noticeDisclaimerBody: "本ソフトウェアは「現状有姿（AS-IS）」で提供され、明示・黙示を問わず一切の保証を行いません。大切な .msk プロジェクトファイルは定期的にバックアップを行ってください。",
+        voiceManagerTabLabel: "ローカル音声",
+        voiceManagerSubtitle: "音声ファイルをプロジェクトの voices/ フォルダに取り込み、セリフ ID ごとに自動割り当てして試聴・シアター再生に即座に反映します。",
+        voiceManagerLocaleLabel: "音声言語",
+        voiceManagerOverrideLabel: "公式ボイスを上書き",
+        voiceManagerOverrideDesc: "オンにすると、割り当て済みのカスタム音声を公式ボイスより優先して再生します。",
+        voiceManagerCueSheetTitle: "セリフ ID 台本",
+        voiceManagerCueSheetHint: "<beatId>.ogg / .mp3 / .wav の形式で命名すると自動で紐付きます。",
+        voiceManagerExportCsv: "CSV 出力",
+        voiceManagerExportTxt: "TXT 出力",
+        voiceManagerExportJson: "JSON 出力",
+        voiceManagerOpenFolder: "voices フォルダを開く",
+        voiceManagerRescanFolder: "voices/ を再スキャン",
+        voiceManagerDropTitle: "ここに音声ファイルをドロップして自動割り当て",
+        voiceManagerDropSubtitle: "対応形式: {formats} · 1ファイル最大 50 MiB（voices/ へコピー）",
+        voiceManagerPickFiles: "音声ファイルを選択",
+        voiceManagerPickFolder: "音声フォルダを選択",
+        voiceManagerProgressSummary: "割当済み {matched} / {total} セリフ",
+        voiceManagerClearAll: "すべて解除",
+        voiceManagerUnmatchedTitle: "手動割当待ち ({count})",
+        voiceManagerUnmatchedDesc: "ファイル名がセリフ ID と一致しなかった音声です。試聴して対象のセリフを選んでください。",
+        voiceManagerBindBeatPlaceholder: "割当先セリフを選択…",
+        voiceManagerBindAction: "割当",
+        voiceManagerSearchPlaceholder: "ID・話者・セリフを検索…",
+        voiceManagerFilterAll: "すべて ({count})",
+        voiceManagerFilterUnassigned: "未割当 ({count})",
+        voiceManagerFilterAssigned: "割当済み ({count})",
+        voiceManagerNoTalkBeats: "このストーリーにはまだセリフ（talk ビート）がありません。",
+        voiceManagerNoFilterMatches: "条件に一致するセリフがありません。",
+        voiceManagerOfficialVoiceBadge: "公式ボイスあり",
+        voiceManagerPickBeatAudio: "音声を選択",
+        voiceManagerReplaceAudio: "変更",
+        voiceManagerRemoveAudio: "削除",
+        voiceManagerPreviewPlay: "試聴",
+        voiceManagerPreviewStop: "停止",
+        voiceManagerNarratorFallback: "ナレーション",
+        voiceManagerMatchedToast: "{matched} 件の音声を自動割り当てしました",
+        voiceManagerMatchedWithUnmatchedToast: "{matched} 件を自動割り当て、{unmatched} 件が手動割当待ちです",
+        voiceManagerUnmatchedOnlyToast: "{count} 件を取り込みました。下でセリフに割り当ててください",
+        voiceManagerUnsupportedSkippedToast: "非対応またはサイズ超過のファイル {count} 件をスキップしました",
+        voiceManagerBoundBeatToast: "{beatId} に音声を割り当てました",
+        voiceManagerRemovedBeatToast: "{beatId} のカスタム音声を解除しました",
+        voiceManagerClearedToast: "ローカル音声マニフェストをクリアしました",
+        voiceManagerRescanEmptyToast: "voices/ フォルダに一致する音声ファイルが見つかりませんでした",
+        voiceManagerRescanResultToast: "voices/ から {matched} 件の音声を紐付けました",
+        voiceManagerCueSheetExportedToast: "{format} 台本をエクスポートしました",
+        voiceManagerPreviewErrorToast: "音声プレビューを再生できませんでした",
     },
     "ko-KR": {
         appName: "MoeSekai Story Studio",
@@ -1638,6 +1869,52 @@ export const DESKTOP_MESSAGES: Record<DesktopUiLocale, DesktopMessageTable> = {
         noticePrivacyBody: "프로젝트, 대화 기록 및 리소스 캐시는 모두 로컬 기기에만 저장됩니다. API 키는 OS 수준 암호화로 보호되며 선택한 모델 제공업체로 직접 연결되고 MoeSekai 서버를 거치거나 저장되지 않습니다. AI 보조 텍스트와 직접 가져온 사용자 오디오의 적법성 및 저작권 확인 책임은 창작자에게 있습니다.",
         noticeDisclaimerTitle: "무보증 면책 조항 (AS-IS)",
         noticeDisclaimerBody: "본 소프트웨어는 어떠한 명시적·묵시적 보증 없이 \"있는 그대로(AS-IS)\" 제공됩니다. 중요한 .msk 스토리 프로젝트 파일은 정기적으로 백업해 주세요.",
+        voiceManagerTabLabel: "로컬 음성",
+        voiceManagerSubtitle: "오디오 파일을 프로젝트 voices/ 폴더로 가져와 대사 ID별로 자동 매칭하고 미리보기 및 극장 모드에서 바로 재생합니다.",
+        voiceManagerLocaleLabel: "음성 언어",
+        voiceManagerOverrideLabel: "기존 공식 음성 덮어쓰기",
+        voiceManagerOverrideDesc: "켜면 연결된 커스텀 음성이 공식 기본 음성보다 우선 재생됩니다.",
+        voiceManagerCueSheetTitle: "대사 번호표",
+        voiceManagerCueSheetHint: "파일 이름을 <beatId>.ogg / .mp3 / .wav 형식으로 지정하면 자동 매칭됩니다.",
+        voiceManagerExportCsv: "CSV 내보내기",
+        voiceManagerExportTxt: "TXT 내보내기",
+        voiceManagerExportJson: "JSON 내보내기",
+        voiceManagerOpenFolder: "voices 폴더 열기",
+        voiceManagerRescanFolder: "voices/ 다시 스캔",
+        voiceManagerDropTitle: "여기에 오디오 파일을 드래그하여 대사 ID로 자동 매칭",
+        voiceManagerDropSubtitle: "지원 형식: {formats} · 파일당 최대 50 MiB (voices/로 복사)",
+        voiceManagerPickFiles: "오디오 파일 선택",
+        voiceManagerPickFolder: "음성 폴더 선택",
+        voiceManagerProgressSummary: "{matched} / {total} 대사 매칭됨",
+        voiceManagerClearAll: "모두 지우기",
+        voiceManagerUnmatchedTitle: "수동 연결 대기 ({count})",
+        voiceManagerUnmatchedDesc: "파일 이름이 대사 ID와 일치하지 않는 오디오입니다. 미리듣기 후 대상 대사를 선택해 연결하세요.",
+        voiceManagerBindBeatPlaceholder: "대상 대사 선택…",
+        voiceManagerBindAction: "연결",
+        voiceManagerSearchPlaceholder: "대사 ID, 화자 또는 내용 검색…",
+        voiceManagerFilterAll: "전체 ({count})",
+        voiceManagerFilterUnassigned: "미연결 ({count})",
+        voiceManagerFilterAssigned: "연결됨 ({count})",
+        voiceManagerNoTalkBeats: "현재 스토리에 대화(talk) 비트가 없습니다. 먼저 장면에 대사를 추가하세요.",
+        voiceManagerNoFilterMatches: "필터 조건에 맞는 대사가 없습니다.",
+        voiceManagerOfficialVoiceBadge: "공식 음성 있음",
+        voiceManagerPickBeatAudio: "음성 선택",
+        voiceManagerReplaceAudio: "교체",
+        voiceManagerRemoveAudio: "제거",
+        voiceManagerPreviewPlay: "미리듣기",
+        voiceManagerPreviewStop: "정지",
+        voiceManagerNarratorFallback: "내레이션",
+        voiceManagerMatchedToast: "{matched}개 음성이 자동 매칭되었습니다",
+        voiceManagerMatchedWithUnmatchedToast: "{matched}개 매칭 완료 · {unmatched}개 파일은 수동 연결이 필요합니다",
+        voiceManagerUnmatchedOnlyToast: "{count}개 파일을 가져왔습니다. 아래에서 대사에 연결하세요",
+        voiceManagerUnsupportedSkippedToast: "지원하지 않거나 용량을 초과한 파일 {count}개를 건너뛰었습니다",
+        voiceManagerBoundBeatToast: "{beatId}에 음성을 연결했습니다",
+        voiceManagerRemovedBeatToast: "{beatId}의 커스텀 음성을 제거했습니다",
+        voiceManagerClearedToast: "로컬 음성 매니페스트를 초기화했습니다",
+        voiceManagerRescanEmptyToast: "voices/ 폴더에서 매칭할 오디오 파일을 찾지 못했습니다",
+        voiceManagerRescanResultToast: "voices/에서 {matched}개 음성을 매칭했습니다",
+        voiceManagerCueSheetExportedToast: "{format} 대사 번호표를 내보냈습니다",
+        voiceManagerPreviewErrorToast: "오디오 미리듣기를 재생할 수 없습니다",
     },
 };
 

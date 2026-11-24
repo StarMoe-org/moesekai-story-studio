@@ -403,6 +403,7 @@ export async function applyVoiceManifest(
         baseUrl?: string;
         locale?: UiLocale;
         title?: string;
+        overrideOfficialVoice?: boolean;
     },
 ): Promise<ApplyVoiceManifestResult> {
     const doc = await loadParsedStoryDoc(workspaceDir, storyFile);
@@ -424,12 +425,14 @@ export async function applyVoiceManifest(
         const scan = await scanLocalVoiceAudioFiles(workspaceDir, doc, options.autoMatchAudioDir || "voices");
         const talkBeats = extractTalkBeatsForVoice(doc);
         const speakerByBeat = new Map(talkBeats.map((b) => [b.beatId, b.speakerName]));
+        const trimmedBaseUrl = options.baseUrl?.trim() || undefined;
         const lines: Record<string, StoryVoiceManifestLine> = {};
         for (const item of scan.matched) {
             if (!isSupportedAudioFilename(item.filename)) continue;
             const speaker = speakerByBeat.get(item.beatId);
             lines[item.beatId] = {
-                url: options.baseUrl ? item.filename : `/${item.relativePath}`,
+                url: trimmedBaseUrl ? item.filename : item.relativePath,
+                ...(trimmedBaseUrl ? {} : { objectKey: item.relativePath }),
                 ...(speaker ? { speaker } : {}),
                 ...(options.locale ? { locale: options.locale } : {}),
             };
@@ -439,7 +442,10 @@ export async function applyVoiceManifest(
             storyId: doc.id,
             ...(options.locale ? { locale: options.locale } : {}),
             ...(options.title ? { title: options.title } : {}),
-            ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
+            ...(trimmedBaseUrl ? { baseUrl: trimmedBaseUrl } : {}),
+            ...(typeof options.overrideOfficialVoice === "boolean"
+                ? { overrideOfficialVoice: options.overrideOfficialVoice }
+                : {}),
             generatedAt: new Date().toISOString(),
             lines,
         };
@@ -453,12 +459,12 @@ export async function applyVoiceManifest(
         };
     }
 
-    const validated = parseStoryVoiceManifest(candidateRaw);
+    const validated = parseStoryVoiceManifest(candidateRaw, { allowLocalWorkspaceUrls: true });
     if (!validated) {
         return {
             ok: false,
             filePath: null,
-            error: "Voice manifest failed validation (requires schema='moesekai-story-voice/1', non-empty storyId, and safe https:// or relative /... audio URLs).",
+            error: "Voice manifest failed validation (requires schema='moesekai-story-voice/1', non-empty storyId, and safe https://, /..., or workspace-relative voices/... audio URLs).",
             manifest: null,
             matchSummary: null,
         };

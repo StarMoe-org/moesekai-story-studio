@@ -21,6 +21,7 @@ import {
     type Live2DActorInfo,
     type Live2DActorPlacement,
     type Live2DStage,
+    type Live2DStageEasing,
     type Live2DStageError,
     type Live2DStageErrorKind,
     type Live2DStageMissing,
@@ -41,6 +42,17 @@ export type StoryStagePhase =
 /** Why one actor is not on the stage. */
 export type StoryActorProblem = "modelMissing" | "loadFailed";
 
+/** Default actor opacity when a `telop` beat specifies `actorVisibility: "dim"`. */
+export const TELOP_DIM_ACTOR_ALPHA = 0.28;
+
+/** Per-actor animation override passed via `StoryStageApplyOptions.actorTweens`. */
+export interface StoryStageActorTweenOption {
+    duration?: number;
+    delay?: number;
+    fade?: boolean;
+    easing?: Live2DStageEasing;
+}
+
 export interface StoryStageApplyOptions {
     /** Snap to the target (seeking) rather than play the changes. */
     instant: boolean;
@@ -48,6 +60,29 @@ export interface StoryStageApplyOptions {
     moveSeconds?: number;
     /** Fade actors in and out (appear / hide steps with `fade`). */
     fade?: boolean;
+    /** Seconds of enter/exit fades when `fade` is active (defaults to `STORY_FADE_SECONDS`). */
+    fadeSeconds?: number;
+    /** Per-actor animation overrides (keyed by cast key) for lockstep or staggered enter/exit/move tweens. */
+    actorTweens?: Record<string, StoryStageActorTweenOption>;
+    /**
+     * Global opacity multiplier for visible scene actors (`0..1`), e.g. `0` for `telop.actorVisibility === "hide"`
+     * or `0.28` for `"dim"`. When omitted, automatically derived from `target.telop?.actorVisibility`.
+     */
+    actorAlphaScale?: number;
+}
+
+/** Resolves effective scene-actor alpha multiplier from explicit option or `target.telop?.actorVisibility`. */
+export function resolveStageActorAlphaScale(
+    target: StoryStageState,
+    explicit?: number,
+): number {
+    if (typeof explicit === "number" && Number.isFinite(explicit)) {
+        return Math.min(1, Math.max(0, explicit));
+    }
+    const vis = target.telop?.actorVisibility;
+    if (vis === "hide") return 0;
+    if (vis === "dim") return TELOP_DIM_ACTOR_ALPHA;
+    return 1;
 }
 
 export interface StoryClipPreviewRequest {
@@ -313,14 +348,19 @@ export function stageStructureKey(target: StoryStageState, castList: readonly St
     return `${target.background ?? ""}|${target.place ?? ""}|${stepId}|${actorsSig}`;
 }
 
-/** Full actor visual fingerprint including Z-order, motion/facial, and speaker to deduplicate no-op instant applies. */
-function stageVisualKey(target: StoryStageState, castList: readonly StoryCastMember[]): string {
+/** Full actor visual fingerprint including Z-order, motion/facial, speaker, and actor alpha scale to deduplicate no-op instant applies. */
+function stageVisualKey(
+    target: StoryStageState,
+    castList: readonly StoryCastMember[],
+    actorAlphaScale?: number,
+): string {
     const modelByKey = new Map(castList.map(member => [member.key, member.modelId]));
     const orderByCast = computeActorRenderOrders(target.actors, target.speaking);
+    const effectiveAlpha = Math.round(resolveStageActorAlphaScale(target, actorAlphaScale) * 1000);
     const actorsSig = target.actors
         .map(actor => `${actor.cast}:${modelByKey.get(actor.cast) ?? ""}:${actor.x}:${actor.y}:${actor.scale}:${actor.mirror ? 1 : 0}:${actor.z ?? ""}:${actor.autoOrder ?? ""}:${orderByCast[actor.cast] ?? ""}:${actor.motion ?? ""}:${actor.facial ?? ""}`)
         .join(",");
-    return `${target.speaking ?? ""}|${actorsSig}`;
+    return `${target.speaking ?? ""}|a=${effectiveAlpha}|${actorsSig}`;
 }
 
 /** Safely invokes `stage.playMotion` catching both synchronous validation throws and async rejections. */
@@ -576,6 +616,7 @@ export class StoryStageController {
     private pumping = false;
     private repumpRequested = false;
     private waiters: Waiter[] = [];
+    private activeDelayCancels = new Set<() => void>();
 
     // Observable snapshot
     private phase: StoryStagePhase = { kind: "idle" };
@@ -721,8 +762,9 @@ export class StoryStageController {
     apply(target: StoryStageState, options: StoryStageApplyOptions): Promise<void> {
         if (this.disposed) return Promise.resolve();
 
+        const effectiveAlphaScale = resolveStageActorAlphaScale(target, options.actorAlphaScale);
         const nextStructureKey = stageStructureKey(target, this.cast);
-        const nextVisualKey = stageVisualKey(target, this.cast);
+        const nextVisualKey = stageVisualKey(target, this.cast, effectiveAlphaScale);
         const structureChanged = !options.instant
             || (this.lastStructureKey !== null && this.lastStructureKey !== nextStructureKey);
         this.lastStructureKey = nextStructureKey;
@@ -735,6 +777,7 @@ export class StoryStageController {
             visualKey: nextVisualKey,
             seq,
         };
+        this.cancelActiveDelays();
 
         // Preserve active solo preview across non-structural edits on the same beat/node
         // (e.g. picking a motion/facial clip in ClipPickerField or typing dialogue text).
@@ -757,7 +800,7 @@ export class StoryStageController {
             && this.hiddenForSolo.size === 0
             && this.pendingClipReplay === null
             && this.lastRenderedVisualKey === nextVisualKey
-            && !this.hasMissingOrHiddenWantedActors(target)
+            && !this.hasMissingOrHiddenWantedActors(target, effectiveAlphaScale)
         ) {
             this.appliedSceneSeq = seq;
             this.completedSeq = Math.max(this.completedSeq, seq);
@@ -800,6 +843,7 @@ export class StoryStageController {
                 nonce: seq,
             };
         } else {
+            this.cancelActiveDelays();
             this.pendingClipReplay = null;
             const prevSolo = this.desiredSolo;
             if (prevSolo && prevSolo.cast.key === castMember.key && prevSolo.cast.modelId === castMember.modelId) {
@@ -875,11 +919,19 @@ export class StoryStageController {
         return promise;
     }
 
-    /** Snaps every running tween to its end through the serialized pump. */
+    /** Snaps every running tween to its end through the serialized pump (and cancels active per-actor delays). */
     finish(): void {
         if (this.disposed) return;
         this.pendingFinish = true;
         this.pendingShake = null;
+        this.cancelActiveDelays();
+        if (this.pumping && this.stage) {
+            try {
+                this.stage.finishTweens();
+            } catch {
+                // Ignore finish errors during teardown; drain loop handles fatal errors.
+            }
+        }
         this.schedulePump();
     }
 
@@ -996,6 +1048,7 @@ export class StoryStageController {
         this.deferredBoot = false;
         this.clearHealthyResetTimer();
         this.clearResizeTimer();
+        this.cancelActiveDelays();
         if (options.clearRecovery) {
             this.clearRecoveryTimer();
         }
@@ -1358,14 +1411,14 @@ export class StoryStageController {
         }
     }
 
-    private hasMissingOrHiddenWantedActors(target: StoryStageState): boolean {
+    private hasMissingOrHiddenWantedActors(target: StoryStageState, expectedAlpha = 1): boolean {
         const liveIds = this.stage ? new Set(this.stage.actors) : null;
         const castByKey = new Map(this.cast.map(member => [member.key, member]));
         for (const actor of target.actors) {
             const member = castByKey.get(actor.cast);
             if (!member) continue;
             const current = this.appliedActors.get(actor.cast);
-            if (!current || current.modelId !== member.modelId || current.alpha !== 1) {
+            if (!current || current.modelId !== member.modelId || Math.abs(current.alpha - expectedAlpha) > 1e-4) {
                 return true;
             }
             if (liveIds && !liveIds.has(actor.cast)) {
@@ -1373,6 +1426,44 @@ export class StoryStageController {
             }
         }
         return false;
+    }
+
+    private cancelActiveDelays(): void {
+        if (this.activeDelayCancels.size === 0) return;
+        const cancels = [...this.activeDelayCancels];
+        this.activeDelayCancels.clear();
+        for (const cancel of cancels) {
+            cancel();
+        }
+    }
+
+    private waitSceneDelay(seconds: number, activeStage: Live2DStage, seq: number): Promise<boolean> {
+        if (!Number.isFinite(seconds) || seconds <= 0) {
+            return Promise.resolve(!this.isSceneStepSuperseded(activeStage, seq) && !this.pendingFinish);
+        }
+        if (this.isSceneStepSuperseded(activeStage, seq) || this.pendingFinish) {
+            return Promise.resolve(false);
+        }
+        return new Promise<boolean>((resolve) => {
+            let settled = false;
+            let timer: StageTimerHandle | null = null;
+            const done = (completed: boolean) => {
+                if (settled) return;
+                settled = true;
+                if (timer !== null) {
+                    this.cancelTimer(timer);
+                    timer = null;
+                }
+                this.activeDelayCancels.delete(cancel);
+                resolve(completed && !this.isSceneStepSuperseded(activeStage, seq));
+            };
+            const cancel = () => done(false);
+            this.activeDelayCancels.add(cancel);
+            timer = this.scheduleTimer(() => {
+                timer = null;
+                done(!this.pendingFinish);
+            }, Math.max(0, Math.round(seconds * 1000)));
+        });
     }
 
     private async drain(): Promise<void> {
@@ -1710,7 +1801,10 @@ export class StoryStageController {
 
         const { state: target, options, seq, visualKey } = currentDesired;
         const castByKey = new Map(this.cast.map(member => [member.key, member]));
-        const fadeSeconds = options.instant ? 0 : STORY_FADE_SECONDS;
+        const effectiveAlphaScale = resolveStageActorAlphaScale(target, options.actorAlphaScale);
+        const defaultFadeSeconds = options.instant
+            ? 0
+            : Math.max(0, Number.isFinite(options.fadeSeconds) ? options.fadeSeconds! : STORY_FADE_SECONDS);
         const orderByCast = computeActorRenderOrders(target.actors, target.speaking);
         const wanted = new Map<string, { actor: StoryActorState; order: number; modelId: string }>();
         target.actors.forEach((actor, index) => {
@@ -1723,17 +1817,44 @@ export class StoryStageController {
 
         const nextProblems: Record<string, StoryActorProblem> = {};
 
-        // Step 1: Remove leaving or recast actors FIRST (frees MAX_ACTORS capacity before adding).
+        // Partition currently mounted actors into recast, immediate-exit, and animated-exit groups.
+        const recastIds: string[] = [];
+        const leavingImmediateIds: string[] = [];
+        const leavingAnimated: Array<{
+            id: string;
+            duration: number;
+            delay: number;
+            easing: Live2DStageEasing;
+        }> = [];
+
         for (const [id, current] of [...this.appliedActors]) {
             const want = wanted.get(id);
             if (want && want.modelId === current.modelId) continue;
+            if (want) {
+                recastIds.push(id);
+                continue;
+            }
+            const tw = options.actorTweens?.[id];
+            const useFade = !options.instant && (tw?.fade ?? Boolean(options.fade));
+            const duration = useFade
+                ? Math.max(0, Number.isFinite(tw?.duration) ? tw!.duration! : defaultFadeSeconds)
+                : 0;
+            const delay = options.instant
+                ? 0
+                : Math.max(0, Number.isFinite(tw?.delay) ? tw!.delay! : 0);
+            const easing: Live2DStageEasing = tw?.easing ?? "out";
+            if (options.instant || (!useFade && delay <= 0) || (duration <= 0 && delay <= 0)) {
+                leavingImmediateIds.push(id);
+            } else {
+                leavingAnimated.push({ id, duration, delay, easing });
+            }
+        }
+
+        // Step 1a: Immediately remove recast actors and instant exits (frees MAX_ACTORS capacity).
+        for (const id of [...recastIds, ...leavingImmediateIds]) {
             this.appliedActors.delete(id);
             this.hiddenForSolo.delete(id);
             try {
-                if (!options.instant && options.fade && !want) {
-                    await activeStage.setActor(id, { alpha: 0 }, { duration: fadeSeconds, easing: "out" }).catch(() => false);
-                    if (this.stage !== activeStage || this.disposed) return;
-                }
                 activeStage.removeActor(id);
             } catch (err) {
                 if (isStageDestroyedError(err)) {
@@ -1741,107 +1862,21 @@ export class StoryStageController {
                     return;
                 }
             }
-            if (this.isSceneStepSuperseded(activeStage, seq)) return;
         }
+        if (this.stage !== activeStage || this.disposed || this.isSceneStepSuperseded(activeStage, seq)) return;
 
-        // Step 2a: Apply live Z-order updates immediately (duration 0) BEFORE starting any move
-        // tween so moving / speaking actors render in front of equal-z stationary neighbors on
-        // the very first frame (while strictly honoring author/Agent explicit `z` values).
-        for (const [id, { order }] of wanted) {
-            const current = this.appliedActors.get(id);
-            if (!current || current.order === order) continue;
-            try {
-                await activeStage.setActor(id, { order }, { duration: 0 }).catch(() => false);
-            } catch (err) {
-                if (isStageDestroyedError(err)) {
-                    this.handleRuntimeFailure(activeStage, err);
-                    return;
-                }
-            }
-            if (this.stage !== activeStage || this.disposed) return;
-            current.order = order;
-            if (this.isSceneStepSuperseded(activeStage, seq)) return;
-        }
-
-        // Step 2b: Update transforms, visibility (`alpha`), motions, and facials on already-mounted actors.
-        for (const [id, { actor, order }] of wanted) {
-            const current = this.appliedActors.get(id);
-            if (!current) continue;
-
-            const wasHiddenForSolo = this.hiddenForSolo.delete(id);
-            const alphaHidden = current.alpha !== 1;
-            const transformChanged = wasHiddenForSolo
-                || alphaHidden
-                || current.x !== actor.x
-                || current.y !== actor.y
-                || current.scale !== actor.scale
-                || current.mirror !== actor.mirror
-                || current.order !== order;
-
-            if (transformChanged) {
-                const moving = !wasHiddenForSolo
-                    && (current.x !== actor.x || current.y !== actor.y || current.scale !== actor.scale)
-                    && !options.instant;
-                const revealingWithFade = !wasHiddenForSolo && alphaHidden && !options.instant && Boolean(options.fade);
-                const duration = moving
-                    ? (options.moveSeconds ?? STORY_FADE_SECONDS)
-                    : revealingWithFade
-                        ? STORY_FADE_SECONDS
-                        : 0;
-                try {
-                    await activeStage.setActor(id, {
-                        x: actor.x,
-                        y: actor.y,
-                        scale: actor.scale,
-                        mirror: actor.mirror,
-                        order,
-                        alpha: 1,
-                    }, {
-                        duration,
-                        easing: moving ? "in-out" : "in",
-                    }).catch(() => false);
-                } catch (err) {
-                    if (isStageDestroyedError(err)) {
-                        this.handleRuntimeFailure(activeStage, err);
-                        return;
-                    }
-                }
-                if (this.stage !== activeStage || this.disposed) return;
-                current.x = actor.x;
-                current.y = actor.y;
-                current.scale = actor.scale;
-                current.mirror = actor.mirror;
-                current.order = order;
-                current.alpha = 1;
-            }
-
-            const info = current.info;
-            const motion = pickClip(actor.motion, info?.motions, info?.defaultMotion ?? null);
-            if (motion && motion !== current.motion) {
-                await safePlayMotion(activeStage, id, motion, false);
-                if (this.stage !== activeStage || this.disposed) return;
-                current.motion = motion;
-            }
-
-            const facial = pickClip(actor.facial, info?.facials, info?.defaultFacial ?? null);
-            if (facial && facial !== current.facial) {
-                await safeSetFacial(activeStage, id, facial);
-                if (this.stage !== activeStage || this.disposed) return;
-                current.facial = facial;
-            }
-
-            if (this.isSceneStepSuperseded(activeStage, seq)) return;
-        }
-
-        // Step 3: Load ALL arriving actors in parallel as a single tracked batch so multi-actor
-        // scenes load ~2x-4x faster and the aggregate progress indicator stays visible until
-        // EVERY target actor finishes (without blacking out actors that already rendered).
+        // Collect arriving actors (not yet mounted, or just removed for recast).
         const arrivingBatch: Array<{
             id: string;
             actor: StoryActorState;
             order: number;
             modelId: string;
             resolved: ResolvedLive2DModelBundles;
+            useFade: boolean;
+            duration: number;
+            delay: number;
+            easing: Live2DStageEasing;
+            mountAtZero: boolean;
         }> = [];
         for (const [id, { actor, order, modelId }] of wanted) {
             if (this.appliedActors.has(id)) continue;
@@ -1850,13 +1885,93 @@ export class StoryStageController {
                 nextProblems[id] = "modelMissing";
                 continue;
             }
-            arrivingBatch.push({ id, actor, order, modelId, resolved });
+            const tw = options.actorTweens?.[id];
+            const useFade = !options.instant && (tw?.fade ?? Boolean(options.fade));
+            const duration = useFade
+                ? Math.max(0, Number.isFinite(tw?.duration) ? tw!.duration! : defaultFadeSeconds)
+                : 0;
+            const delay = options.instant
+                ? 0
+                : Math.max(0, Number.isFinite(tw?.delay) ? tw!.delay! : 0);
+            const easing: Live2DStageEasing = tw?.easing ?? "in";
+            const mountAtZero = !options.instant && ((useFade && duration > 0) || delay > 0);
+            arrivingBatch.push({ id, actor, order, modelId, resolved, useFade, duration, delay, easing, mountAtZero });
         }
+
+        // Helper for running an animated leaving actor fade-out + removal.
+        const runAnimatedLeave = async (
+            item: { id: string; duration: number; delay: number; easing: Live2DStageEasing },
+        ): Promise<unknown> => {
+            if (item.delay > 0) {
+                const ok = await this.waitSceneDelay(item.delay, activeStage, seq);
+                if (this.stage !== activeStage || this.disposed || this.isSceneStepSuperseded(activeStage, seq)) {
+                    return null;
+                }
+                if (!ok && this.pendingFinish) {
+                    this.appliedActors.delete(item.id);
+                    this.hiddenForSolo.delete(item.id);
+                    try {
+                        activeStage.removeActor(item.id);
+                    } catch (err) {
+                        if (isStageDestroyedError(err)) return err;
+                    }
+                    return null;
+                }
+            }
+            const mounted = this.appliedActors.get(item.id);
+            if (!mounted) return null;
+            // Mark alpha as 0 before fade starts so a superseding apply wanting this actor back restores alpha cleanly.
+            mounted.alpha = 0;
+            try {
+                if (item.duration > 0 && !this.pendingFinish) {
+                    await activeStage.setActor(
+                        item.id,
+                        { alpha: 0 },
+                        { duration: item.duration, easing: item.easing },
+                    ).catch(() => false);
+                    if (this.stage !== activeStage || this.disposed || this.isSceneStepSuperseded(activeStage, seq)) {
+                        return null;
+                    }
+                }
+                this.appliedActors.delete(item.id);
+                this.hiddenForSolo.delete(item.id);
+                activeStage.removeActor(item.id);
+            } catch (err) {
+                if (isStageDestroyedError(err)) return err;
+            }
+            return null;
+        };
+
+        // Step 1b: Only flush animated exits BEFORE loading arriving actors if mounting all arriving
+        // actors concurrently would exceed LIVE2D_STAGE_MAX_ACTORS (8); otherwise run exits in lockstep
+        // with moves & enters in Step 4!
+        let remainingLeavingAnimated = leavingAnimated;
+        if (leavingAnimated.length > 0 && this.appliedActors.size + arrivingBatch.length > LIVE2D_STAGE_MAX_ACTORS) {
+            const earlyErrors = await Promise.all(leavingAnimated.map(item => runAnimatedLeave(item)));
+            const fatalErr = earlyErrors.find(err => err !== null);
+            if (fatalErr) {
+                this.handleRuntimeFailure(activeStage, fatalErr);
+                return;
+            }
+            if (this.stage !== activeStage || this.disposed || this.isSceneStepSuperseded(activeStage, seq)) return;
+            remainingLeavingAnimated = [];
+        }
+
+        // Step 2 (Load Barrier): Load ALL arriving actors in parallel as a single tracked batch.
+        // Actors with `mountAtZero` mount at `alpha: 0` and wait at this barrier so network/decode
+        // jitter NEVER causes staggered fade-ins; instant/non-fading actors mount visible immediately.
+        const arrivingIds = new Set<string>();
+        const arrivingToReveal: Array<{
+            id: string;
+            entry: AppliedActor;
+            duration: number;
+            delay: number;
+            easing: Live2DStageEasing;
+        }> = [];
 
         if (arrivingBatch.length > 0) {
             if (this.isSceneStepSuperseded(activeStage, seq)) return;
 
-            const fadeIn = !options.instant && Boolean(options.fade);
             const batchToken = ++this.loadBatchToken;
             const tracker = new Map<string, { loaded: number; total: number; done: boolean }>();
             for (const item of arrivingBatch) {
@@ -1914,10 +2029,12 @@ export class StoryStageController {
             let stageDestroyedError: unknown = null;
 
             try {
-                await Promise.all(arrivingBatch.map(async ({ id, actor, order, modelId, resolved }) => {
+                await Promise.all(arrivingBatch.map(async (item) => {
+                    const { id, actor, order, modelId, resolved, mountAtZero } = item;
                     const cached = this.infoCache.get(modelId);
                     const initialMotion = cached ? pickClip(actor.motion, cached.motions, null) : null;
                     const initialFacial = cached ? pickClip(actor.facial, cached.facials, null) : null;
+                    const initialAlpha = mountAtZero ? 0 : effectiveAlphaScale;
                     try {
                         const info = await this.addActorWithMotionFallback(
                             activeStage,
@@ -1929,7 +2046,7 @@ export class StoryStageController {
                                 scale: actor.scale,
                                 mirror: actor.mirror,
                                 order,
-                                alpha: fadeIn ? 0 : 1,
+                                alpha: initialAlpha,
                                 ...(initialMotion ? { motion: initialMotion } : {}),
                                 ...(initialFacial ? { facial: initialFacial } : {}),
                             },
@@ -1956,16 +2073,17 @@ export class StoryStageController {
                             scale: actor.scale,
                             mirror: actor.mirror,
                             order,
-                            alpha: fadeIn ? 0 : 1,
+                            alpha: initialAlpha,
                             motion: initialMotion ?? info.defaultMotion,
                             facial: initialFacial ?? info.defaultFacial,
                             info,
                         };
                         this.appliedActors.set(id, entry);
+                        arrivingIds.add(id);
                         this.emit();
 
                         // If superseded mid-load, leave entry.alpha === 0 accurately recorded so the
-                        // superseding executeSceneSync restores alpha: 1 (or removes the actor) in Step 1/2b.
+                        // superseding executeSceneSync restores alpha (or removes the actor) cleanly.
                         if (!this.isSceneStepSuperseded(activeStage, seq)) {
                             if (!initialMotion && wantMotion && wantMotion !== info.defaultMotion) {
                                 await safePlayMotion(activeStage, id, wantMotion, false);
@@ -1977,10 +2095,14 @@ export class StoryStageController {
                                 if (this.stage !== activeStage || this.disposed) return;
                                 entry.facial = wantFacial;
                             }
-                            if (fadeIn && !this.isSceneStepSuperseded(activeStage, seq)) {
-                                await activeStage.setActor(id, { alpha: 1 }, { duration: STORY_FADE_SECONDS, easing: "in" }).catch(() => false);
-                                if (this.stage !== activeStage || this.disposed) return;
-                                entry.alpha = 1;
+                            if (mountAtZero) {
+                                arrivingToReveal.push({
+                                    id,
+                                    entry,
+                                    duration: item.duration,
+                                    delay: item.delay,
+                                    easing: item.easing,
+                                });
                             }
                         }
                     } catch (err) {
@@ -2032,6 +2154,212 @@ export class StoryStageController {
                 this.lastRenderedVisualKey = null;
                 this.completedSeq = Math.max(this.completedSeq, seq);
                 this.emit();
+                return;
+            }
+        }
+
+        if (this.stage !== activeStage || this.disposed || this.isSceneStepSuperseded(activeStage, seq)) return;
+
+        // Step 3: Apply live Z-order updates immediately (duration 0) BEFORE starting any move
+        // or fade wave so moving / speaking actors render in front of equal-z stationary neighbors
+        // on the very first frame (strictly honoring explicit `z` values).
+        const orderUpdates: Array<{ id: string; current: AppliedActor; order: number }> = [];
+        for (const [id, { order }] of wanted) {
+            const current = this.appliedActors.get(id);
+            if (!current || current.order === order) continue;
+            orderUpdates.push({ id, current, order });
+        }
+        if (orderUpdates.length > 0) {
+            let orderDestroyedError: unknown = null;
+            await Promise.all(orderUpdates.map(async ({ id, current, order }) => {
+                try {
+                    await activeStage.setActor(id, { order }, { duration: 0 }).catch(() => false);
+                    if (this.stage === activeStage && !this.disposed) {
+                        current.order = order;
+                    }
+                } catch (err) {
+                    if (isStageDestroyedError(err)) {
+                        orderDestroyedError ??= err;
+                    }
+                }
+            }));
+            if (orderDestroyedError !== null) {
+                this.handleRuntimeFailure(activeStage, orderDestroyedError);
+                return;
+            }
+            if (this.stage !== activeStage || this.disposed || this.isSceneStepSuperseded(activeStage, seq)) return;
+        }
+
+        // Step 4 (Unified Lockstep Animation Wave): Fire ALL leaving fade-outs, ALL existing-actor
+        // transform/alpha/pose updates, and ALL post-barrier arriving fade-ins CONCURRENTLY in
+        // `Promise.all` so every actor begins animating on the exact same frame tick!
+        const wavePromises: Array<Promise<unknown>> = [];
+
+        // 4a. Leaving actors (animated fade-outs + removal)
+        for (const item of remainingLeavingAnimated) {
+            wavePromises.push(runAnimatedLeave(item));
+        }
+
+        // 4b. Already-mounted existing actors (transform, mirror, alpha, motion, facial)
+        for (const [id, { actor, order }] of wanted) {
+            if (arrivingIds.has(id)) continue;
+            const current = this.appliedActors.get(id);
+            if (!current) continue;
+
+            const wasHiddenForSolo = this.hiddenForSolo.delete(id);
+            const alphaChanged = Math.abs(current.alpha - effectiveAlphaScale) > 1e-4;
+            const posOrScaleChanged = current.x !== actor.x
+                || current.y !== actor.y
+                || current.scale !== actor.scale;
+            const transformChanged = wasHiddenForSolo
+                || alphaChanged
+                || posOrScaleChanged
+                || current.mirror !== actor.mirror
+                || current.order !== order;
+
+            const info = current.info;
+            const wantMotion = pickClip(actor.motion, info?.motions, info?.defaultMotion ?? null);
+            const motionChanged = Boolean(wantMotion && wantMotion !== current.motion);
+            const wantFacial = pickClip(actor.facial, info?.facials, info?.defaultFacial ?? null);
+            const facialChanged = Boolean(wantFacial && wantFacial !== current.facial);
+
+            if (!transformChanged && !motionChanged && !facialChanged) continue;
+
+            const tw = options.actorTweens?.[id];
+            const delay = options.instant
+                ? 0
+                : Math.max(0, Number.isFinite(tw?.delay) ? tw!.delay! : 0);
+
+            wavePromises.push((async (): Promise<unknown> => {
+                if (delay > 0) {
+                    const ok = await this.waitSceneDelay(delay, activeStage, seq);
+                    if (this.stage !== activeStage || this.disposed || this.isSceneStepSuperseded(activeStage, seq)) {
+                        return null;
+                    }
+                    if (!ok && !this.pendingFinish) return null;
+                }
+
+                const snapNow = options.instant || this.pendingFinish;
+                let duration = 0;
+                let easing: Live2DStageEasing = "linear";
+                if (transformChanged && !snapNow && !wasHiddenForSolo) {
+                    if (posOrScaleChanged) {
+                        duration = Math.max(
+                            0,
+                            Number.isFinite(tw?.duration)
+                                ? tw!.duration!
+                                : Number.isFinite(options.moveSeconds)
+                                    ? options.moveSeconds!
+                                    : STORY_FADE_SECONDS,
+                        );
+                        easing = tw?.easing ?? "in-out";
+                    } else if (alphaChanged) {
+                        const allowAlphaFade = tw?.fade ?? (options.fade !== false);
+                        duration = allowAlphaFade
+                            ? Math.max(0, Number.isFinite(tw?.duration) ? tw!.duration! : defaultFadeSeconds)
+                            : 0;
+                        easing = tw?.easing ?? (effectiveAlphaScale < current.alpha ? "out" : "in");
+                    }
+                }
+
+                const applyPose = async () => {
+                    if (motionChanged && wantMotion) {
+                        await safePlayMotion(activeStage, id, wantMotion, false);
+                        if (this.stage !== activeStage || this.disposed) return;
+                        current.motion = wantMotion;
+                    }
+                    if (facialChanged && wantFacial) {
+                        await safeSetFacial(activeStage, id, wantFacial);
+                        if (this.stage !== activeStage || this.disposed) return;
+                        current.facial = wantFacial;
+                    }
+                };
+
+                try {
+                    if (transformChanged) {
+                        const setPromise = activeStage.setActor(id, {
+                            x: actor.x,
+                            y: actor.y,
+                            scale: actor.scale,
+                            mirror: actor.mirror,
+                            order,
+                            alpha: effectiveAlphaScale,
+                        }, {
+                            duration,
+                            easing,
+                        }).catch(() => false);
+
+                        let completed: boolean;
+                        if (duration > 0 && (motionChanged || facialChanged)) {
+                            const [setResult] = await Promise.all([setPromise, applyPose()]);
+                            completed = setResult;
+                        } else {
+                            completed = await setPromise;
+                            if (this.stage !== activeStage || this.disposed) return null;
+                            if (!this.isSceneStepSuperseded(activeStage, seq)) {
+                                await applyPose();
+                            }
+                        }
+
+                        if (this.stage !== activeStage || this.disposed) return null;
+                        if (completed || !this.isSceneStepSuperseded(activeStage, seq)) {
+                            current.x = actor.x;
+                            current.y = actor.y;
+                            current.scale = actor.scale;
+                            current.mirror = actor.mirror;
+                            current.order = order;
+                            current.alpha = effectiveAlphaScale;
+                        } else {
+                            // Overtaken mid-tween: invalidate cached transform so superseding sync always reconciles.
+                            current.x = Number.NaN;
+                            current.alpha = -1;
+                        }
+                    } else {
+                        await applyPose();
+                    }
+                } catch (err) {
+                    if (isStageDestroyedError(err)) return err;
+                }
+                return null;
+            })());
+        }
+
+        // 4c. Arriving actors (barrier-synchronized fade-ins / delayed reveals)
+        for (const item of arrivingToReveal) {
+            wavePromises.push((async (): Promise<unknown> => {
+                if (item.delay > 0) {
+                    const ok = await this.waitSceneDelay(item.delay, activeStage, seq);
+                    if (this.stage !== activeStage || this.disposed || this.isSceneStepSuperseded(activeStage, seq)) {
+                        return null;
+                    }
+                    if (!ok && !this.pendingFinish) return null;
+                }
+                if (Math.abs(item.entry.alpha - effectiveAlphaScale) <= 1e-4) {
+                    return null;
+                }
+                const dur = this.pendingFinish ? 0 : item.duration;
+                try {
+                    const completed = await activeStage.setActor(
+                        item.id,
+                        { alpha: effectiveAlphaScale },
+                        { duration: dur, easing: item.easing },
+                    ).catch(() => false);
+                    if (this.stage !== activeStage || this.disposed) return null;
+                    if (completed || !this.isSceneStepSuperseded(activeStage, seq)) {
+                        item.entry.alpha = effectiveAlphaScale;
+                    }
+                } catch (err) {
+                    if (isStageDestroyedError(err)) return err;
+                }
+                return null;
+            })());
+        }
+
+        if (wavePromises.length > 0) {
+            const waveErrors = await Promise.all(wavePromises);
+            const fatalErr = waveErrors.find(err => err !== null);
+            if (fatalErr) {
+                this.handleRuntimeFailure(activeStage, fatalErr);
                 return;
             }
         }
@@ -2298,6 +2626,9 @@ export class StoryStageController {
         const nextSceneActorIds = pendingInstantScene
             ? new Set(pendingInstantScene.actors.map(actor => actor.cast))
             : null;
+        const restoreAlpha = this.desiredScene
+            ? resolveStageActorAlphaScale(this.desiredScene.state, this.desiredScene.options.actorAlphaScale)
+            : 1;
         if (this.hiddenForSolo.size > 0) {
             for (const id of [...this.hiddenForSolo]) {
                 this.hiddenForSolo.delete(id);
@@ -2315,7 +2646,7 @@ export class StoryStageController {
                     continue;
                 }
                 try {
-                    await activeStage.setActor(id, { alpha: 1 }, { duration: 0 }).catch(() => false);
+                    await activeStage.setActor(id, { alpha: restoreAlpha }, { duration: 0 }).catch(() => false);
                 } catch (err) {
                     if (isStageDestroyedError(err)) {
                         this.handleRuntimeFailure(activeStage, err);
@@ -2324,7 +2655,7 @@ export class StoryStageController {
                 }
                 if (this.stage !== activeStage || this.disposed) return;
                 const restored = this.appliedActors.get(id);
-                if (restored) restored.alpha = 1;
+                if (restored) restored.alpha = restoreAlpha;
             }
         }
         this.appliedTalking = null;

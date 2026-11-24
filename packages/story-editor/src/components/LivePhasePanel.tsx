@@ -3,10 +3,10 @@ import { useMemo, useState } from "react";
 import { Icon, IconButton, LinearProgress, Surface, Tabs, cn } from "../md3";
 import {
     mdAccountTree, mdAltRoute, mdAutoplay, mdBolt, mdCalculate, mdChat, mdCheckCircle, mdClose,
-    mdFlag, mdGraphicEq, mdHistory, mdHourglassTop, mdImage, mdMonitoring, mdMovie, mdMusicNote, mdMyLocation,
+    mdFlag, mdGraphicEq, mdHistory, mdHourglassTop, mdImage, mdLock, mdMonitoring, mdMovie, mdMusicNote, mdMyLocation,
     mdNumbers, mdPerson, mdPlayArrowFill, mdPlayCircle, mdRecordVoiceOver, mdTag, mdWarning,
 } from "../md3/icons";
-import { StoryFlowCanvas } from "./StoryFlowCanvas";
+import { StoryFlowCanvas, formatStageActionBeatSummary } from "./StoryFlowCanvas";
 import { useStoryI18n as useI18n } from "../context/StoryStudioContext";
 import type { CompiledStoryProgram } from "@moesekai/story-core";
 import { interpolateStoryText, type StoryRuntimeFrame } from "@moesekai/story-core";
@@ -242,8 +242,8 @@ export function summarizeActiveBeat(
         case "telop":
             return interpolateStoryText(beat.text, doc, vars).trim() || t("page.storyMaker.v2.beats.telop");
         case "stageAction": {
-            const actorName = doc.cast.find(item => item.key === beat.castKey)?.name || beat.castKey;
-            return actorName || t("page.storyMaker.v2.beats.stageAction");
+            const castNameByKey = new Map(doc.cast.map(item => [item.key, item.name]));
+            return formatStageActionBeatSummary(beat, castNameByKey, t);
         }
         case "cue":
             return beat.cueType === "se" && beat.se ? beat.se : t("page.storyMaker.v2.beats.cue");
@@ -658,6 +658,17 @@ export function LivePhaseTelemetry({
                                             <span className="shrink-0 rounded-md3-xs bg-surface-container-high px-1 py-0.5 type-label-s text-on-surface-variant">
                                                 {t(SLOT_LABEL_KEYS[actor.slot])}
                                             </span>
+                                            <span className="shrink-0 rounded-md3-xs bg-surface-container-highest px-1 py-0.5 font-mono type-label-s tabular-nums text-on-surface-variant">
+                                                X {actor.x > 0 ? `+${actor.x.toFixed(2)}` : actor.x.toFixed(2)}
+                                            </span>
+                                            {(actor.lockX || actor.explicitX !== undefined) && (
+                                                <span
+                                                    title={t("page.storyMaker.inspector.lockBadge")}
+                                                    className="inline-flex shrink-0 items-center rounded-md3-xs bg-secondary-container px-1 py-0.5 text-on-secondary-container"
+                                                >
+                                                    <Icon path={mdLock} size={11} />
+                                                </span>
+                                            )}
                                         </span>
                                         {poseParts.length > 0 && (
                                             <span

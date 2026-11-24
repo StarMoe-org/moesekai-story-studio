@@ -16,6 +16,7 @@ import {
     type StoryCacheStatus, type StoryPreloadCategory, type StoryPreloadProgress,
 } from "@moesekai/story-core";
 import type { StoryDocument, StoryVoiceManifest } from "@moesekai/story-core";
+import { buildVoiceManifestUrlOptions } from "./voiceTrackUtils";
 
 export const STORY_AUTO_PRELOAD_STORAGE_KEY = "moesekai.storyMaker.autoPreload";
 
@@ -100,6 +101,7 @@ interface ScopedPreloadState {
     doc: StoryDocument;
     assetSource: AssetSourceType | AssetLine;
     voiceManifest?: StoryVoiceManifest | null;
+    voiceWorkspaceBaseUrl: string | null;
     progress: StoryPreloadProgress;
 }
 
@@ -107,6 +109,7 @@ interface ScopedCacheState {
     doc: StoryDocument;
     assetSource: AssetSourceType | AssetLine;
     voiceManifest?: StoryVoiceManifest | null;
+    voiceWorkspaceBaseUrl: string | null;
     status: StoryCacheStatus;
 }
 
@@ -125,7 +128,16 @@ export function AssetPreloadDialog({
     onCancelExternal,
 }: AssetPreloadDialogProps) {
     const { t } = useI18n();
-    const { resolveLive2dSources, sseWebScriptBase, defaultAutoPreload } = useStoryStudio();
+    const {
+        resolveLive2dSources,
+        sseWebScriptBase,
+        defaultAutoPreload,
+        voiceWorkspaceBaseUrl,
+    } = useStoryStudio();
+    const voiceManifestUrlOptions = useMemo(
+        () => buildVoiceManifestUrlOptions(voiceWorkspaceBaseUrl),
+        [voiceWorkspaceBaseUrl],
+    );
     const live2dSources = useMemo(
         () => resolveLive2dSources(doc.region),
         [doc.region, resolveLive2dSources],
@@ -143,8 +155,15 @@ export function AssetPreloadDialog({
     const effectiveAutoPreload = autoPreload ?? storedAuto;
 
     const manifest = useMemo(
-        () => collectStoryAssets(doc, { assetSource, models, voiceManifest, live2dSources, includeUiKit }),
-        [doc, assetSource, models, voiceManifest, live2dSources, includeUiKit],
+        () => collectStoryAssets(doc, {
+            assetSource,
+            models,
+            voiceManifest,
+            voiceManifestUrlOptions,
+            live2dSources,
+            includeUiKit,
+        }),
+        [doc, assetSource, models, voiceManifest, voiceManifestUrlOptions, live2dSources, includeUiKit],
     );
 
     const [scopedCache, setScopedCache] = useState<ScopedCacheState | null>(null);
@@ -167,13 +186,20 @@ export function AssetPreloadDialog({
 
     const refreshCacheStatus = useCallback(() => {
         let cancelled = false;
-        void inspectStoryCacheStatus(doc, { assetSource, models, voiceManifest, live2dSources, includeUiKit }).then((status) => {
+        void inspectStoryCacheStatus(doc, {
+            assetSource,
+            models,
+            voiceManifest,
+            voiceManifestUrlOptions,
+            live2dSources,
+            includeUiKit,
+        }).then((status) => {
             if (!cancelled && mountedRef.current) {
-                setScopedCache({ doc, assetSource, voiceManifest, status });
+                setScopedCache({ doc, assetSource, voiceManifest, voiceWorkspaceBaseUrl, status });
             }
         });
         return () => { cancelled = true; };
-    }, [doc, assetSource, models, voiceManifest, live2dSources, includeUiKit]);
+    }, [doc, assetSource, models, voiceManifest, voiceManifestUrlOptions, voiceWorkspaceBaseUrl, live2dSources, includeUiKit]);
 
     useEffect(() => {
         if (!open) return;
@@ -184,6 +210,7 @@ export function AssetPreloadDialog({
         && scopedCache.doc === doc
         && scopedCache.assetSource === assetSource
         && scopedCache.voiceManifest === voiceManifest
+        && scopedCache.voiceWorkspaceBaseUrl === voiceWorkspaceBaseUrl
         ? scopedCache.status
         : null;
 
@@ -191,6 +218,7 @@ export function AssetPreloadDialog({
         && scopedProgress.doc === doc
         && scopedProgress.assetSource === assetSource
         && scopedProgress.voiceManifest === voiceManifest
+        && scopedProgress.voiceWorkspaceBaseUrl === voiceWorkspaceBaseUrl
         ? scopedProgress.progress
         : null;
 
@@ -224,28 +252,30 @@ export function AssetPreloadDialog({
                 assetSource,
                 models,
                 voiceManifest,
+                voiceManifestUrlOptions,
                 live2dSources,
                 includeUiKit,
                 signal: controller.signal,
                 onProgress: (next) => {
                     if (!mountedRef.current || runIdRef.current !== runId || abortRef.current !== controller) return;
-                    setScopedProgress({ doc, assetSource, voiceManifest, progress: next });
+                    setScopedProgress({ doc, assetSource, voiceManifest, voiceWorkspaceBaseUrl, progress: next });
                 },
             });
             if (!mountedRef.current || runIdRef.current !== runId || abortRef.current !== controller) return;
             abortRef.current = null;
-            setScopedProgress({ doc, assetSource, voiceManifest, progress: finalProgress });
+            setScopedProgress({ doc, assetSource, voiceManifest, voiceWorkspaceBaseUrl, progress: finalProgress });
             setLocalRunning(false);
             const nextStatus = await inspectStoryCacheStatus(doc, {
                 assetSource,
                 models,
                 voiceManifest,
+                voiceManifestUrlOptions,
                 live2dSources,
                 includeUiKit,
             }).catch(() => null);
             if (!mountedRef.current || runIdRef.current !== runId) return;
             if (nextStatus) {
-                setScopedCache({ doc, assetSource, voiceManifest, status: nextStatus });
+                setScopedCache({ doc, assetSource, voiceManifest, voiceWorkspaceBaseUrl, status: nextStatus });
             }
             if (finalProgress.done) {
                 onComplete?.(finalProgress);
@@ -255,7 +285,20 @@ export function AssetPreloadDialog({
             abortRef.current = null;
             setLocalRunning(false);
         }
-    }, [assetSource, doc, externalRunning, includeUiKit, live2dSources, localRunning, models, onCancelExternal, onComplete, voiceManifest]);
+    }, [
+        assetSource,
+        doc,
+        externalRunning,
+        includeUiKit,
+        live2dSources,
+        localRunning,
+        models,
+        onCancelExternal,
+        onComplete,
+        voiceManifest,
+        voiceManifestUrlOptions,
+        voiceWorkspaceBaseUrl,
+    ]);
 
     const handleAutoPreloadToggle = useCallback((checked: boolean) => {
         writeAutoPreloadPreference(checked);

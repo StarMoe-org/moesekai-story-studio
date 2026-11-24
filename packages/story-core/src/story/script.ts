@@ -11,9 +11,12 @@
 import {
     CONDITION_OPS,
     EFFECT_COLORS,
+    STAGE_ACTION_KINDS,
     STORY_REGIONS,
     STORY_SCHEMA_VERSION,
     STORY_SLOTS,
+    TELOP_ACTOR_VISIBILITIES,
+    TELOP_POSITIONS,
     TRANSITION_KINDS,
     VOICE_KINDS,
     type ActorReaction,
@@ -33,7 +36,11 @@ import {
     type SceneBeat,
     type SceneNode,
     type StageActionBeat,
+    type StageActionItem,
+    type StageCastEnterTiming,
     type StageCastSlot,
+    type StageLayoutMode,
+    type StageTransitionStyle,
     type StartNode,
     type StoryCastMember,
     type StoryDocument,
@@ -47,7 +54,9 @@ import {
     type StoryVoiceKind,
     type StoryVoiceRef,
     type TalkBeat,
+    type TelopActorVisibility,
     type TelopBeat,
+    type TelopPosition,
     type TransitionKind,
     type TransitionSlot,
     type VarOp,
@@ -144,19 +153,54 @@ function serializeVoice(voice: StoryVoiceRef): string {
 
 function serializeActorSlot(actor: SceneActorSlot): string {
     const parts = [`${actor.castKey} at ${actor.slot}`];
+    if (actor.x !== undefined) parts.push(`x=${fmtNum(actor.x)}`);
     if (actor.scale !== undefined) parts.push(`scale=${fmtNum(actor.scale)}`);
     if (actor.y !== undefined) parts.push(`y=${fmtNum(actor.y)}`);
     if (actor.z !== undefined) parts.push(`z=${fmtNum(actor.z)}`);
+    if (actor.lockX) parts.push("lock");
+    if (actor.mirror) parts.push("mirror");
     if (actor.allowOverlap) parts.push("overlap");
     if (actor.motion) parts.push(`motion=${escapeStr(actor.motion)}`);
     if (actor.facial) parts.push(`facial=${escapeStr(actor.facial)}`);
     return parts.join(" ");
 }
 
+function serializeStageActionItem(item: StageActionItem, options?: { omitTiming?: boolean }): string {
+    const parts = [`${item.action} ${item.castKey}`];
+    if (item.action === "enter" && item.slot) parts.push(`at ${item.slot}`);
+    else if (item.action === "move" && item.slot) parts.push(`to ${item.slot}`);
+    else if (item.slot) parts.push(`at ${item.slot}`);
+    if (item.x !== undefined) parts.push(`x=${fmtNum(item.x)}`);
+    if (!options?.omitTiming) {
+        if (item.duration !== undefined) parts.push(`dur=${fmtNum(item.duration)}`);
+        if (item.delay !== undefined) parts.push(`delay=${fmtNum(item.delay)}`);
+        if (item.transition === "instant" || item.transition === "fade") parts.push(item.transition);
+    }
+    if (item.scale !== undefined) parts.push(`scale=${fmtNum(item.scale)}`);
+    if (item.y !== undefined) parts.push(`y=${fmtNum(item.y)}`);
+    if (item.z !== undefined) parts.push(`z=${fmtNum(item.z)}`);
+    if (item.lockX === true) parts.push("lock");
+    else if (item.lockX === false) parts.push("lock=false");
+    if (item.mirror === true) parts.push("mirror");
+    else if (item.mirror === false) parts.push("mirror=false");
+    if (item.allowOverlap) parts.push("overlap");
+    if (item.motion) parts.push(`motion=${escapeStr(item.motion)}`);
+    if (item.facial) parts.push(`facial=${escapeStr(item.facial)}`);
+    return parts.join(" ");
+}
+
 function serializeBeat(beat: SceneBeat): string {
     switch (beat.kind) {
-        case "telop":
-            return `telop ${escapeStr(beat.text)}`;
+        case "telop": {
+            const parts = [`telop ${escapeStr(beat.text)}`];
+            if (beat.actorVisibility && beat.actorVisibility !== "keep") {
+                parts.push(`actors=${beat.actorVisibility}`);
+            }
+            if (beat.position && beat.position !== "center") {
+                parts.push(`pos=${beat.position}`);
+            }
+            return parts.join(" ");
+        }
         case "narration": {
             const parts = [`narration ${escapeStr(beat.body)}`];
             if (beat.se) parts.push(`se=${escapeStr(beat.se)}`);
@@ -186,17 +230,20 @@ function serializeBeat(beat: SceneBeat): string {
             return parts.join(" ");
         }
         case "stageAction": {
-            const parts = [`stage ${beat.action} ${beat.castKey}`];
-            if (beat.action === "enter" && beat.slot) parts.push(`at ${beat.slot}`);
-            else if (beat.action === "move" && beat.slot) parts.push(`to ${beat.slot}`);
-            else if (beat.slot) parts.push(`at ${beat.slot}`);
-            if (beat.duration !== undefined) parts.push(`dur=${fmtNum(beat.duration)}`);
-            if (beat.scale !== undefined) parts.push(`scale=${fmtNum(beat.scale)}`);
-            if (beat.y !== undefined) parts.push(`y=${fmtNum(beat.y)}`);
-            if (beat.z !== undefined) parts.push(`z=${fmtNum(beat.z)}`);
-            if (beat.allowOverlap) parts.push("overlap");
-            if (beat.motion) parts.push(`motion=${escapeStr(beat.motion)}`);
-            if (beat.facial) parts.push(`facial=${escapeStr(beat.facial)}`);
+            if (beat.group && beat.group.length > 0) {
+                const serializedItems = [
+                    serializeStageActionItem(beat, { omitTiming: true }),
+                    ...beat.group.map(item => serializeStageActionItem(item)),
+                ];
+                const parts = [`stage sync [ ${serializedItems.join("; ")} ]`];
+                if (beat.duration !== undefined) parts.push(`dur=${fmtNum(beat.duration)}`);
+                if (beat.delay !== undefined) parts.push(`delay=${fmtNum(beat.delay)}`);
+                if (beat.transition === "instant" || beat.transition === "fade") parts.push(beat.transition);
+                if (beat.parallel) parts.push("parallel");
+                return parts.join(" ");
+            }
+            const parts = [`stage ${serializeStageActionItem(beat)}`];
+            if (beat.parallel) parts.push("parallel");
             return parts.join(" ");
         }
         case "cue": {
@@ -325,10 +372,19 @@ export function serializeStoryScript(
                 }
                 lines.push(`  transition ${node.transition.kind} ${fmtNum(node.transition.duration)}`);
                 if (node.stageCast.mode === "set") {
+                    const mods: string[] = [];
+                    if (node.stageCast.layoutMode === "fixed") mods.push("fixed");
+                    if (node.stageCast.enterTiming === "afterTelop") mods.push("afterTelop");
+                    if (node.stageCast.enterDelay !== undefined) mods.push(`delay=${fmtNum(node.stageCast.enterDelay)}`);
+                    if (node.stageCast.enterDuration !== undefined) mods.push(`dur=${fmtNum(node.stageCast.enterDuration)}`);
+                    if (node.stageCast.enterTransition === "instant" || node.stageCast.enterTransition === "fade") {
+                        mods.push(node.stageCast.enterTransition);
+                    }
+                    const modStr = mods.length > 0 ? ` ${mods.join(" ")}` : "";
                     if (node.stageCast.actors.length === 0) {
-                        lines.push("  cast set []");
+                        lines.push(`  cast set${modStr} []`);
                     } else {
-                        lines.push("  cast set [");
+                        lines.push(`  cast set${modStr} [`);
                         for (const actor of node.stageCast.actors) {
                             lines.push(`    ${serializeActorSlot(actor)}`);
                         }
@@ -836,6 +892,123 @@ class ScriptParser {
         };
     }
 
+    parseOptionalBoolValue(flagName: string): boolean {
+        if (this.at("EQ")) {
+            this.next();
+            const bTok = this.expect("IDENT", "boolean (true/false)");
+            if (bTok) {
+                if (bTok.value === "true") return true;
+                if (bTok.value === "false") return false;
+                this.error(bTok, `Expected true or false for ${flagName}, got '${bTok.value}'`);
+            }
+        }
+        return true;
+    }
+
+    parseStageActionItemClause(options: { stopAtBracket: boolean }): { item: StageActionItem; parallel?: boolean } | null {
+        const actionTok = this.expect("IDENT", "stage action (enter, move, pose, exit)");
+        const castTok = this.expectId("castKey");
+        if (!actionTok || !castTok) return null;
+        const itemLine = actionTok.line;
+        if (!(STAGE_ACTION_KINDS as readonly string[]).includes(actionTok.value)) {
+            this.error(actionTok, `Unknown stage action '${actionTok.value}'`);
+            return null;
+        }
+        let slot: StorySlot | undefined;
+        let x: number | undefined;
+        let scale: number | undefined;
+        let y: number | undefined;
+        let z: number | undefined;
+        let motion: string | undefined;
+        let facial: string | undefined;
+        let duration: number | undefined;
+        let delay: number | undefined;
+        let transition: StageTransitionStyle | undefined;
+        let allowOverlap = false;
+        let lockX: boolean | undefined;
+        let mirror: boolean | undefined;
+        let parallel = false;
+
+        while (
+            this.sameLineAs(itemLine)
+            && (!options.stopAtBracket || (!this.at("COMMA") && !this.at("RBRACKET")))
+        ) {
+            const mod = this.peek();
+            if (mod.kind === "IDENT" && mod.value === "overlap") {
+                this.next();
+                allowOverlap = this.parseOptionalBoolValue("overlap");
+            } else if (mod.kind === "IDENT" && mod.value === "lock") {
+                this.next();
+                lockX = this.parseOptionalBoolValue("lock");
+            } else if (mod.kind === "IDENT" && mod.value === "mirror") {
+                this.next();
+                mirror = this.parseOptionalBoolValue("mirror");
+            } else if (!options.stopAtBracket && mod.kind === "IDENT" && mod.value === "parallel") {
+                this.next();
+                parallel = this.parseOptionalBoolValue("parallel");
+            } else if (mod.kind === "IDENT" && (mod.value === "instant" || mod.value === "fade")) {
+                this.next();
+                transition = mod.value;
+            } else if (mod.kind === "IDENT" && (mod.value === "at" || mod.value === "to")) {
+                this.next();
+                const sTok = this.expect("IDENT", "slot");
+                if (sTok) {
+                    if (!(STORY_SLOTS as readonly string[]).includes(sTok.value)) {
+                        this.error(sTok, `Invalid slot '${sTok.value}'`);
+                    } else {
+                        slot = sTok.value as StorySlot;
+                    }
+                }
+            } else if (
+                mod.kind === "IDENT"
+                && (mod.value === "x" || mod.value === "dur" || mod.value === "delay" || mod.value === "scale" || mod.value === "y" || mod.value === "z")
+            ) {
+                this.next();
+                this.expect("EQ", "'='");
+                const n = this.parseNumber();
+                if (n !== null) {
+                    if (mod.value === "x") x = n;
+                    else if (mod.value === "dur") duration = n;
+                    else if (mod.value === "delay") delay = n;
+                    else if (mod.value === "scale") scale = n;
+                    else if (mod.value === "y") y = n;
+                    else z = n;
+                }
+            } else if (mod.kind === "IDENT" && (mod.value === "motion" || mod.value === "facial")) {
+                this.next();
+                this.expect("EQ", "'='");
+                const s = this.expect("STRING", `${mod.value} string`);
+                if (s) {
+                    if (mod.value === "motion") motion = s.value;
+                    else facial = s.value;
+                }
+            } else {
+                this.error(mod, `Unexpected token '${mod.value}' in stage action`);
+                this.next();
+                break;
+            }
+        }
+
+        const item: StageActionItem = {
+            action: actionTok.value as StageActionItem["action"],
+            castKey: castTok.value,
+            ...(slot ? { slot } : {}),
+            ...(x !== undefined ? { x } : {}),
+            ...(scale !== undefined ? { scale } : {}),
+            ...(y !== undefined ? { y } : {}),
+            ...(z !== undefined ? { z } : {}),
+            ...(mirror !== undefined ? { mirror } : {}),
+            ...(motion ? { motion } : {}),
+            ...(facial ? { facial } : {}),
+            ...(duration !== undefined ? { duration } : {}),
+            ...(delay !== undefined ? { delay } : {}),
+            ...(transition !== undefined ? { transition } : {}),
+            ...(allowOverlap ? { allowOverlap: true } : {}),
+            ...(lockX !== undefined ? { lockX } : {}),
+        };
+        return { item, ...(parallel ? { parallel: true } : {}) };
+    }
+
     parseActorSlotEntry(): SceneActorSlot | null {
         const castTok = this.expectId("castKey");
         if (!castTok) return null;
@@ -846,32 +1019,37 @@ class ScriptParser {
         if (!(STORY_SLOTS as readonly string[]).includes(slotTok.value)) {
             this.error(slotTok, `Invalid slot '${slotTok.value}'`);
         }
+        let x: number | undefined;
         let scale: number | undefined;
         let y: number | undefined;
         let z: number | undefined;
         let motion: string | undefined;
         let facial: string | undefined;
         let allowOverlap = false;
+        let lockX = false;
+        let mirror = false;
 
         while (this.sameLineAs(entryLine) && !this.at("COMMA") && !this.at("RBRACKET")) {
             const k = this.peek();
             if (k.kind === "IDENT" && k.value === "overlap") {
                 this.next();
-                if (this.at("EQ")) {
-                    this.next();
-                    const bTok = this.expect("IDENT", "boolean (true/false)");
-                    if (bTok) {
-                        if (bTok.value === "true") allowOverlap = true;
-                        else if (bTok.value === "false") allowOverlap = false;
-                        else this.error(bTok, `Expected true or false for overlap, got '${bTok.value}'`);
-                    }
-                } else {
-                    allowOverlap = true;
-                }
-            } else if (k.kind === "IDENT" && (k.value === "scale" || k.value === "y" || k.value === "z" || k.value === "motion" || k.value === "facial")) {
+                allowOverlap = this.parseOptionalBoolValue("overlap");
+            } else if (k.kind === "IDENT" && k.value === "lock") {
+                this.next();
+                lockX = this.parseOptionalBoolValue("lock");
+            } else if (k.kind === "IDENT" && k.value === "mirror") {
+                this.next();
+                mirror = this.parseOptionalBoolValue("mirror");
+            } else if (
+                k.kind === "IDENT"
+                && (k.value === "x" || k.value === "scale" || k.value === "y" || k.value === "z" || k.value === "motion" || k.value === "facial")
+            ) {
                 this.next();
                 this.expect("EQ", "'='");
-                if (k.value === "scale") {
+                if (k.value === "x") {
+                    const v = this.parseNumber();
+                    if (v !== null) x = v;
+                } else if (k.value === "scale") {
                     const v = this.parseNumber();
                     if (v !== null) scale = v;
                 } else if (k.value === "y") {
@@ -895,6 +1073,9 @@ class ScriptParser {
         return {
             castKey: castTok.value,
             slot: (STORY_SLOTS.includes(slotTok.value as StorySlot) ? slotTok.value : "center") as StorySlot,
+            ...(x !== undefined ? { x } : {}),
+            ...(lockX ? { lockX: true } : {}),
+            ...(mirror ? { mirror: true } : {}),
             ...(scale !== undefined ? { scale } : {}),
             ...(y !== undefined ? { y } : {}),
             ...(z !== undefined ? { z } : {}),
@@ -1171,10 +1352,42 @@ class ScriptParser {
                             if (modeTok?.value === "inherit") stageCast = { mode: "inherit" };
                             else if (modeTok?.value === "clear") stageCast = { mode: "clear" };
                             else if (modeTok?.value === "set") {
+                                let layoutMode: StageLayoutMode | undefined;
+                                let enterTiming: StageCastEnterTiming | undefined;
+                                let enterDelay: number | undefined;
+                                let enterDuration: number | undefined;
+                                let enterTransition: StageTransitionStyle | undefined;
+
+                                while (this.sameLineAs(stmtLine) && !this.at("LBRACKET")) {
+                                    const mod = this.peek();
+                                    if (mod.kind === "IDENT" && (mod.value === "fixed" || mod.value === "auto")) {
+                                        this.next();
+                                        layoutMode = mod.value;
+                                    } else if (mod.kind === "IDENT" && (mod.value === "afterTelop" || mod.value === "immediate")) {
+                                        this.next();
+                                        enterTiming = mod.value;
+                                    } else if (mod.kind === "IDENT" && (mod.value === "instant" || mod.value === "fade")) {
+                                        this.next();
+                                        enterTransition = mod.value;
+                                    } else if (mod.kind === "IDENT" && (mod.value === "delay" || mod.value === "dur")) {
+                                        this.next();
+                                        this.expect("EQ", "'='");
+                                        const n = this.parseNumber();
+                                        if (n !== null) {
+                                            if (mod.value === "delay") enterDelay = n;
+                                            else enterDuration = n;
+                                        }
+                                    } else {
+                                        this.error(mod, `Unexpected token '${mod.value}' in cast set`);
+                                        this.next();
+                                        break;
+                                    }
+                                }
+
                                 if (this.expect("LBRACKET", "'['")) {
                                     const actors: SceneActorSlot[] = [];
                                     while (!this.at("RBRACKET") && !this.at("EOF")) {
-                                        if (this.at("COMMA")) {
+                                        if (this.at("COMMA") || this.at("SEMI")) {
                                             this.next();
                                             continue;
                                         }
@@ -1183,7 +1396,15 @@ class ScriptParser {
                                         else break;
                                     }
                                     this.expect("RBRACKET", "']'");
-                                    stageCast = { mode: "set", actors };
+                                    stageCast = {
+                                        mode: "set",
+                                        actors,
+                                        ...(enterTiming !== undefined ? { enterTiming } : {}),
+                                        ...(enterDelay !== undefined ? { enterDelay } : {}),
+                                        ...(enterDuration !== undefined ? { enterDuration } : {}),
+                                        ...(enterTransition !== undefined ? { enterTransition } : {}),
+                                        ...(layoutMode !== undefined ? { layoutMode } : {}),
+                                    };
                                 }
                             } else if (modeTok) {
                                 this.error(modeTok, `Unknown cast mode '${modeTok.value}'`);
@@ -1192,8 +1413,46 @@ class ScriptParser {
                         }
                         case "telop": {
                             const textTok = this.expect("STRING", "telop text");
+                            let actorVisibility: TelopActorVisibility | undefined;
+                            let position: TelopPosition | undefined;
+                            while (this.sameLineAs(stmtLine)) {
+                                const mod = this.peek();
+                                if (mod.kind === "IDENT" && mod.value === "actors") {
+                                    this.next();
+                                    this.expect("EQ", "'='");
+                                    const vTok = this.expect("IDENT", "actor visibility (keep, hide, dim)");
+                                    if (vTok) {
+                                        if (!(TELOP_ACTOR_VISIBILITIES as readonly string[]).includes(vTok.value)) {
+                                            this.error(vTok, `Invalid telop actor visibility '${vTok.value}'`);
+                                        } else {
+                                            actorVisibility = vTok.value as TelopActorVisibility;
+                                        }
+                                    }
+                                } else if (mod.kind === "IDENT" && mod.value === "pos") {
+                                    this.next();
+                                    this.expect("EQ", "'='");
+                                    const pTok = this.expect("IDENT", "telop position (center, top, bottom)");
+                                    if (pTok) {
+                                        if (!(TELOP_POSITIONS as readonly string[]).includes(pTok.value)) {
+                                            this.error(pTok, `Invalid telop position '${pTok.value}'`);
+                                        } else {
+                                            position = pTok.value as TelopPosition;
+                                        }
+                                    }
+                                } else {
+                                    this.error(mod, `Unexpected token '${mod.value}' in telop`);
+                                    this.next();
+                                    break;
+                                }
+                            }
                             if (textTok) {
-                                const beat: TelopBeat = { id: nextBeatId(), kind: "telop", text: textTok.value };
+                                const beat: TelopBeat = {
+                                    id: nextBeatId(),
+                                    kind: "telop",
+                                    text: textTok.value,
+                                    ...(actorVisibility !== undefined ? { actorVisibility } : {}),
+                                    ...(position !== undefined ? { position } : {}),
+                                };
                                 beats.push(beat);
                             }
                             break;
@@ -1318,87 +1577,92 @@ class ScriptParser {
                             break;
                         }
                         case "stage": {
-                            const actionTok = this.expect("IDENT", "stage action (enter, move, pose, exit)");
-                            const castTok = this.expectId("castKey");
-                            if (!actionTok || !castTok) break;
-                            const validAction = actionTok.value === "enter" || actionTok.value === "move"
-                                || actionTok.value === "pose" || actionTok.value === "exit";
-                            if (!validAction) {
-                                this.error(actionTok, `Unknown stage action '${actionTok.value}'`);
-                                break;
-                            }
-                            let slot: StorySlot | undefined;
-                            let scale: number | undefined;
-                            let y: number | undefined;
-                            let z: number | undefined;
-                            let motion: string | undefined;
-                            let facial: string | undefined;
-                            let duration: number | undefined;
-                            let allowOverlap = false;
-
-                            while (this.sameLineAs(stmtLine)) {
-                                const mod = this.peek();
-                                if (mod.kind === "IDENT" && mod.value === "overlap") {
-                                    this.next();
-                                    if (this.at("EQ")) {
+                            if (this.at("IDENT", "sync")) {
+                                const syncTok = this.next();
+                                if (!this.expect("LBRACKET", "'['")) break;
+                                const items: StageActionItem[] = [];
+                                while (!this.at("RBRACKET") && !this.at("EOF")) {
+                                    if (this.at("SEMI") || this.at("COMMA")) {
                                         this.next();
-                                        const bTok = this.expect("IDENT", "boolean (true/false)");
-                                        if (bTok) {
-                                            if (bTok.value === "true") allowOverlap = true;
-                                            else if (bTok.value === "false") allowOverlap = false;
-                                            else this.error(bTok, `Expected true or false for overlap, got '${bTok.value}'`);
-                                        }
-                                    } else {
-                                        allowOverlap = true;
+                                        continue;
                                     }
-                                } else if (mod.kind === "IDENT" && (mod.value === "at" || mod.value === "to")) {
-                                    this.next();
-                                    const sTok = this.expect("IDENT", "slot");
-                                    if (sTok) {
-                                        if (!(STORY_SLOTS as readonly string[]).includes(sTok.value)) {
-                                            this.error(sTok, `Invalid slot '${sTok.value}'`);
+                                    const parsedItem = this.parseStageActionItemClause({ stopAtBracket: true });
+                                    if (parsedItem) items.push(parsedItem.item);
+                                    else break;
+                                }
+                                const closeTok = this.expect("RBRACKET", "']'");
+
+                                let waveDuration: number | undefined;
+                                let waveDelay: number | undefined;
+                                let waveTransition: StageTransitionStyle | undefined;
+                                let parallel = false;
+                                if (closeTok) {
+                                    while (this.sameLineAs(closeTok.line)) {
+                                        const mod = this.peek();
+                                        if (mod.kind === "IDENT" && mod.value === "parallel") {
+                                            this.next();
+                                            parallel = this.parseOptionalBoolValue("parallel");
+                                        } else if (mod.kind === "IDENT" && (mod.value === "instant" || mod.value === "fade")) {
+                                            this.next();
+                                            waveTransition = mod.value;
+                                        } else if (mod.kind === "IDENT" && (mod.value === "dur" || mod.value === "delay")) {
+                                            this.next();
+                                            this.expect("EQ", "'='");
+                                            const n = this.parseNumber();
+                                            if (n !== null) {
+                                                if (mod.value === "dur") waveDuration = n;
+                                                else waveDelay = n;
+                                            }
                                         } else {
-                                            slot = sTok.value as StorySlot;
+                                            this.error(mod, `Unexpected token '${mod.value}' after stage sync [...]`);
+                                            this.next();
+                                            break;
                                         }
                                     }
-                                } else if (mod.kind === "IDENT" && (mod.value === "dur" || mod.value === "scale" || mod.value === "y" || mod.value === "z")) {
-                                    this.next();
-                                    this.expect("EQ", "'='");
-                                    const n = this.parseNumber();
-                                    if (n !== null) {
-                                        if (mod.value === "dur") duration = n;
-                                        else if (mod.value === "scale") scale = n;
-                                        else if (mod.value === "y") y = n;
-                                        else z = n;
-                                    }
-                                } else if (mod.kind === "IDENT" && (mod.value === "motion" || mod.value === "facial")) {
-                                    this.next();
-                                    this.expect("EQ", "'='");
-                                    const s = this.expect("STRING", `${mod.value} string`);
-                                    if (s) {
-                                        if (mod.value === "motion") motion = s.value;
-                                        else facial = s.value;
-                                    }
-                                } else {
-                                    this.error(mod, `Unexpected token '${mod.value}' in stage action`);
-                                    this.next();
+                                }
+
+                                if (items.length === 0) {
+                                    this.error(syncTok, "stage sync requires at least one stage action");
                                     break;
                                 }
+
+                                const [first, ...rest] = items;
+                                // If primary item has its own explicit timing differing from trailing wave default,
+                                // materialize trailing defaults onto any group item that omitted them so nothing is lost.
+                                const materializedGroup = rest.map((g): StageActionItem => ({
+                                    ...g,
+                                    ...(g.duration === undefined && first.duration !== undefined && waveDuration !== undefined
+                                        ? { duration: waveDuration }
+                                        : {}),
+                                    ...(g.delay === undefined && first.delay !== undefined && waveDelay !== undefined
+                                        ? { delay: waveDelay }
+                                        : {}),
+                                    ...(g.transition === undefined && first.transition !== undefined && waveTransition !== undefined
+                                        ? { transition: waveTransition }
+                                        : {}),
+                                }));
+
+                                const beat: StageActionBeat = {
+                                    id: nextBeatId(),
+                                    kind: "stageAction",
+                                    ...first,
+                                    ...(first.duration === undefined && waveDuration !== undefined ? { duration: waveDuration } : {}),
+                                    ...(first.delay === undefined && waveDelay !== undefined ? { delay: waveDelay } : {}),
+                                    ...(first.transition === undefined && waveTransition !== undefined ? { transition: waveTransition } : {}),
+                                    ...(materializedGroup.length > 0 ? { group: materializedGroup } : {}),
+                                    ...(parallel ? { parallel: true } : {}),
+                                };
+                                beats.push(beat);
+                                break;
                             }
 
+                            const parsedSingle = this.parseStageActionItemClause({ stopAtBracket: false });
+                            if (!parsedSingle) break;
                             const beat: StageActionBeat = {
                                 id: nextBeatId(),
                                 kind: "stageAction",
-                                action: actionTok.value as StageActionBeat["action"],
-                                castKey: castTok.value,
-                                ...(slot ? { slot } : {}),
-                                ...(scale !== undefined ? { scale } : {}),
-                                ...(y !== undefined ? { y } : {}),
-                                ...(z !== undefined ? { z } : {}),
-                                ...(motion ? { motion } : {}),
-                                ...(facial ? { facial } : {}),
-                                ...(duration !== undefined ? { duration } : {}),
-                                ...(allowOverlap ? { allowOverlap: true } : {}),
+                                ...parsedSingle.item,
+                                ...(parsedSingle.parallel ? { parallel: true } : {}),
                             };
                             beats.push(beat);
                             break;

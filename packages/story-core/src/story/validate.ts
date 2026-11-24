@@ -10,6 +10,9 @@ import {
     EFFECT_COLORS,
     SCENE_BEAT_KINDS,
     STAGE_ACTION_KINDS,
+    STAGE_CAST_ENTER_TIMINGS,
+    STAGE_LAYOUT_MODES,
+    STAGE_TRANSITION_STYLES,
     STORY_I18N_SCHEMA_VERSION,
     STORY_NODE_TYPES,
     STORY_REGIONS,
@@ -17,6 +20,8 @@ import {
     STORY_SLOTS,
     STORY_TRANSLATION_ORIGINS,
     STORY_VAR_TYPES,
+    TELOP_ACTOR_VISIBILITIES,
+    TELOP_POSITIONS,
     TRANSITION_KINDS,
     VOICE_KINDS,
     type ActorReaction,
@@ -28,6 +33,7 @@ import {
     type PlaceSlot,
     type SceneActorSlot,
     type SceneBeat,
+    type StageActionItem,
     type StageCastSlot,
     type StoryCastMember,
     type StoryCompileDiagnostic,
@@ -454,6 +460,14 @@ function checkTransitionSlot(checker: Checker, raw: unknown, path: string): Tran
     return kind && duration !== undefined ? { kind, duration } : undefined;
 }
 
+function checkOptionalBool(checker: Checker, raw: Raw, key: string, path: string): boolean | undefined {
+    const value = raw[key];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value === "boolean") return value;
+    checker.add("fieldType", `${path}.${key}`, { expected: "boolean" });
+    return undefined;
+}
+
 function checkStageCastSlot(checker: Checker, raw: unknown, path: string): StageCastSlot | undefined {
     if (!isObject(raw)) {
         checker.add(raw === undefined ? "fieldMissing" : "notObject", path);
@@ -470,6 +484,22 @@ function checkStageCastSlot(checker: Checker, raw: unknown, path: string): Stage
         checker.add("actorLimitExceeded", `${path}.actors`, { max: STORY_LIMITS.stageActors });
         return undefined;
     }
+    const enterTiming = raw.enterTiming === undefined || raw.enterTiming === null
+        ? undefined
+        : checker.oneOf(raw, "enterTiming", path, STAGE_CAST_ENTER_TIMINGS);
+    const enterDelay = raw.enterDelay === undefined || raw.enterDelay === null
+        ? undefined
+        : checker.number(raw, "enterDelay", path, STORY_LIMITS.delayMin, STORY_LIMITS.delayMax);
+    const enterDuration = raw.enterDuration === undefined || raw.enterDuration === null
+        ? undefined
+        : checker.number(raw, "enterDuration", path, STORY_LIMITS.duration.min, STORY_LIMITS.duration.max);
+    const enterTransition = raw.enterTransition === undefined || raw.enterTransition === null
+        ? undefined
+        : checker.oneOf(raw, "enterTransition", path, STAGE_TRANSITION_STYLES);
+    const layoutMode = raw.layoutMode === undefined || raw.layoutMode === null
+        ? undefined
+        : checker.oneOf(raw, "layoutMode", path, STAGE_LAYOUT_MODES);
+
     const actors: SceneActorSlot[] = [];
     raw.actors.forEach((item, idx) => {
         const aPath = `${path}.actors[${idx}]`;
@@ -479,6 +509,11 @@ function checkStageCastSlot(checker: Checker, raw: unknown, path: string): Stage
         }
         const castKey = checker.pattern(item, "castKey", aPath, STORY_ID_PATTERN, "idInvalid");
         const slot = checker.oneOf(item, "slot", aPath, STORY_SLOTS);
+        const x = item.x === undefined || item.x === null
+            ? undefined
+            : checker.number(item, "x", aPath, STORY_LIMITS.xMin, STORY_LIMITS.xMax);
+        const lockX = checkOptionalBool(checker, item, "lockX", aPath);
+        const mirror = checkOptionalBool(checker, item, "mirror", aPath);
         const scale = item.scale === undefined || item.scale === null
             ? undefined
             : checker.number(item, "scale", aPath, STORY_LIMITS.scaleMin, STORY_LIMITS.scaleMax);
@@ -490,15 +525,14 @@ function checkStageCastSlot(checker: Checker, raw: unknown, path: string): Stage
             : checker.integer(item, "z", aPath, STORY_LIMITS.zMin, STORY_LIMITS.zMax);
         const motion = checker.motion(item, "motion", aPath);
         const facial = checker.motion(item, "facial", aPath);
-        const allowOverlap = item.allowOverlap === undefined || item.allowOverlap === null
-            ? undefined
-            : typeof item.allowOverlap === "boolean"
-                ? item.allowOverlap
-                : (checker.add("fieldType", `${aPath}.allowOverlap`, { expected: "boolean" }), undefined);
+        const allowOverlap = checkOptionalBool(checker, item, "allowOverlap", aPath);
         if (!castKey || !slot) return;
         actors.push({
             castKey,
             slot,
+            ...(x !== undefined ? { x } : {}),
+            ...(lockX ? { lockX: true } : {}),
+            ...(mirror ? { mirror: true } : {}),
             ...(scale !== undefined ? { scale } : {}),
             ...(y !== undefined ? { y } : {}),
             ...(z !== undefined ? { z } : {}),
@@ -507,7 +541,67 @@ function checkStageCastSlot(checker: Checker, raw: unknown, path: string): Stage
             ...(allowOverlap ? { allowOverlap: true } : {}),
         });
     });
-    return { mode: "set", actors };
+    return {
+        mode: "set",
+        actors,
+        ...(enterTiming !== undefined ? { enterTiming } : {}),
+        ...(enterDelay !== undefined ? { enterDelay } : {}),
+        ...(enterDuration !== undefined ? { enterDuration } : {}),
+        ...(enterTransition !== undefined ? { enterTransition } : {}),
+        ...(layoutMode !== undefined ? { layoutMode } : {}),
+    };
+}
+
+function checkStageActionItem(checker: Checker, raw: Raw, path: string): StageActionItem | undefined {
+    const action = checker.oneOf(raw, "action", path, STAGE_ACTION_KINDS);
+    const castKey = checker.pattern(raw, "castKey", path, STORY_ID_PATTERN, "idInvalid");
+    const slot = raw.slot === undefined || raw.slot === null
+        ? undefined
+        : checker.oneOf(raw, "slot", path, STORY_SLOTS);
+    const x = raw.x === undefined || raw.x === null
+        ? undefined
+        : checker.number(raw, "x", path, STORY_LIMITS.xMin, STORY_LIMITS.xMax);
+    const scale = raw.scale === undefined || raw.scale === null
+        ? undefined
+        : checker.number(raw, "scale", path, STORY_LIMITS.scaleMin, STORY_LIMITS.scaleMax);
+    const y = raw.y === undefined || raw.y === null
+        ? undefined
+        : checker.number(raw, "y", path, STORY_LIMITS.yMin, STORY_LIMITS.yMax);
+    const z = raw.z === undefined || raw.z === null
+        ? undefined
+        : checker.integer(raw, "z", path, STORY_LIMITS.zMin, STORY_LIMITS.zMax);
+    const mirror = checkOptionalBool(checker, raw, "mirror", path);
+    const motion = checker.motion(raw, "motion", path);
+    const facial = checker.motion(raw, "facial", path);
+    const duration = raw.duration === undefined || raw.duration === null
+        ? undefined
+        : checker.number(raw, "duration", path, STORY_LIMITS.duration.min, STORY_LIMITS.duration.max);
+    const delay = raw.delay === undefined || raw.delay === null
+        ? undefined
+        : checker.number(raw, "delay", path, STORY_LIMITS.delayMin, STORY_LIMITS.delayMax);
+    const transition = raw.transition === undefined || raw.transition === null
+        ? undefined
+        : checker.oneOf(raw, "transition", path, STAGE_TRANSITION_STYLES);
+    const allowOverlap = checkOptionalBool(checker, raw, "allowOverlap", path);
+    const lockX = checkOptionalBool(checker, raw, "lockX", path);
+    if (!action || !castKey) return undefined;
+    return {
+        action,
+        castKey,
+        ...(slot ? { slot } : {}),
+        ...(x !== undefined ? { x } : {}),
+        ...(scale !== undefined ? { scale } : {}),
+        ...(y !== undefined ? { y } : {}),
+        ...(z !== undefined ? { z } : {}),
+        ...(mirror !== undefined ? { mirror } : {}),
+        ...(motion ? { motion } : {}),
+        ...(facial ? { facial } : {}),
+        ...(duration !== undefined ? { duration } : {}),
+        ...(delay !== undefined ? { delay } : {}),
+        ...(transition !== undefined ? { transition } : {}),
+        ...(allowOverlap ? { allowOverlap: true } : {}),
+        ...(lockX !== undefined ? { lockX } : {}),
+    };
 }
 
 function checkBeat(checker: Checker, raw: unknown, path: string): SceneBeat | undefined {
@@ -604,47 +698,51 @@ function checkBeat(checker: Checker, raw: unknown, path: string): SceneBeat | un
         }
         case "telop": {
             const text = checker.string(raw, "text", path, STORY_LIMITS.telop);
-            return text === undefined ? undefined : done({ id, kind: "telop", text });
+            const actorVisibility = raw.actorVisibility === undefined || raw.actorVisibility === null
+                ? undefined
+                : checker.oneOf(raw, "actorVisibility", path, TELOP_ACTOR_VISIBILITIES);
+            const position = raw.position === undefined || raw.position === null
+                ? undefined
+                : checker.oneOf(raw, "position", path, TELOP_POSITIONS);
+            return text === undefined
+                ? undefined
+                : done({
+                    id,
+                    kind: "telop",
+                    text,
+                    ...(actorVisibility !== undefined ? { actorVisibility } : {}),
+                    ...(position !== undefined ? { position } : {}),
+                });
         }
         case "stageAction": {
-            const action = checker.oneOf(raw, "action", path, STAGE_ACTION_KINDS);
-            const castKey = checker.pattern(raw, "castKey", path, STORY_ID_PATTERN, "idInvalid");
-            const slot = raw.slot === undefined || raw.slot === null
-                ? undefined
-                : checker.oneOf(raw, "slot", path, STORY_SLOTS);
-            const scale = raw.scale === undefined || raw.scale === null
-                ? undefined
-                : checker.number(raw, "scale", path, STORY_LIMITS.scaleMin, STORY_LIMITS.scaleMax);
-            const y = raw.y === undefined || raw.y === null
-                ? undefined
-                : checker.number(raw, "y", path, STORY_LIMITS.yMin, STORY_LIMITS.yMax);
-            const z = raw.z === undefined || raw.z === null
-                ? undefined
-                : checker.integer(raw, "z", path, STORY_LIMITS.zMin, STORY_LIMITS.zMax);
-            const motion = checker.motion(raw, "motion", path);
-            const facial = checker.motion(raw, "facial", path);
-            const duration = raw.duration === undefined || raw.duration === null
-                ? undefined
-                : checker.number(raw, "duration", path, STORY_LIMITS.duration.min, STORY_LIMITS.duration.max);
-            const allowOverlap = raw.allowOverlap === undefined || raw.allowOverlap === null
-                ? undefined
-                : typeof raw.allowOverlap === "boolean"
-                    ? raw.allowOverlap
-                    : (checker.add("fieldType", `${path}.allowOverlap`, { expected: "boolean" }), undefined);
-            if (!action || !castKey) return undefined;
+            const primary = checkStageActionItem(checker, raw, path);
+            const parallel = checkOptionalBool(checker, raw, "parallel", path);
+            let group: StageActionItem[] | undefined;
+            if (raw.group !== undefined && raw.group !== null) {
+                if (!Array.isArray(raw.group)) {
+                    checker.add("fieldType", `${path}.group`, { expected: "array" });
+                } else if (raw.group.length > STORY_LIMITS.cast - 1) {
+                    checker.add("tooMany", `${path}.group`, { max: STORY_LIMITS.cast - 1 });
+                } else if (raw.group.length > 0) {
+                    group = [];
+                    raw.group.forEach((item, idx) => {
+                        const gPath = `${path}.group[${idx}]`;
+                        if (!isObject(item)) {
+                            checker.add("notObject", gPath);
+                            return;
+                        }
+                        const checked = checkStageActionItem(checker, item, gPath);
+                        if (checked) group!.push(checked);
+                    });
+                }
+            }
+            if (!primary) return undefined;
             return done({
                 id,
                 kind: "stageAction",
-                action,
-                castKey,
-                ...(slot ? { slot } : {}),
-                ...(scale !== undefined ? { scale } : {}),
-                ...(y !== undefined ? { y } : {}),
-                ...(z !== undefined ? { z } : {}),
-                ...(motion ? { motion } : {}),
-                ...(facial ? { facial } : {}),
-                ...(duration !== undefined ? { duration } : {}),
-                ...(allowOverlap ? { allowOverlap: true } : {}),
+                ...primary,
+                ...(group && group.length > 0 ? { group } : {}),
+                ...(parallel ? { parallel: true } : {}),
             });
         }
         case "cue": {

@@ -9,20 +9,30 @@
 import {
     CONDITION_OPS,
     EFFECT_COLORS,
+    STAGE_ACTION_KINDS,
+    STAGE_CAST_ENTER_TIMINGS,
+    STAGE_LAYOUT_MODES,
+    STAGE_TRANSITION_STYLES,
     STORY_REGIONS,
     STORY_SCHEMA_VERSION,
     STORY_SLOTS,
+    TELOP_ACTOR_VISIBILITIES,
+    TELOP_POSITIONS,
     TRANSITION_KINDS,
     VOICE_KINDS,
+    getStageActionItems,
     type BackgroundSlot,
     type BgmSlot,
     type ConditionExpr,
     type CueBeat,
     type NarrationBeat,
     type PlaceSlot,
+    type SceneBeat,
     type SceneNode,
     type StageActionBeat,
+    type StageActionItem,
     type StageCastSlot,
+    type StageLayoutMode,
     type StoryCompileDiagnostic,
     type StoryCompileDiagnosticSeverity,
     type StoryDocument,
@@ -48,6 +58,7 @@ import {
     STORY_MODEL_PATTERN,
     STORY_MOTION_PATTERN,
     STORY_TEMPLATE_VAR_PATTERN,
+    clampActorX,
     detectStageActorOverlaps,
     layoutStageActors,
 } from "./limits";
@@ -81,6 +92,14 @@ export type StoryIR =
         place: PlaceSlot;
         transition: TransitionSlot;
         stageCast: StageCastSlot;
+        /** When true, `enterScene` clears prior actors & defers mounting `stageCast.actors` to a subsequent `applyStageCast` instruction. */
+        deferStageCast?: boolean;
+    }
+    | {
+        op: "applyStageCast";
+        nodeId: string;
+        sceneId: string;
+        stageCast: Extract<StageCastSlot, { mode: "set" }>;
     }
     | { op: "talk"; nodeId: string; beatId: string; beat: TalkBeat }
     | { op: "narration"; nodeId: string; beatId: string; beat: NarrationBeat }
@@ -122,6 +141,26 @@ function compareStrings(a: string, b: string): number {
 
 function isBlockingScene(node: SceneNode): boolean {
     return node.beats.some(beat => beat.kind === "talk" || beat.kind === "narration" || beat.kind === "telop");
+}
+
+/**
+ * Returns the index of the last leading `telop` beat in `beats` (allowing non-blocking `cue`
+ * and `varOp` beats interleaved before or between leading telops), or `-1` when `beats` has
+ * no leading `telop`.
+ */
+export function findLeadingTelopEndIndex(beats: readonly SceneBeat[]): number {
+    let lastTelopIdx = -1;
+    for (let i = 0; i < beats.length; i += 1) {
+        const kind = beats[i].kind;
+        if (kind === "telop") {
+            lastTelopIdx = i;
+        } else if (kind === "cue" || kind === "varOp") {
+            continue;
+        } else {
+            break;
+        }
+    }
+    return lastTelopIdx;
 }
 
 // ==================== Compiler Implementation ====================
@@ -396,6 +435,7 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
     };
 
     const checkScaleAndY = (
+        x: number | undefined,
         scale: number | undefined,
         y: number | undefined,
         z: number | undefined,
@@ -403,6 +443,13 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
         nodeId: string,
         beatId?: string,
     ) => {
+        if (x !== undefined) {
+            if (typeof x !== "number" || !Number.isFinite(x) || x < STORY_LIMITS.xMin || x > STORY_LIMITS.xMax) {
+                addError("numberRange", `${path}.x`, {
+                    nodeId, beatId, params: { min: STORY_LIMITS.xMin, max: STORY_LIMITS.xMax },
+                });
+            }
+        }
         if (scale !== undefined) {
             if (typeof scale !== "number" || !Number.isFinite(scale) || scale < STORY_LIMITS.scaleMin || scale > STORY_LIMITS.scaleMax) {
                 addError("numberRange", `${path}.scale`, {
@@ -425,6 +472,31 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
             } else if (z < STORY_LIMITS.zMin || z > STORY_LIMITS.zMax) {
                 addError("numberRange", `${path}.z`, {
                     nodeId, beatId, params: { min: STORY_LIMITS.zMin, max: STORY_LIMITS.zMax },
+                });
+            }
+        }
+    };
+
+    const checkOptionalDelay = (value: number | undefined, path: string, nodeId: string, beatId?: string) => {
+        if (value !== undefined) {
+            if (typeof value !== "number" || !Number.isFinite(value) || value < STORY_LIMITS.delayMin || value > STORY_LIMITS.delayMax) {
+                addError("numberRange", path, {
+                    nodeId, beatId, params: { min: STORY_LIMITS.delayMin, max: STORY_LIMITS.delayMax },
+                });
+            }
+        }
+    };
+
+    const checkOptionalDuration = (value: number | undefined, path: string, nodeId: string, beatId?: string) => {
+        if (value !== undefined) {
+            if (
+                typeof value !== "number"
+                || !Number.isFinite(value)
+                || value < STORY_LIMITS.duration.min
+                || value > STORY_LIMITS.duration.max
+            ) {
+                addError("numberRange", path, {
+                    nodeId, beatId, params: { min: STORY_LIMITS.duration.min, max: STORY_LIMITS.duration.max },
                 });
             }
         }
@@ -515,8 +587,18 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
                     nodeId: key, params: { min: STORY_LIMITS.duration.min, max: STORY_LIMITS.duration.max },
                 });
             }
+            type TrackedStageActor = {
+                cast: string;
+                slot: StorySlot;
+                x: number;
+                scale: number;
+                allowOverlap?: boolean;
+                explicitX?: number;
+                lockX?: boolean;
+            };
+
             const emitStageOverlapWarnings = (
-                actors: ReadonlyArray<{ cast: string; slot: StorySlot; x: number; scale: number; allowOverlap?: boolean }>,
+                actors: ReadonlyArray<TrackedStageActor>,
                 path: string,
                 beatId?: string,
             ) => {
@@ -541,9 +623,39 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
                 }
             };
 
-            let trackedStage: Array<{ cast: string; slot: StorySlot; x: number; scale: number; allowOverlap?: boolean }> = [];
+            let trackedStage: TrackedStageActor[] = [];
+            let trackedLayoutMode: StageLayoutMode = "auto";
 
             if (node.stageCast.mode === "set") {
+                if (
+                    node.stageCast.enterTiming !== undefined
+                    && !(STAGE_CAST_ENTER_TIMINGS as readonly string[]).includes(node.stageCast.enterTiming)
+                ) {
+                    addError("enumInvalid", `${nodePath}.stageCast.enterTiming`, {
+                        nodeId: key, params: { allowed: STAGE_CAST_ENTER_TIMINGS.join(", ") },
+                    });
+                }
+                checkOptionalDelay(node.stageCast.enterDelay, `${nodePath}.stageCast.enterDelay`, key);
+                checkOptionalDuration(node.stageCast.enterDuration, `${nodePath}.stageCast.enterDuration`, key);
+                if (
+                    node.stageCast.enterTransition !== undefined
+                    && !(STAGE_TRANSITION_STYLES as readonly string[]).includes(node.stageCast.enterTransition)
+                ) {
+                    addError("enumInvalid", `${nodePath}.stageCast.enterTransition`, {
+                        nodeId: key, params: { allowed: STAGE_TRANSITION_STYLES.join(", ") },
+                    });
+                }
+                if (
+                    node.stageCast.layoutMode !== undefined
+                    && !(STAGE_LAYOUT_MODES as readonly string[]).includes(node.stageCast.layoutMode)
+                ) {
+                    addError("enumInvalid", `${nodePath}.stageCast.layoutMode`, {
+                        nodeId: key, params: { allowed: STAGE_LAYOUT_MODES.join(", ") },
+                    });
+                } else if (node.stageCast.layoutMode) {
+                    trackedLayoutMode = node.stageCast.layoutMode;
+                }
+
                 if (node.stageCast.actors.length > STORY_LIMITS.stageActors) {
                     addError("actorLimitExceeded", `${nodePath}.stageCast.actors`, {
                         nodeId: key, params: { max: STORY_LIMITS.stageActors },
@@ -561,12 +673,17 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
                     } else {
                         seenStageActors.add(actor.castKey);
                         if ((STORY_SLOTS as readonly string[]).includes(actor.slot)) {
+                            const explicitX = typeof actor.x === "number" && Number.isFinite(actor.x)
+                                ? clampActorX(actor.x)
+                                : undefined;
                             trackedStage.push({
                                 cast: actor.castKey,
                                 slot: actor.slot,
-                                x: SLOT_X[actor.slot],
+                                x: explicitX ?? SLOT_X[actor.slot],
                                 scale: typeof actor.scale === "number" && Number.isFinite(actor.scale) ? actor.scale : 1,
                                 ...(actor.allowOverlap ? { allowOverlap: true } : {}),
+                                ...(explicitX !== undefined ? { explicitX } : {}),
+                                ...(actor.lockX ? { lockX: true } : {}),
                             });
                         }
                     }
@@ -575,11 +692,17 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
                             nodeId: key, params: { allowed: STORY_SLOTS.join(", ") },
                         });
                     }
-                    checkScaleAndY(actor.scale, actor.y, actor.z, actorPath, key);
+                    checkScaleAndY(actor.x, actor.scale, actor.y, actor.z, actorPath, key);
+                    if (actor.lockX !== undefined && typeof actor.lockX !== "boolean") {
+                        addError("fieldType", `${actorPath}.lockX`, { nodeId: key, params: { expected: "boolean" } });
+                    }
+                    if (actor.mirror !== undefined && typeof actor.mirror !== "boolean") {
+                        addError("fieldType", `${actorPath}.mirror`, { nodeId: key, params: { expected: "boolean" } });
+                    }
                     checkOptionalMotion(actor.motion, `${actorPath}.motion`, key);
                     checkOptionalMotion(actor.facial, `${actorPath}.facial`, key);
                 });
-                trackedStage = layoutStageActors(trackedStage);
+                trackedStage = layoutStageActors(trackedStage, { mode: "initial", layoutMode: trackedLayoutMode });
                 emitStageOverlapWarnings(trackedStage, `${nodePath}.stageCast.actors`);
             }
 
@@ -591,6 +714,162 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
                 addError("tooMany", `${nodePath}.beats`, { nodeId: key, params: { max: STORY_LIMITS.beatsPerScene } });
             }
             totalBeats += node.beats.length;
+
+            let pendingWaveItems: StageActionItem[] = [];
+            let pendingWaveSeenCast = new Set<string>();
+
+            const validateStageActionItem = (
+                item: StageActionItem,
+                itemPath: string,
+                beatId: string,
+                seenWaveCast: Set<string>,
+            ) => {
+                if (!(STAGE_ACTION_KINDS as readonly string[]).includes(item.action)) {
+                    addError("enumInvalid", `${itemPath}.action`, {
+                        nodeId: key, beatId, params: { allowed: STAGE_ACTION_KINDS.join(", ") },
+                    });
+                }
+                if (!item.castKey) {
+                    addError("fieldMissing", `${itemPath}.castKey`, { nodeId: key, beatId });
+                } else if (!castKeys.has(item.castKey)) {
+                    addError("castUnknown", `${itemPath}.castKey`, {
+                        nodeId: key, beatId, params: { key: item.castKey },
+                    });
+                } else if (seenWaveCast.has(item.castKey)) {
+                    addError("actorDuplicate", `${itemPath}.castKey`, {
+                        nodeId: key, beatId, params: { key: item.castKey },
+                    });
+                } else {
+                    seenWaveCast.add(item.castKey);
+                }
+                if (item.slot !== undefined && !(STORY_SLOTS as readonly string[]).includes(item.slot)) {
+                    addError("enumInvalid", `${itemPath}.slot`, {
+                        nodeId: key, beatId, params: { allowed: STORY_SLOTS.join(", ") },
+                    });
+                }
+                checkScaleAndY(item.x, item.scale, item.y, item.z, itemPath, key, beatId);
+                checkOptionalMotion(item.motion, `${itemPath}.motion`, key, beatId);
+                checkOptionalMotion(item.facial, `${itemPath}.facial`, key, beatId);
+                checkOptionalDuration(item.duration, `${itemPath}.duration`, key, beatId);
+                checkOptionalDelay(item.delay, `${itemPath}.delay`, key, beatId);
+                if (item.transition !== undefined && !(STAGE_TRANSITION_STYLES as readonly string[]).includes(item.transition)) {
+                    addError("enumInvalid", `${itemPath}.transition`, {
+                        nodeId: key, beatId, params: { allowed: STAGE_TRANSITION_STYLES.join(", ") },
+                    });
+                }
+                if (item.lockX !== undefined && typeof item.lockX !== "boolean") {
+                    addError("fieldType", `${itemPath}.lockX`, { nodeId: key, beatId, params: { expected: "boolean" } });
+                }
+                if (item.mirror !== undefined && typeof item.mirror !== "boolean") {
+                    addError("fieldType", `${itemPath}.mirror`, { nodeId: key, beatId, params: { expected: "boolean" } });
+                }
+            };
+
+            const flushTrackedWave = (waveItems: readonly StageActionItem[], beatPath: string, beatId: string) => {
+                const validItems = waveItems.filter(it => it.castKey && castKeys.has(it.castKey));
+                if (validItems.length === 0) return;
+                const stationaryKeys = new Set(trackedStage.map(a => a.cast));
+                let next = [...trackedStage];
+                let hasEnterOrMove = false;
+                let anySpatialChange = false;
+
+                // 1. Exits
+                for (const item of validItems) {
+                    if (item.action === "exit") {
+                        next = next.filter(a => a.cast !== item.castKey);
+                        stationaryKeys.delete(item.castKey);
+                    }
+                }
+                // 2. Poses (no layout change)
+                for (const item of validItems) {
+                    if (item.action === "pose" && item.lockX !== undefined) {
+                        next = next.map(a => (a.cast === item.castKey
+                            ? { ...a, ...(item.lockX ? { lockX: true } : { lockX: undefined }) }
+                            : a));
+                    }
+                }
+                // 3. Moves & Enters
+                for (const item of validItems) {
+                    if (item.action === "enter") {
+                        hasEnterOrMove = true;
+                        anySpatialChange = true;
+                        stationaryKeys.delete(item.castKey);
+                        const slot = item.slot && (STORY_SLOTS as readonly string[]).includes(item.slot) ? item.slot : "center";
+                        const scale = typeof item.scale === "number" && Number.isFinite(item.scale) ? item.scale : 1;
+                        const explicitX = typeof item.x === "number" && Number.isFinite(item.x)
+                            ? clampActorX(item.x)
+                            : undefined;
+                        next = [
+                            ...next.filter(a => a.cast !== item.castKey),
+                            {
+                                cast: item.castKey,
+                                slot,
+                                x: explicitX ?? SLOT_X[slot],
+                                scale,
+                                ...(item.allowOverlap ? { allowOverlap: true } : {}),
+                                ...(explicitX !== undefined ? { explicitX } : {}),
+                                ...(item.lockX ? { lockX: true } : {}),
+                            },
+                        ];
+                    } else if (item.action === "move") {
+                        hasEnterOrMove = true;
+                        stationaryKeys.delete(item.castKey);
+                        next = next.map((actor) => {
+                            if (actor.cast !== item.castKey) return actor;
+                            const nextSlot = item.slot && (STORY_SLOTS as readonly string[]).includes(item.slot)
+                                ? item.slot
+                                : actor.slot;
+                            const nextScale = typeof item.scale === "number" && Number.isFinite(item.scale)
+                                ? item.scale
+                                : actor.scale;
+                            const nextOverlap = item.allowOverlap ?? actor.allowOverlap;
+                            const hasExplicitX = typeof item.x === "number" && Number.isFinite(item.x);
+                            const nextExplicitX = hasExplicitX
+                                ? clampActorX(item.x!)
+                                : item.slot !== undefined
+                                    ? undefined
+                                    : actor.explicitX;
+                            const nextX = nextExplicitX !== undefined
+                                ? nextExplicitX
+                                : item.slot !== undefined
+                                    ? SLOT_X[nextSlot]
+                                    : actor.x;
+                            const nextLockX = item.lockX !== undefined ? item.lockX : actor.lockX;
+                            if (
+                                nextSlot !== actor.slot
+                                || nextScale !== actor.scale
+                                || nextOverlap !== actor.allowOverlap
+                                || nextExplicitX !== actor.explicitX
+                                || nextLockX !== actor.lockX
+                            ) {
+                                anySpatialChange = true;
+                            }
+                            return {
+                                ...actor,
+                                slot: nextSlot,
+                                x: nextX,
+                                scale: nextScale,
+                                ...(nextOverlap ? { allowOverlap: true } : { allowOverlap: undefined }),
+                                ...(nextExplicitX !== undefined ? { explicitX: nextExplicitX } : { explicitX: undefined }),
+                                ...(nextLockX ? { lockX: true } : { lockX: undefined }),
+                            };
+                        });
+                    }
+                }
+
+                if (hasEnterOrMove) {
+                    trackedStage = layoutStageActors(next, {
+                        mode: "incremental",
+                        layoutMode: trackedLayoutMode,
+                        stationaryKeys,
+                    });
+                    if (anySpatialChange) {
+                        emitStageOverlapWarnings(trackedStage, beatPath, beatId);
+                    }
+                } else {
+                    trackedStage = next;
+                }
+            };
 
             node.beats.forEach((beat, beatIdx) => {
                 const beatPath = `${nodePath}.beats[${beatIdx}]`;
@@ -670,79 +949,52 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
                             });
                         }
                         checkTemplateRefs(beat.text, `${beatPath}.text`, key, beat.id);
+                        if (
+                            beat.actorVisibility !== undefined
+                            && !(TELOP_ACTOR_VISIBILITIES as readonly string[]).includes(beat.actorVisibility)
+                        ) {
+                            addError("enumInvalid", `${beatPath}.actorVisibility`, {
+                                nodeId: key, beatId: beat.id, params: { allowed: TELOP_ACTOR_VISIBILITIES.join(", ") },
+                            });
+                        }
+                        if (
+                            beat.position !== undefined
+                            && !(TELOP_POSITIONS as readonly string[]).includes(beat.position)
+                        ) {
+                            addError("enumInvalid", `${beatPath}.position`, {
+                                nodeId: key, beatId: beat.id, params: { allowed: TELOP_POSITIONS.join(", ") },
+                            });
+                        }
                         break;
                     }
                     case "stageAction": {
-                        if (!beat.castKey) {
-                            addError("fieldMissing", `${beatPath}.castKey`, { nodeId: key, beatId: beat.id });
-                        } else if (!castKeys.has(beat.castKey)) {
-                            addError("castUnknown", `${beatPath}.castKey`, {
-                                nodeId: key, beatId: beat.id, params: { key: beat.castKey },
+                        if (beat.parallel !== undefined && typeof beat.parallel !== "boolean") {
+                            addError("fieldType", `${beatPath}.parallel`, {
+                                nodeId: key, beatId: beat.id, params: { expected: "boolean" },
                             });
                         }
-                        if (beat.slot !== undefined && !(STORY_SLOTS as readonly string[]).includes(beat.slot)) {
-                            addError("enumInvalid", `${beatPath}.slot`, {
-                                nodeId: key, beatId: beat.id, params: { allowed: STORY_SLOTS.join(", ") },
-                            });
-                        }
-                        checkScaleAndY(beat.scale, beat.y, beat.z, beatPath, key, beat.id);
-                        checkOptionalMotion(beat.motion, `${beatPath}.motion`, key, beat.id);
-                        checkOptionalMotion(beat.facial, `${beatPath}.facial`, key, beat.id);
-                        if (beat.duration !== undefined) {
-                            if (
-                                typeof beat.duration !== "number"
-                                || !Number.isFinite(beat.duration)
-                                || beat.duration < STORY_LIMITS.duration.min
-                                || beat.duration > STORY_LIMITS.duration.max
-                            ) {
-                                addError("numberRange", `${beatPath}.duration`, {
-                                    nodeId: key, beatId: beat.id, params: { min: STORY_LIMITS.duration.min, max: STORY_LIMITS.duration.max },
+                        if (beat.group !== undefined) {
+                            if (!Array.isArray(beat.group)) {
+                                addError("fieldType", `${beatPath}.group`, {
+                                    nodeId: key, beatId: beat.id, params: { expected: "array" },
+                                });
+                            } else if (beat.group.length > STORY_LIMITS.cast - 1) {
+                                addError("tooMany", `${beatPath}.group`, {
+                                    nodeId: key, beatId: beat.id, params: { max: STORY_LIMITS.cast - 1 },
                                 });
                             }
                         }
-                        if (beat.castKey && castKeys.has(beat.castKey)) {
-                            if (beat.action === "enter") {
-                                const slot = beat.slot && (STORY_SLOTS as readonly string[]).includes(beat.slot) ? beat.slot : "center";
-                                const scale = typeof beat.scale === "number" && Number.isFinite(beat.scale) ? beat.scale : 1;
-                                trackedStage = layoutStageActors([
-                                    ...trackedStage.filter(a => a.cast !== beat.castKey),
-                                    {
-                                        cast: beat.castKey,
-                                        slot,
-                                        x: SLOT_X[slot],
-                                        scale,
-                                        ...(beat.allowOverlap ? { allowOverlap: true } : {}),
-                                    },
-                                ]);
-                                emitStageOverlapWarnings(trackedStage, beatPath, beat.id);
-                            } else if (beat.action === "exit") {
-                                trackedStage = layoutStageActors(trackedStage.filter(a => a.cast !== beat.castKey));
-                            } else if (beat.action === "move") {
-                                let changed = false;
-                                trackedStage = layoutStageActors(trackedStage.map((actor) => {
-                                    if (actor.cast !== beat.castKey) return actor;
-                                    const nextSlot = beat.slot && (STORY_SLOTS as readonly string[]).includes(beat.slot)
-                                        ? beat.slot
-                                        : actor.slot;
-                                    const nextScale = typeof beat.scale === "number" && Number.isFinite(beat.scale)
-                                        ? beat.scale
-                                        : actor.scale;
-                                    const nextOverlap = beat.allowOverlap ?? actor.allowOverlap;
-                                    if (nextSlot !== actor.slot || nextScale !== actor.scale || nextOverlap !== actor.allowOverlap) {
-                                        changed = true;
-                                    }
-                                    return {
-                                        ...actor,
-                                        slot: nextSlot,
-                                        x: SLOT_X[nextSlot],
-                                        scale: nextScale,
-                                        ...(nextOverlap ? { allowOverlap: true } : { allowOverlap: undefined }),
-                                    };
-                                }));
-                                if (changed) {
-                                    emitStageOverlapWarnings(trackedStage, beatPath, beat.id);
-                                }
-                            }
+                        const items = getStageActionItems(beat);
+                        items.forEach((item, idx) => {
+                            const itemPath = idx === 0 ? beatPath : `${beatPath}.group[${idx - 1}]`;
+                            validateStageActionItem(item, itemPath, beat.id, pendingWaveSeenCast);
+                        });
+                        pendingWaveItems.push(...items);
+                        const continuesWave = beat.parallel === true && node.beats[beatIdx + 1]?.kind === "stageAction";
+                        if (!continuesWave) {
+                            flushTrackedWave(pendingWaveItems, beatPath, beat.id);
+                            pendingWaveItems = [];
+                            pendingWaveSeenCast = new Set<string>();
                         }
                         break;
                     }
@@ -1059,6 +1311,11 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
                 break;
             }
             case "scene": {
+                const deferTelopEndIdx =
+                    node.stageCast.mode === "set" && node.stageCast.enterTiming === "afterTelop"
+                        ? findLeadingTelopEndIndex(node.beats)
+                        : -1;
+                const deferStageCast = deferTelopEndIdx >= 0;
                 instructions.push({
                     op: "enterScene",
                     nodeId: node.id,
@@ -1068,8 +1325,9 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
                     place: node.place,
                     transition: node.transition,
                     stageCast: node.stageCast,
+                    ...(deferStageCast ? { deferStageCast: true } : {}),
                 });
-                for (const beat of node.beats) {
+                node.beats.forEach((beat, beatIdx) => {
                     beatPc[beat.id] = instructions.length;
                     switch (beat.kind) {
                         case "talk":
@@ -1091,7 +1349,15 @@ export function compileStoryGraph(doc: StoryDocument): CompiledStoryProgram {
                             instructions.push({ op: "varOp", nodeId: node.id, beatId: beat.id, ops: beat.ops });
                             break;
                     }
-                }
+                    if (deferStageCast && beatIdx === deferTelopEndIdx && node.stageCast.mode === "set") {
+                        instructions.push({
+                            op: "applyStageCast",
+                            nodeId: node.id,
+                            sceneId: node.id,
+                            stageCast: node.stageCast,
+                        });
+                    }
+                });
                 const outEdge = edgeByPort.get(`${node.id}\0out`);
                 if (outEdge && doc.nodes[outEdge.toNodeId]) {
                     const instIndex = instructions.length;

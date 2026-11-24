@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { createStoryDocument, serializeStoryScript } from "@moesekai/story-core";
 import { DesktopSettingsStore, type SecretProtector } from "../src/main/settings.ts";
-import { WorkspaceManager } from "../src/main/workspace.ts";
+import {
+    MAX_LOCAL_VOICE_FILE_BYTES,
+    scanAudioFilesRecursive,
+    WorkspaceManager,
+} from "../src/main/workspace.ts";
+import { PathJailError } from "../src/shared/path-jail.ts";
 import type { WorkspaceExternalChangeEvent } from "../src/shared/ipc.ts";
 
 const tempDirs: string[] = [];
@@ -159,8 +164,148 @@ describe("WorkspaceManager", () => {
 
         const imported = mgr.importLocalVoiceFile(audioSrc, "beat_001");
         expect(imported.relativePath).toBe("voices/beat_001.ogg");
+        expect(imported.originalName).toBe("take_01.ogg");
         expect(fs.existsSync(path.join(projectDir, "voices", "beat_001.ogg"))).toBe(true);
         expect(() => mgr.importLocalVoiceFile(badSrc)).toThrow(/Unsupported audio/);
+
+        // Re-importing a file already inside voices/ at the same destination must not truncate it
+        const sameFileReimport = mgr.importLocalVoiceFile(imported.absolutePath, "beat_001");
+        expect(sameFileReimport.sizeBytes).toBe(9);
+        expect(fs.readFileSync(imported.absolutePath, "utf8")).toBe("OGG_BYTES");
+
+        // Path traversal in preferredStem must be blocked by PathJailError
+        expect(() => mgr.importLocalVoiceFile(audioSrc, "../escape")).toThrow(PathJailError);
+
+        mgr.dispose();
+    });
+
+    it("saves and removes voices/manifest.json via saveVoiceManifest with self-write echo suppression", async () => {
+        const userData = makeTempDir("moesekai-udata-");
+        const projectDir = path.join(makeTempDir("moesekai-vm-"), "voice-manifest-story");
+        const mgr = new WorkspaceManager({ userDataDir: userData, debounceMs: 60 });
+
+        const events: WorkspaceExternalChangeEvent[] = [];
+        mgr.onExternalChange(ev => events.push(ev));
+
+        const created = mgr.createProject({
+            dirPath: projectDir,
+            title: "Voice Manifest Story",
+            region: "jp",
+            initialScript: makeSampleScript("Voice Manifest Story"),
+        });
+
+        const manifest = {
+            schema: "moesekai-story-voice/1",
+            storyId: created.id,
+            locale: "ja-JP",
+            overrideOfficialVoice: true,
+            lines: {
+                beat_001: {
+                    url: "voices/beat_001.ogg",
+                    objectKey: "voices/beat_001.ogg",
+                    speaker: "Kanade",
+                    sizeBytes: 1234,
+                },
+            },
+        };
+
+        const saved = mgr.saveVoiceManifest(manifest);
+        expect(saved.removed).toBe(false);
+        expect(fs.existsSync(path.join(projectDir, "voices", "manifest.json"))).toBe(true);
+        expect(mgr.getActiveProject()?.voiceManifest).toEqual(manifest);
+
+        // Self-write MUST NOT trigger external change event
+        await Bun.sleep(250);
+        expect(events.length).toBe(0);
+
+        // Clearing manifest removes voices/manifest.json without triggering external change event
+        const removed = mgr.saveVoiceManifest(null);
+        expect(removed.removed).toBe(true);
+        expect(fs.existsSync(path.join(projectDir, "voices", "manifest.json"))).toBe(false);
+        expect(mgr.getActiveProject()?.voiceManifest).toBeNull();
+
+        await Bun.sleep(250);
+        expect(events.length).toBe(0);
+
+        // Even after a delayed non-manifest file write inside voices/, absent manifest stays suppressed
+        fs.writeFileSync(path.join(projectDir, "voices", "clip_temp.ogg"), "OGG");
+        await Bun.sleep(250);
+        expect(events.length).toBe(0);
+
+        // External write to voices/manifest.json MUST trigger external reload event
+        const externalManifest = {
+            schema: "moesekai-story-voice/1",
+            storyId: created.id,
+            lines: { beat_ext: { url: "voices/beat_ext.mp3" } },
+        };
+        fs.writeFileSync(
+            path.join(projectDir, "voices", "manifest.json"),
+            JSON.stringify(externalManifest, null, 2),
+            "utf8",
+        );
+
+        const deadline = Date.now() + 2000;
+        while (events.length === 0 && Date.now() < deadline) {
+            await Bun.sleep(50);
+        }
+        expect(events.length).toBeGreaterThanOrEqual(1);
+        expect(events[events.length - 1].kind).toBe("voice-manifest");
+        expect(events[events.length - 1].voiceManifest).toEqual(externalManifest);
+
+        mgr.dispose();
+    });
+
+    it("imports raw voice buffers safely with path-jail, extension, and size validation, and scans audio folders", () => {
+        const userData = makeTempDir("moesekai-udata-");
+        const projectDir = path.join(makeTempDir("moesekai-vbuf-"), "voice-buf-story");
+        const mgr = new WorkspaceManager({ userDataDir: userData });
+
+        mgr.createProject({
+            dirPath: projectDir,
+            title: "Voice Buffer Story",
+            region: "jp",
+            initialScript: makeSampleScript("Voice Buffer Story"),
+        });
+
+        // Import raw buffer with beatId override
+        const oggBytes = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00, 0x02]);
+        const res1 = mgr.importLocalVoiceBuffer("take_01.ogg", oggBytes, "b_01");
+        expect(res1.relativePath).toBe("voices/b_01.ogg");
+        expect(res1.fileName).toBe("b_01.ogg");
+        expect(res1.originalName).toBe("take_01.ogg");
+        expect(res1.sizeBytes).toBe(oggBytes.byteLength);
+        expect(Buffer.from(fs.readFileSync(res1.absolutePath))).toEqual(Buffer.from(oggBytes));
+
+        // Import raw buffer without beatId preserves sanitized filename
+        const mp3Bytes = new Uint8Array([0x49, 0x44, 0x33, 0x03]);
+        const res2 = mgr.importLocalVoiceBuffer("line 02.mp3", mp3Bytes);
+        expect(res2.relativePath).toBe("voices/line_02.mp3");
+
+        // List local voice files
+        const listed = mgr.listLocalVoiceFiles();
+        expect(listed.map(f => f.relativePath)).toEqual(["voices/b_01.ogg", "voices/line_02.mp3"]);
+
+        // Reject unsupported extension, empty buffer, oversized buffer, and path-escape tokens
+        expect(() => mgr.importLocalVoiceBuffer("evil.exe", mp3Bytes)).toThrow(/Unsupported audio/);
+        expect(() => mgr.importLocalVoiceBuffer("empty.ogg", new Uint8Array(0))).toThrow(/empty/i);
+        const fakeOversized = new Uint8Array(1);
+        Object.defineProperty(fakeOversized, "byteLength", { value: MAX_LOCAL_VOICE_FILE_BYTES + 1 });
+        expect(() => mgr.importLocalVoiceBuffer("huge.wav", fakeOversized)).toThrow(/exceeds maximum/);
+        expect(() => mgr.importLocalVoiceBuffer("../escape.mp3", mp3Bytes)).toThrow(PathJailError);
+        expect(() => mgr.importLocalVoiceBuffer("sub/escape.mp3", mp3Bytes)).toThrow(PathJailError);
+        expect(() => mgr.importLocalVoiceBuffer("ok.mp3", mp3Bytes, "../escape")).toThrow(PathJailError);
+
+        // Recursive external audio folder scan skips hidden directories & non-audio files
+        const scanDir = makeTempDir("moesekai-scan-");
+        fs.mkdirSync(path.join(scanDir, "scene1"), { recursive: true });
+        fs.mkdirSync(path.join(scanDir, ".hidden"), { recursive: true });
+        fs.writeFileSync(path.join(scanDir, "b_01.ogg"), "OGG");
+        fs.writeFileSync(path.join(scanDir, "scene1", "b_02.mp3"), "MP3");
+        fs.writeFileSync(path.join(scanDir, "scene1", "notes.txt"), "TXT");
+        fs.writeFileSync(path.join(scanDir, ".hidden", "ignored.ogg"), "OGG");
+
+        const scanned = scanAudioFilesRecursive(scanDir).map(p => path.basename(p));
+        expect(scanned).toEqual(["b_01.ogg", "b_02.mp3"]);
 
         mgr.dispose();
     });
