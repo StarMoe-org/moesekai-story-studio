@@ -31,6 +31,8 @@ export type {
 
 export {
     StoryStudioPlayer,
+    resolveEffectivePlayerLayoutMode,
+    resolvePlayerCompanionVisibility,
     type PlayerTopBarSlotContext,
     type StoryPlayerExternalError,
     type StoryPlayerExternalSource,
@@ -89,7 +91,11 @@ export {
 export {
     StoryPlayerView,
     applyInstructionToStage,
+    resolvePlayerStageLayout,
+    shouldPromoteReplayTransport,
+    shouldShowPlayerStageAttribution,
     type PlayerLayoutMode,
+    type StoryPlayerStageLayout,
     type StoryPlayerViewProps,
 } from "./components/StoryPlayerView";
 export {

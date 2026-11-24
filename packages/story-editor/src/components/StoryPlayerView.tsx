@@ -80,6 +80,65 @@ interface AssetJumpTarget {
     beatId?: string;
 }
 
+export interface StoryPlayerStageLayout {
+    isNleWorkspace: boolean;
+    /** True when desktop (`lg:+`) Theater View should center and fill available viewport height. */
+    isImmersiveTheaterFill: boolean;
+    /** True when Theater View accompanies below-stage/companion content in a video-site layout. */
+    isVideoSiteTheaterStage: boolean;
+    /** True when narrow mobile viewports (`< sm`) should render the full ending summary inline below the transport bar. */
+    useInlineMobileEnding: boolean;
+}
+
+/** Pure layout predicate separating NLE 3-pane workspace, standalone desktop Theater fill, and video-site Theater flow. */
+export function resolvePlayerStageLayout(params: {
+    layoutMode: PlayerLayoutMode;
+    immersive: boolean;
+    fullscreen: boolean;
+    stageWebFullscreen: boolean;
+    phaseOpen: boolean;
+    hasBelowStageContent: boolean;
+}): StoryPlayerStageLayout {
+    const isNleWorkspace = params.layoutMode === "workspace" && !params.fullscreen;
+    const isImmersiveTheaterFill =
+        params.immersive
+        && !isNleWorkspace
+        && !params.fullscreen
+        && !params.phaseOpen
+        && !params.hasBelowStageContent;
+    const isVideoSiteTheaterStage =
+        params.immersive
+        && !isNleWorkspace
+        && !params.fullscreen
+        && !params.stageWebFullscreen
+        && params.hasBelowStageContent;
+    const useInlineMobileEnding = !params.fullscreen && !params.stageWebFullscreen;
+    return {
+        isNleWorkspace,
+        isImmersiveTheaterFill,
+        isVideoSiteTheaterStage,
+        useInlineMobileEnding,
+    };
+}
+
+/** Pure predicate promoting the primary transport CTA from disabled Next to active Replay when playback ends. */
+export function shouldPromoteReplayTransport(params: {
+    ended: boolean;
+    emptyStory: boolean;
+    hasCompileErrors: boolean;
+}): boolean {
+    return params.ended && !params.emptyStory && !params.hasCompileErrors;
+}
+
+/** Pure predicate hiding the top-right stage watermark while ending/error overlays display their own attribution footer. */
+export function shouldShowPlayerStageAttribution(params: {
+    ended: boolean;
+    emptyStory: boolean;
+    hasCompileErrors: boolean;
+}): boolean {
+    return !params.ended && !params.emptyStory && !params.hasCompileErrors;
+}
+
 export interface StoryPlayerViewProps {
     doc: StoryDocument;
     line: AssetLine;
@@ -93,6 +152,12 @@ export interface StoryPlayerViewProps {
     onLayoutModeChange?: (mode: PlayerLayoutMode) => void;
     /** Web-fullscreen / immersive mode: fills the entire viewport height with zero page chrome. */
     immersive?: boolean;
+    /**
+     * When true (e.g. Theater View accompanied by a below-stage info bar or companion rail),
+     * keeps the 16:9 stage compact (capped on desktop so transport + title stay above the fold)
+     * instead of stretching into a full-viewport letterbox container.
+     */
+    hasBelowStageContent?: boolean;
     /** Optional initial subtitle locale (falls back to UI locale if available, else story sourceLocale). */
     initialLocale?: UiLocale | null;
     /** Optional custom voice track manifest (`moesekai-story-voice/1`) for fallback voice playback. */
@@ -470,6 +535,7 @@ export function StoryPlayerView({
     layoutMode,
     onLayoutModeChange,
     immersive = false,
+    hasBelowStageContent = false,
     initialLocale = null,
     voiceManifest = null,
     onOpenVoiceManifest,
@@ -1694,7 +1760,21 @@ export function StoryPlayerView({
     );
     const emptyStory = !hasCompileErrors && !hasAnyPlayableContent;
 
-    const isNleWorkspace = effectiveLayoutMode === "workspace" && !fullscreen;
+    const {
+        isNleWorkspace,
+        isImmersiveTheaterFill,
+        isVideoSiteTheaterStage,
+        useInlineMobileEnding,
+    } = resolvePlayerStageLayout({
+        layoutMode: effectiveLayoutMode,
+        immersive,
+        fullscreen,
+        stageWebFullscreen,
+        phaseOpen,
+        hasBelowStageContent,
+    });
+    const promoteReplayTransport = shouldPromoteReplayTransport({ ended, emptyStory, hasCompileErrors });
+    const showStageAttribution = shouldShowPlayerStageAttribution({ ended, emptyStory, hasCompileErrors });
     const runtimePhase: StoryRuntimePhase = hasCompileErrors || ended || emptyStory
         ? "ended"
         : currentChoice
@@ -2083,14 +2163,17 @@ export function StoryPlayerView({
     );
 
     const showStackedDrawer = !fullscreen && (effectiveLayoutMode === "theater" ? phaseOpen : mobileDrawerOpen);
-    const isImmersiveTheaterFill = immersive && !isNleWorkspace && !fullscreen && !phaseOpen;
     const stageClickBlocked = Boolean(currentChoice) || ended || emptyStory || hasCompileErrors || menuOpen;
 
     return (
         <div
             className={cn(
                 "min-w-0 max-w-full",
-                immersive ? "flex min-h-0 flex-1 flex-col gap-2" : "space-y-2.5",
+                isNleWorkspace && immersive
+                    ? "flex min-h-0 flex-1 flex-col gap-2"
+                    : isImmersiveTheaterFill
+                        ? "flex flex-col gap-2 lg:min-h-0 lg:flex-1"
+                        : "space-y-2.5",
             )}
         >
             {!onLayoutModeChange && (
@@ -2180,7 +2263,7 @@ export function StoryPlayerView({
                             ? "flex min-h-0 flex-1 flex-col gap-3 xl:h-full xl:gap-0 xl:overflow-hidden"
                             : "flex flex-col gap-3 xl:h-[calc(100svh-8.5rem)] xl:min-h-[42rem] xl:gap-0 xl:overflow-hidden"
                         : isImmersiveTheaterFill
-                            ? "flex min-h-0 flex-1 flex-col gap-2"
+                            ? "flex flex-col gap-2 lg:min-h-0 lg:flex-1"
                             : "space-y-3",
                 )}
                 style={isNleWorkspace ? ({ "--nle-top-split": `${topSplitPct}%` } as CSSProperties) : undefined}
@@ -2193,7 +2276,7 @@ export function StoryPlayerView({
                         isNleWorkspace
                             ? "flex flex-col gap-3 xl:min-h-0 xl:shrink-0 xl:grow-0 xl:basis-[var(--nle-top-split)] xl:flex-row xl:gap-0"
                             : isImmersiveTheaterFill
-                                ? "flex min-h-0 flex-1 flex-col gap-2"
+                                ? "flex flex-col gap-2 lg:min-h-0 lg:flex-1"
                                 : "space-y-3",
                     )}
                 >
@@ -2285,7 +2368,7 @@ export function StoryPlayerView({
                                     : isNleWorkspace
                                         ? "flex min-h-0 flex-1 flex-col gap-2 xl:overflow-hidden xl:rounded-md3-lg xl:border xl:border-outline-variant/60 xl:bg-surface-container-low xl:p-2"
                                         : isImmersiveTheaterFill
-                                            ? "flex min-h-0 flex-1 flex-col gap-2"
+                                            ? "flex flex-col gap-2 lg:min-h-0 lg:flex-1"
                                             : "space-y-2",
                         )}
                     >
@@ -2353,8 +2436,9 @@ export function StoryPlayerView({
                             </div>
                         )}
 
-                        {/* 16:9 Stage Viewport Box (contained in both width & height inside NLE preview pane, web-fullscreen & immersive theater) */}
+                        {/* 16:9 Stage Viewport Box (contained in both width & height inside NLE preview pane, web-fullscreen & lg+ standalone theater) */}
                         <div
+                            data-testid="player-stage-viewport-box"
                             className={cn(
                                 "relative w-full min-w-0",
                                 fullscreen
@@ -2364,18 +2448,22 @@ export function StoryPlayerView({
                                         : isNleWorkspace
                                             ? "xl:flex xl:min-h-0 xl:flex-1 xl:items-center xl:justify-center xl:overflow-hidden xl:rounded-md3-md xl:bg-scrim/20 xl:[container-type:size]"
                                             : isImmersiveTheaterFill
-                                                ? "flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md3-md bg-scrim/20 [container-type:size]"
+                                                ? "lg:flex lg:min-h-0 lg:flex-1 lg:items-center lg:justify-center lg:overflow-hidden lg:rounded-md3-md lg:bg-scrim/20 lg:[container-type:size]"
                                                 : undefined,
                             )}
                         >
                             <div
                                 className={cn(
                                     "relative",
-                                    stageWebFullscreen || isImmersiveTheaterFill
+                                    stageWebFullscreen
                                         ? "h-[min(100cqh,calc(100cqw*9/16))] w-[min(100cqw,calc(100cqh*16/9))]"
                                         : isNleWorkspace
                                             ? "w-full xl:h-[min(100cqh,calc(100cqw*9/16))] xl:w-[min(100cqw,calc(100cqh*16/9))]"
-                                            : "w-full",
+                                            : isImmersiveTheaterFill
+                                                ? "w-full lg:h-[min(100cqh,calc(100cqw*9/16))] lg:w-[min(100cqw,calc(100cqh*16/9))]"
+                                                : isVideoSiteTheaterStage
+                                                    ? "w-full lg:mx-auto lg:max-w-[min(100%,calc((100dvh-11rem)*16/9))]"
+                                                    : "w-full",
                                 )}
                             >
                                 <StoryStageView
@@ -2405,7 +2493,7 @@ export function StoryPlayerView({
                                     flash={flash}
                                     fadeSeconds={fadeSeconds}
                                     compactStatus
-                                    showAttribution
+                                    showAttribution={showStageAttribution}
                                     onClick={stageClickBlocked ? undefined : handleAdvance}
                                     className={cn(!stageClickBlocked && "cursor-pointer")}
                                 >
@@ -2416,7 +2504,7 @@ export function StoryPlayerView({
                                                 role="dialog"
                                                 aria-modal="true"
                                                 aria-label={t("page.storyMaker.player.menuTitle")}
-                                                className="absolute inset-0 z-[28] flex items-center justify-center bg-scrim/45 p-2 sm:p-5"
+                                                className="absolute inset-0 z-[35] flex items-center justify-center bg-scrim/45 p-2 sm:p-5"
                                                 initial={{ opacity: 0 }}
                                                 animate={{ opacity: 1 }}
                                                 exit={{ opacity: 0 }}
@@ -2622,28 +2710,34 @@ export function StoryPlayerView({
                                     {/* Blocking Compile Error Stage Overlay */}
                                     {!uiHidden && hasCompileErrors && (
                                         <div
-                                            className="absolute inset-0 z-[25] flex items-center justify-center bg-scrim/55 p-2 sm:p-4"
+                                            className="absolute inset-0 z-[32] flex items-center justify-center bg-scrim/55 p-2 sm:p-4"
                                             onClick={event => event.stopPropagation()}
                                         >
                                             <Surface
                                                 tone="high"
                                                 radius="xl"
                                                 elevation={2}
-                                                className="flex max-h-full w-full max-w-md flex-col items-center gap-2 overflow-y-auto p-4 text-center sm:gap-3 sm:p-6"
+                                                className="flex max-h-full w-full max-w-md flex-col overflow-hidden text-center"
                                             >
-                                                <span className="inline-flex items-center gap-1.5 rounded-full bg-error-container px-3 py-1 type-label-m text-on-error-container">
-                                                    <Icon path={mdErrorFill} size={16} className="shrink-0" />
-                                                    <span>
-                                                        {t("page.storyMaker.v2.compiler.statusErrors", { count: program.errors.length })}
+                                                <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-4 pt-4 pb-3 sm:gap-3 sm:px-6 sm:pt-5 sm:pb-4">
+                                                    <span className="inline-flex items-center gap-1.5 rounded-full bg-error-container px-3 py-1 type-label-m text-on-error-container">
+                                                        <Icon path={mdErrorFill} size={16} className="shrink-0" />
+                                                        <span>
+                                                            {t("page.storyMaker.v2.compiler.statusErrors", { count: program.errors.length })}
+                                                        </span>
                                                     </span>
-                                                </span>
-                                                <p className="type-title-m text-on-surface">
-                                                    {t("page.storyMaker.v2.compiler.errorsTitle")}
-                                                </p>
-                                                <p className="line-clamp-2 break-words type-body-s text-on-surface-variant">
-                                                    {t(`page.storyMaker.issue.${program.errors[0].code}`, program.errors[0].params ?? {})}
-                                                </p>
-                                                {endAction && <div className="flex flex-wrap justify-center gap-2 pt-1">{endAction}</div>}
+                                                    <p className="type-title-m text-on-surface">
+                                                        {t("page.storyMaker.v2.compiler.errorsTitle")}
+                                                    </p>
+                                                    <p className="line-clamp-2 break-words type-body-s text-on-surface-variant">
+                                                        {t(`page.storyMaker.issue.${program.errors[0].code}`, program.errors[0].params ?? {})}
+                                                    </p>
+                                                </div>
+                                                {endAction && (
+                                                    <div className="flex shrink-0 flex-wrap justify-center gap-2 border-t border-outline-variant/40 bg-surface-container-high/95 px-4 py-2.5 sm:px-6 sm:py-3">
+                                                        {endAction}
+                                                    </div>
+                                                )}
                                             </Surface>
                                         </div>
                                     )}
@@ -2651,77 +2745,111 @@ export function StoryPlayerView({
                                     {/* Multi-Ending Achievement Overlay Card */}
                                     {!uiHidden && reachedEnding && activeFrame?.ending && (
                                         <div
-                                            className="absolute inset-0 z-[25] flex items-center justify-center bg-scrim/55 p-2 sm:p-4"
+                                            className="absolute inset-0 z-[32] flex items-center justify-center bg-scrim/55 p-2 sm:p-4"
                                             onClick={event => event.stopPropagation()}
                                         >
+                                            {/* Compact non-scrolling stage overlay on < sm mobile (full card renders inline below transport bar) */}
+                                            {useInlineMobileEnding && (
+                                                <Surface
+                                                    tone="high"
+                                                    radius="xl"
+                                                    elevation={2}
+                                                    data-testid="ending-stage-compact"
+                                                    className="flex w-full max-w-xs flex-col items-center gap-2 border border-primary/30 px-4 py-3 text-center sm:hidden"
+                                                >
+                                                    <span className="inline-flex items-center gap-1 rounded-full bg-primary-container px-2.5 py-0.5 type-label-s text-on-primary-container">
+                                                        <Icon path={mdFlag} size={14} className="shrink-0" />
+                                                        <span>{t("page.storyMaker.v2.ending.achievedBadge")}</span>
+                                                    </span>
+                                                    <p className="line-clamp-1 w-full break-words type-title-m text-on-surface">
+                                                        {activeFrame.ending.title || t("page.storyMaker.player.endTitle")}
+                                                    </p>
+                                                    <Button size="s" variant="filled" icon={mdReplay} onClick={restart}>
+                                                        {t("page.storyMaker.v2.ending.replayOtherEndings")}
+                                                    </Button>
+                                                </Surface>
+                                            )}
+
+                                            {/* Full desktop / fullscreen ending card with scrollable body + pinned non-scrolling action footer */}
                                             <Surface
                                                 tone="high"
                                                 radius="xl"
                                                 elevation={2}
-                                                className="flex max-h-full w-full max-w-md flex-col items-center gap-2.5 overflow-y-auto border border-primary/30 p-4 text-center sm:gap-3 sm:p-6"
+                                                data-testid="ending-stage-card"
+                                                className={cn(
+                                                    "max-h-full w-full max-w-md flex-col overflow-hidden border border-primary/30 text-center",
+                                                    useInlineMobileEnding ? "hidden sm:flex" : "flex",
+                                                )}
                                             >
-                                                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary-container px-3 py-1 type-label-m text-on-primary-container">
-                                                    <Icon path={mdFlag} size={16} className="shrink-0" />
-                                                    <span>{t("page.storyMaker.v2.ending.achievedBadge")}</span>
-                                                </span>
+                                                <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-4 pt-4 pb-3 sm:gap-2.5 sm:px-6 sm:pt-5 sm:pb-4">
+                                                    <span className="inline-flex items-center gap-1.5 rounded-full bg-primary-container px-3 py-1 type-label-m text-on-primary-container">
+                                                        <Icon path={mdFlag} size={16} className="shrink-0" />
+                                                        <span>{t("page.storyMaker.v2.ending.achievedBadge")}</span>
+                                                    </span>
 
-                                                <p className="break-words type-title-l text-on-surface">
-                                                    {activeFrame.ending.title || t("page.storyMaker.player.endTitle")}
-                                                </p>
+                                                    <p className="break-words type-title-l text-on-surface">
+                                                        {activeFrame.ending.title || t("page.storyMaker.player.endTitle")}
+                                                    </p>
 
-                                                <p className="whitespace-pre-wrap break-words type-body-m text-on-surface-variant">
-                                                    {activeFrame.ending.subtitle || t("page.storyMaker.player.endDescription")}
-                                                </p>
+                                                    <p className="whitespace-pre-wrap break-words type-body-m text-on-surface-variant">
+                                                        {activeFrame.ending.subtitle || t("page.storyMaker.player.endDescription")}
+                                                    </p>
 
-                                                {doc.variables.length > 0 && (
-                                                    <div className="w-full min-w-0 space-y-1.5 rounded-md3-md border border-outline-variant/50 bg-surface-container p-2.5 text-left">
-                                                        <div className="flex items-center gap-1.5 type-label-s text-on-surface-variant">
-                                                            <Icon path={mdCalculate} size={14} className="shrink-0 text-primary" />
-                                                            <span>{t("page.storyMaker.v2.ending.finalVariables")}</span>
-                                                        </div>
-                                                        <div className="flex min-w-0 flex-wrap gap-1.5">
-                                                            {doc.variables.map((variable) => {
-                                                                const val = activeFrame.variables[variable.id] ?? variable.initial;
-                                                                return (
-                                                                    <span
-                                                                        key={variable.id}
-                                                                        className="inline-flex max-w-full items-center gap-1.5 rounded-md3-sm bg-surface-container-high px-2 py-0.5 type-label-s text-on-surface"
-                                                                    >
-                                                                        <Icon
-                                                                            path={variable.type === "number" ? mdNumbers : mdTag}
-                                                                            size={12}
-                                                                            className="shrink-0 text-primary"
-                                                                        />
-                                                                        <span className="max-w-28 truncate text-on-surface-variant">
-                                                                            {variable.name || variable.id}
+                                                    {doc.variables.length > 0 && (
+                                                        <div className="w-full min-w-0 space-y-1.5 rounded-md3-md border border-outline-variant/50 bg-surface-container p-2.5 text-left">
+                                                            <div className="flex items-center gap-1.5 type-label-s text-on-surface-variant">
+                                                                <Icon path={mdCalculate} size={14} className="shrink-0 text-primary" />
+                                                                <span>{t("page.storyMaker.v2.ending.finalVariables")}</span>
+                                                            </div>
+                                                            <div className="flex min-w-0 flex-wrap gap-1.5">
+                                                                {doc.variables.map((variable) => {
+                                                                    const val = activeFrame.variables[variable.id] ?? variable.initial;
+                                                                    return (
+                                                                        <span
+                                                                            key={variable.id}
+                                                                            className="inline-flex max-w-full items-center gap-1.5 rounded-md3-sm bg-surface-container-high px-2 py-0.5 type-label-s text-on-surface"
+                                                                        >
+                                                                            <Icon
+                                                                                path={variable.type === "number" ? mdNumbers : mdTag}
+                                                                                size={12}
+                                                                                className="shrink-0 text-primary"
+                                                                            />
+                                                                            <span className="max-w-28 truncate text-on-surface-variant">
+                                                                                {variable.name || variable.id}
+                                                                            </span>
+                                                                            <span className="shrink-0 font-mono tabular-nums text-primary">
+                                                                                {String(val)}
+                                                                            </span>
                                                                         </span>
-                                                                        <span className="shrink-0 font-mono tabular-nums text-primary">
-                                                                            {String(val)}
-                                                                        </span>
-                                                                    </span>
-                                                                );
-                                                            })}
+                                                                    );
+                                                                })}
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                )}
-
-                                                <div className="flex flex-wrap justify-center gap-2 pt-1">
-                                                    <Button variant="filled" icon={mdReplay} onClick={restart}>
-                                                        {t("page.storyMaker.v2.ending.replayOtherEndings")}
-                                                    </Button>
-                                                    {endAction}
+                                                    )}
                                                 </div>
-                                                {showAttribution && (
-                                                    <button
-                                                        type="button"
-                                                        data-testid="moesekai-ending-attribution"
-                                                        onClick={openNotices}
-                                                        className="state-layer focus-ring mt-1 inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md3-full px-2.5 py-1 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
-                                                    >
-                                                        <Icon path={mdInfo} size={13} className="shrink-0 opacity-75" />
-                                                        <span className="truncate">{t("page.storyMaker.attribution.endingFooter")}</span>
-                                                    </button>
-                                                )}
+
+                                                <div
+                                                    data-testid="ending-stage-footer"
+                                                    className="flex shrink-0 flex-col items-center gap-1 border-t border-outline-variant/40 bg-surface-container-high/95 px-4 py-2.5 sm:px-6 sm:py-3"
+                                                >
+                                                    <div className="flex flex-wrap justify-center gap-2">
+                                                        <Button variant="filled" icon={mdReplay} onClick={restart}>
+                                                            {t("page.storyMaker.v2.ending.replayOtherEndings")}
+                                                        </Button>
+                                                        {endAction}
+                                                    </div>
+                                                    {showAttribution && (
+                                                        <button
+                                                            type="button"
+                                                            data-testid="moesekai-ending-attribution"
+                                                            onClick={openNotices}
+                                                            className="state-layer focus-ring inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md3-full px-2.5 py-0.5 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
+                                                        >
+                                                            <Icon path={mdInfo} size={13} className="shrink-0 opacity-75" />
+                                                            <span className="truncate">{t("page.storyMaker.attribution.endingFooter")}</span>
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </Surface>
                                         </div>
                                     )}
@@ -2729,52 +2857,91 @@ export function StoryPlayerView({
                                     {/* Generic End / Disconnected / Empty / Loop Overlay Card */}
                                     {!uiHidden && !hasCompileErrors && !reachedEnding && (ended || emptyStory) && (
                                         <div
-                                            className="absolute inset-0 z-[25] flex items-center justify-center bg-scrim/45 p-2 sm:p-4"
+                                            className="absolute inset-0 z-[32] flex items-center justify-center bg-scrim/45 p-2 sm:p-4"
                                             onClick={event => event.stopPropagation()}
                                         >
+                                            {useInlineMobileEnding && (
+                                                <Surface
+                                                    tone="high"
+                                                    radius="xl"
+                                                    elevation={2}
+                                                    data-testid="ending-stage-compact"
+                                                    className="flex w-full max-w-xs flex-col items-center gap-2 px-4 py-3 text-center sm:hidden"
+                                                >
+                                                    <p className="line-clamp-1 w-full break-words type-title-m text-on-surface">
+                                                        {t(
+                                                            emptyStory
+                                                                ? "page.storyMaker.player.emptyTitle"
+                                                                : looped
+                                                                    ? "page.storyMaker.player.loopTitle"
+                                                                    : "page.storyMaker.player.endTitle",
+                                                        )}
+                                                    </p>
+                                                    {!emptyStory ? (
+                                                        <Button size="s" variant="filled" icon={mdReplay} onClick={restart}>
+                                                            {t("page.storyMaker.player.replay")}
+                                                        </Button>
+                                                    ) : endAction ? (
+                                                        <div className="flex flex-wrap justify-center gap-2">{endAction}</div>
+                                                    ) : null}
+                                                </Surface>
+                                            )}
+
                                             <Surface
                                                 tone="high"
                                                 radius="xl"
                                                 elevation={2}
-                                                className="flex max-h-full w-full max-w-sm flex-col items-center gap-2 overflow-y-auto p-4 text-center sm:gap-3 sm:p-6"
-                                            >
-                                                <p className="type-title-l text-on-surface">
-                                                    {t(
-                                                        emptyStory
-                                                            ? "page.storyMaker.player.emptyTitle"
-                                                            : looped
-                                                                ? "page.storyMaker.player.loopTitle"
-                                                                : "page.storyMaker.player.endTitle",
-                                                    )}
-                                                </p>
-                                                <p className="type-body-m text-on-surface-variant">
-                                                    {t(
-                                                        emptyStory
-                                                            ? "page.storyMaker.player.emptyDescription"
-                                                            : looped
-                                                                ? "page.storyMaker.player.loopDescription"
-                                                                : "page.storyMaker.player.endDescription",
-                                                    )}
-                                                </p>
-                                                <div className="flex flex-wrap justify-center gap-2 pt-1">
-                                                    {!emptyStory && (
-                                                        <Button variant="filled" icon={mdReplay} onClick={restart}>
-                                                            {t("page.storyMaker.player.replay")}
-                                                        </Button>
-                                                    )}
-                                                    {endAction}
-                                                </div>
-                                                {showAttribution && !emptyStory && (
-                                                    <button
-                                                        type="button"
-                                                        data-testid="moesekai-ending-attribution"
-                                                        onClick={openNotices}
-                                                        className="state-layer focus-ring mt-1 inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md3-full px-2.5 py-1 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
-                                                    >
-                                                        <Icon path={mdInfo} size={13} className="shrink-0 opacity-75" />
-                                                        <span className="truncate">{t("page.storyMaker.attribution.endingFooter")}</span>
-                                                    </button>
+                                                data-testid="ending-stage-card"
+                                                className={cn(
+                                                    "max-h-full w-full max-w-sm flex-col overflow-hidden text-center",
+                                                    useInlineMobileEnding ? "hidden sm:flex" : "flex",
                                                 )}
+                                            >
+                                                <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-4 pt-4 pb-3 sm:gap-2.5 sm:px-6 sm:pt-5 sm:pb-4">
+                                                    <p className="type-title-l text-on-surface">
+                                                        {t(
+                                                            emptyStory
+                                                                ? "page.storyMaker.player.emptyTitle"
+                                                                : looped
+                                                                    ? "page.storyMaker.player.loopTitle"
+                                                                    : "page.storyMaker.player.endTitle",
+                                                        )}
+                                                    </p>
+                                                    <p className="type-body-m text-on-surface-variant">
+                                                        {t(
+                                                            emptyStory
+                                                                ? "page.storyMaker.player.emptyDescription"
+                                                                : looped
+                                                                    ? "page.storyMaker.player.loopDescription"
+                                                                    : "page.storyMaker.player.endDescription",
+                                                        )}
+                                                    </p>
+                                                </div>
+
+                                                <div
+                                                    data-testid="ending-stage-footer"
+                                                    className="flex shrink-0 flex-col items-center gap-1 border-t border-outline-variant/40 bg-surface-container-high/95 px-4 py-2.5 sm:px-6 sm:py-3"
+                                                >
+                                                    <div className="flex flex-wrap justify-center gap-2">
+                                                        {!emptyStory && (
+                                                            <Button variant="filled" icon={mdReplay} onClick={restart}>
+                                                                {t("page.storyMaker.player.replay")}
+                                                            </Button>
+                                                        )}
+                                                        {endAction}
+                                                    </div>
+                                                    {showAttribution && !emptyStory && (
+                                                        <button
+                                                            type="button"
+                                                            data-testid="moesekai-ending-attribution"
+                                                            onClick={openNotices}
+                                                            className="state-layer focus-ring inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md3-full px-2.5 py-0.5 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
+                                                        >
+                                                            <Icon path={mdInfo} size={13} className="shrink-0 opacity-75" />
+                                                            <span className="truncate">{t("page.storyMaker.attribution.endingFooter")}</span>
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </Surface>
                                         </div>
                                     )}
@@ -2885,22 +3052,36 @@ export function StoryPlayerView({
                                         disabled={history.length <= 1 || hasCompileErrors}
                                         onClick={handlePrevious}
                                     />
-                                    <Button
-                                        size="xs"
-                                        variant="tonal"
-                                        icon={mdSkipNext}
-                                        disabled={Boolean(currentChoice) || ended || emptyStory || hasCompileErrors}
-                                        onClick={handleAdvance}
-                                    >
-                                        {t("page.storyMaker.player.next")}
-                                    </Button>
-                                    <IconButton
-                                        size="xs"
-                                        icon={mdReplay}
-                                        label={t("page.storyMaker.player.replay")}
-                                        disabled={emptyStory || hasCompileErrors}
-                                        onClick={restart}
-                                    />
+                                    {promoteReplayTransport ? (
+                                        <Button
+                                            size="xs"
+                                            variant="filled"
+                                            icon={mdReplay}
+                                            data-testid="transport-replay-primary"
+                                            onClick={restart}
+                                        >
+                                            {t("page.storyMaker.player.replay")}
+                                        </Button>
+                                    ) : (
+                                        <>
+                                            <Button
+                                                size="xs"
+                                                variant="tonal"
+                                                icon={mdSkipNext}
+                                                disabled={Boolean(currentChoice) || ended || emptyStory || hasCompileErrors}
+                                                onClick={handleAdvance}
+                                            >
+                                                {t("page.storyMaker.player.next")}
+                                            </Button>
+                                            <IconButton
+                                                size="xs"
+                                                icon={mdReplay}
+                                                label={t("page.storyMaker.player.replay")}
+                                                disabled={emptyStory || hasCompileErrors}
+                                                onClick={restart}
+                                            />
+                                        </>
+                                    )}
                                     <IconButton
                                         size="xs"
                                         variant={autoPlay ? "filled" : "standard"}
@@ -3043,6 +3224,129 @@ export function StoryPlayerView({
                                 </div>
                             </div>
                         </Surface>
+
+                        {/* Mobile (< sm) Inline Ending Summary Card: unclipped in normal page flow directly below transport bar */}
+                        {!uiHidden && useInlineMobileEnding && !hasCompileErrors && (reachedEnding || ended || emptyStory) && (
+                            <Surface
+                                tone="high"
+                                radius="xl"
+                                elevation={1}
+                                data-testid="ending-inline-mobile-card"
+                                className={cn(
+                                    "flex min-w-0 shrink-0 flex-col items-center gap-2.5 p-4 text-center sm:hidden",
+                                    reachedEnding
+                                        ? "border border-primary/30"
+                                        : "border border-outline-variant/60",
+                                )}
+                            >
+                                {reachedEnding && activeFrame?.ending ? (
+                                    <>
+                                        <span className="inline-flex items-center gap-1.5 rounded-full bg-primary-container px-3 py-1 type-label-m text-on-primary-container">
+                                            <Icon path={mdFlag} size={16} className="shrink-0" />
+                                            <span>{t("page.storyMaker.v2.ending.achievedBadge")}</span>
+                                        </span>
+
+                                        <p className="break-words type-title-l text-on-surface">
+                                            {activeFrame.ending.title || t("page.storyMaker.player.endTitle")}
+                                        </p>
+
+                                        <p className="whitespace-pre-wrap break-words type-body-m text-on-surface-variant">
+                                            {activeFrame.ending.subtitle || t("page.storyMaker.player.endDescription")}
+                                        </p>
+
+                                        {doc.variables.length > 0 && (
+                                            <div className="w-full min-w-0 space-y-1.5 rounded-md3-md border border-outline-variant/50 bg-surface-container p-2.5 text-left">
+                                                <div className="flex items-center gap-1.5 type-label-s text-on-surface-variant">
+                                                    <Icon path={mdCalculate} size={14} className="shrink-0 text-primary" />
+                                                    <span>{t("page.storyMaker.v2.ending.finalVariables")}</span>
+                                                </div>
+                                                <div className="flex min-w-0 flex-wrap gap-1.5">
+                                                    {doc.variables.map((variable) => {
+                                                        const val = activeFrame.variables[variable.id] ?? variable.initial;
+                                                        return (
+                                                            <span
+                                                                key={variable.id}
+                                                                className="inline-flex max-w-full items-center gap-1.5 rounded-md3-sm bg-surface-container-high px-2 py-0.5 type-label-s text-on-surface"
+                                                            >
+                                                                <Icon
+                                                                    path={variable.type === "number" ? mdNumbers : mdTag}
+                                                                    size={12}
+                                                                    className="shrink-0 text-primary"
+                                                                />
+                                                                <span className="max-w-28 truncate text-on-surface-variant">
+                                                                    {variable.name || variable.id}
+                                                                </span>
+                                                                <span className="shrink-0 font-mono tabular-nums text-primary">
+                                                                    {String(val)}
+                                                                </span>
+                                                            </span>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div className="flex flex-wrap justify-center gap-2 pt-1">
+                                            <Button variant="filled" icon={mdReplay} onClick={restart}>
+                                                {t("page.storyMaker.v2.ending.replayOtherEndings")}
+                                            </Button>
+                                            {endAction}
+                                        </div>
+                                        {showAttribution && (
+                                            <button
+                                                type="button"
+                                                data-testid="moesekai-ending-attribution-mobile"
+                                                onClick={openNotices}
+                                                className="state-layer focus-ring inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md3-full px-2.5 py-1 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
+                                            >
+                                                <Icon path={mdInfo} size={13} className="shrink-0 opacity-75" />
+                                                <span className="truncate">{t("page.storyMaker.attribution.endingFooter")}</span>
+                                            </button>
+                                        )}
+                                    </>
+                                ) : (
+                                    <>
+                                        <p className="type-title-l text-on-surface">
+                                            {t(
+                                                emptyStory
+                                                    ? "page.storyMaker.player.emptyTitle"
+                                                    : looped
+                                                        ? "page.storyMaker.player.loopTitle"
+                                                        : "page.storyMaker.player.endTitle",
+                                            )}
+                                        </p>
+                                        <p className="type-body-m text-on-surface-variant">
+                                            {t(
+                                                emptyStory
+                                                    ? "page.storyMaker.player.emptyDescription"
+                                                    : looped
+                                                        ? "page.storyMaker.player.loopDescription"
+                                                        : "page.storyMaker.player.endDescription",
+                                            )}
+                                        </p>
+                                        <div className="flex flex-wrap justify-center gap-2 pt-1">
+                                            {!emptyStory && (
+                                                <Button variant="filled" icon={mdReplay} onClick={restart}>
+                                                    {t("page.storyMaker.player.replay")}
+                                                </Button>
+                                            )}
+                                            {endAction}
+                                        </div>
+                                        {showAttribution && !emptyStory && (
+                                            <button
+                                                type="button"
+                                                data-testid="moesekai-ending-attribution-mobile"
+                                                onClick={openNotices}
+                                                className="state-layer focus-ring inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md3-full px-2.5 py-1 type-label-s text-on-surface-variant transition-colors hover:text-on-surface"
+                                            >
+                                                <Icon path={mdInfo} size={13} className="shrink-0 opacity-75" />
+                                                <span className="truncate">{t("page.storyMaker.attribution.endingFooter")}</span>
+                                            </button>
+                                        )}
+                                    </>
+                                )}
+                            </Surface>
+                        )}
                     </div>
                 </div>
 

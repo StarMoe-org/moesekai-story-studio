@@ -24,9 +24,9 @@ import {
     PageHeader, SegmentedButton, Snackbar, StudioLink, cn, type MenuItemDef,
 } from "../md3";
 import {
-    mdArrowBack, mdBookmarkAdd, mdCloseFullscreen, mdCode, mdDashboard, mdEdit, mdErrorFill,
-    mdHome, mdMoreVert, mdOpenInFull, mdPlayArrowFill, mdRecordVoiceOver, mdTheaters, mdTranslate,
-    mdUploadFile, mdWarning,
+    mdArrowBack, mdBookmarkAdd, mdCloseFullscreen, mdCloudDone, mdCode, mdDashboard, mdDownload, mdEdit,
+    mdErrorFill, mdHome, mdMoreVert, mdOpenInFull, mdPlayArrowFill, mdRecordVoiceOver, mdRightPanelClose,
+    mdRightPanelOpen, mdTheaters, mdTranslate, mdUploadFile, mdWarning,
 } from "../md3/icons";
 
 export interface StoryPlayerExternalSource {
@@ -87,6 +87,12 @@ export interface PlayerTopBarSlotContext extends StoryPlayerSlotContext {
     preloadRunning?: boolean;
     preloadProgress?: StoryPreloadProgress | null;
     preloadReady?: boolean;
+    /** True when `slots.companionPanel` renders non-null content for the active story. */
+    hasCompanionPanel?: boolean;
+    /** Whether the desktop right companion rail is expanded (Theater View only). */
+    companionPanelOpen?: boolean;
+    /** Toggle the desktop right companion rail open/closed. */
+    toggleCompanionPanel?: () => void;
 }
 
 export interface StoryStudioPlayerSlots {
@@ -101,12 +107,29 @@ export interface StoryStudioPlayerSlots {
     immersiveMoreItems?: (ctx: StoryPlayerSlotContext) => MenuItemDef[];
     /** Custom action rendered on the ending overlay card (overrides default Edit / Open Script when returned non-nullish). */
     endAction?: (ctx: StoryPlayerSlotContext) => ReactNode;
+    /**
+     * Optional content rendered below the 16:9 stage + transport bar (and mobile inline ending card)
+     * inside the main column in Theater View (e.g. video-site story title, author, like, Fork, description).
+     * Auto-hidden in `"workspace"` mode without unmounting the Live2D stage.
+     */
+    belowStage?: (ctx: StoryPlayerSlotContext) => ReactNode;
+    /**
+     * Optional video-site companion pane (e.g. Community Comments):
+     * - On `< lg` viewports in Theater View: stacked inline below `belowStage` in vertical scroll flow.
+     * - On `lg:+` viewports in Theater View: docked as an independently scrollable right rail
+     *   (`lg:w-[380px] xl:w-[420px]`), collapsible via the desktop top-bar toggle (open by default).
+     * - Auto-hidden in `"workspace"` mode so Director Workspace keeps full width, without unmounting
+     *   `<StoryPlayerView>` or resetting the WebGPU Live2D stage.
+     */
+    companionPanel?: (ctx: StoryPlayerSlotContext) => ReactNode;
 }
 
 export interface StoryStudioPlayerProps {
     draftId?: string | null;
     startNodeId?: string | null;
     initialLocale?: UiLocale | null;
+    /** Optional controlled layout mode (`"workspace"` | `"theater"`). Overrides internal layout state when provided. */
+    layoutMode?: PlayerLayoutMode;
     initialLayoutMode?: PlayerLayoutMode;
     initialImmersive?: boolean;
     /** Suppresses the built-in top bar completely (alternative to `slots.replaceTopBar` when host renders its own bar). */
@@ -137,6 +160,38 @@ export interface StoryStudioPlayerProps {
     slots?: StoryStudioPlayerSlots;
 }
 
+/** Pure resolver preferring controlled `layoutMode` when passed, otherwise internal state. */
+export function resolveEffectivePlayerLayoutMode(params: {
+    controlledLayoutMode?: PlayerLayoutMode;
+    internalLayoutMode: PlayerLayoutMode;
+}): PlayerLayoutMode {
+    return params.controlledLayoutMode ?? params.internalLayoutMode;
+}
+
+/** Pure visibility predicate for `belowStage` and `companionPanel` across Theater vs Workspace modes. */
+export function resolvePlayerCompanionVisibility(params: {
+    layoutMode: PlayerLayoutMode;
+    hasBelowStage: boolean;
+    hasCompanionPanel: boolean;
+    companionPanelOpen: boolean;
+}): {
+    showBelowStage: boolean;
+    showCompanionPanel: boolean;
+    showCompanionDesktopRail: boolean;
+    hasVideoSiteContent: boolean;
+} {
+    const isTheater = params.layoutMode === "theater";
+    const showBelowStage = isTheater && params.hasBelowStage;
+    const showCompanionPanel = isTheater && params.hasCompanionPanel;
+    const showCompanionDesktopRail = showCompanionPanel && params.companionPanelOpen;
+    return {
+        showBelowStage,
+        showCompanionPanel,
+        showCompanionDesktopRail,
+        hasVideoSiteContent: showBelowStage || showCompanionPanel,
+    };
+}
+
 type InternalPlaySource =
     | { kind: "empty" }
     | { kind: "draft"; id: string; doc: StoryDocument }
@@ -146,6 +201,7 @@ export function StoryStudioPlayer({
     draftId = null,
     startNodeId = null,
     initialLocale = null,
+    layoutMode: controlledLayoutMode,
     initialLayoutMode = "workspace",
     initialImmersive = true,
     hideTopBar = false,
@@ -166,7 +222,29 @@ export function StoryStudioPlayer({
 }: StoryStudioPlayerProps) {
     const { t, assetLine, assetSource, brandLogoUrl, storage, exporter } = useStoryStudio();
 
-    const [layoutMode, setLayoutMode] = useState<PlayerLayoutMode>(initialLayoutMode);
+    const [internalLayoutMode, setInternalLayoutMode] = useState<PlayerLayoutMode>(
+        controlledLayoutMode ?? initialLayoutMode,
+    );
+    const sourceSessionKey = externalSource?.key
+        ? `external:${externalSource.key}`
+        : draftId
+            ? `draft:${draftId}`
+            : "empty";
+    const [lastSessionKey, setLastSessionKey] = useState(sourceSessionKey);
+    if (sourceSessionKey !== lastSessionKey) {
+        setLastSessionKey(sourceSessionKey);
+        if (controlledLayoutMode === undefined) {
+            setInternalLayoutMode(initialLayoutMode);
+        }
+    }
+    const layoutMode = resolveEffectivePlayerLayoutMode({
+        controlledLayoutMode,
+        internalLayoutMode,
+    });
+    const [companionPanelOpen, setCompanionPanelOpen] = useState<boolean>(true);
+    const toggleCompanionPanel = useCallback(() => {
+        setCompanionPanelOpen(prev => !prev);
+    }, []);
     const [immersive, setImmersive] = useState<boolean>(initialImmersive);
     const [draftLoading, setDraftLoading] = useState<boolean>(Boolean(draftId && !externalSource));
     const [loadError, setLoadError] = useState<"missing" | "unavailable" | "failed" | null>(null);
@@ -272,9 +350,11 @@ export function StoryStudioPlayer({
     const isImmersiveActive = Boolean(activeDoc) && immersive;
 
     const handleLayoutModeChange = useCallback((next: PlayerLayoutMode) => {
-        setLayoutMode(next);
+        if (controlledLayoutMode === undefined) {
+            setInternalLayoutMode(next);
+        }
         onLayoutModeChange?.(next);
-    }, [onLayoutModeChange]);
+    }, [controlledLayoutMode, onLayoutModeChange]);
 
     const handleImmersiveChange = useCallback((next: boolean) => {
         setImmersive(next);
@@ -421,6 +501,26 @@ export function StoryStudioPlayer({
     };
 
     const extraMoreItems = slots?.immersiveMoreItems?.(slotCtx) ?? [];
+    const belowStageNode = activeDoc ? (slots?.belowStage?.(slotCtx) ?? null) : null;
+    const companionPanelNode = activeDoc ? (slots?.companionPanel?.(slotCtx) ?? null) : null;
+    const hasBelowStage = belowStageNode !== null && belowStageNode !== undefined && belowStageNode !== false;
+    const hasCompanionPanel = companionPanelNode !== null && companionPanelNode !== undefined && companionPanelNode !== false;
+    const {
+        showBelowStage,
+        showCompanionPanel,
+        showCompanionDesktopRail,
+        hasVideoSiteContent,
+    } = resolvePlayerCompanionVisibility({
+        layoutMode,
+        hasBelowStage,
+        hasCompanionPanel,
+        companionPanelOpen,
+    });
+
+    const layoutModeOptions = useMemo(() => ([
+        { value: "workspace" as const, label: t("page.storyMaker.nle.layoutWorkspace"), icon: mdDashboard },
+        { value: "theater" as const, label: t("page.storyMaker.nle.layoutTheater"), icon: mdTheaters },
+    ]), [t]);
 
     const immersiveMoreItems: MenuItemDef[] = activeDoc ? [
         ...extraMoreItems,
@@ -431,11 +531,29 @@ export function StoryStudioPlayer({
             onSelect: () => void handleSaveImported(),
         }] : []),
         {
+            key: "open-preload",
+            label: t("page.storyMaker.preload.buttonLabel"),
+            icon: preloadStatus.ready ? mdCloudDone : mdDownload,
+            dividerBefore: true,
+            onSelect: openPlayerPreloadDialog,
+        },
+        {
             key: "load-voice-manifest",
             label: t("page.storyMaker.voiceTrack.action"),
             icon: mdRecordVoiceOver,
-            dividerBefore: true,
             onSelect: () => setVoiceManifestOpen(true),
+        },
+        {
+            key: "load-locale-pack",
+            label: t("page.storyMaker.i18n.loadLocalePackAction"),
+            icon: mdTranslate,
+            onSelect: () => localePackInputRef.current?.click(),
+        },
+        {
+            key: "open-script",
+            label: t("page.storyMaker.player.openScript"),
+            icon: mdUploadFile,
+            onSelect: () => setImportOpen(true),
         },
         {
             key: "export-msk",
@@ -497,6 +615,9 @@ export function StoryStudioPlayer({
         preloadRunning: preloadStatus.running,
         preloadProgress: preloadStatus.progress,
         preloadReady: preloadStatus.ready,
+        hasCompanionPanel,
+        companionPanelOpen,
+        toggleCompanionPanel,
     };
 
     const slotEndAction = slots?.endAction?.(slotCtx);
@@ -518,31 +639,34 @@ export function StoryStudioPlayer({
 
     return (
         <PageContainer
+            wide={!isImmersiveActive && showCompanionPanel}
             className={cn(
-                "min-w-0 max-w-full overflow-x-clip",
+                "min-w-0 overflow-x-clip",
                 isWorkspaceActive && !isImmersiveActive && "xl:max-w-[1680px] xl:py-3",
                 isImmersiveActive && (
                     hasCustomTopBar
-                        ? "fixed inset-0 z-[150] flex h-dvh w-screen max-w-none flex-col overflow-x-hidden bg-surface p-0 sm:p-0"
-                        : "fixed inset-0 z-[150] flex h-dvh w-screen max-w-none flex-col gap-1.5 overflow-x-hidden bg-surface p-1.5 sm:p-2"
+                        ? "fixed inset-0 z-[150] flex h-dvh w-screen max-w-none flex-col overflow-hidden bg-surface p-0 sm:p-0"
+                        : "fixed inset-0 z-[150] flex h-dvh w-screen max-w-none flex-col gap-1.5 overflow-hidden bg-surface p-1.5 sm:p-2"
                 ),
-                isImmersiveActive && (layoutMode === "workspace" ? "overflow-y-auto xl:overflow-hidden" : "overflow-y-auto"),
             )}
         >
             {hideTopBar ? null : typeof slots?.replaceTopBar === "function" ? (
                 slots.replaceTopBar(topBarCtx)
             ) : isImmersiveActive && activeDoc ? (
-                <header className="flex h-11 min-w-0 shrink-0 items-center justify-between gap-2 rounded-md3-lg border border-outline-variant/60 bg-surface-container-low px-2">
-                    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                <header
+                    data-testid="story-player-immersive-header"
+                    className="flex h-11 min-w-0 shrink-0 items-center justify-between gap-1.5 rounded-md3-lg border border-outline-variant/60 bg-surface-container-low px-1.5 sm:gap-2 sm:px-2"
+                >
+                    <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden sm:gap-1.5">
                         {onBackToDrafts ? (
                             <button
                                 type="button"
                                 onClick={onBackToDrafts}
                                 title={t("page.storyMaker.title")}
-                                className="focus-ring flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md3-sm px-1.5 py-1"
+                                className="focus-ring flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md3-sm px-1 py-1 sm:px-1.5"
                             >
                                 <span
-                                    className="block h-5 w-[3.25rem] bg-primary"
+                                    className="block h-4 w-11 bg-primary sm:h-5 sm:w-[3.25rem]"
                                     style={{
                                         maskImage: `url(${brandLogoUrl})`,
                                         maskSize: "contain",
@@ -554,7 +678,7 @@ export function StoryStudioPlayer({
                                         WebkitMaskRepeat: "no-repeat",
                                     }}
                                 />
-                                <span className="rounded-md3-xs bg-tertiary-container px-1 py-0.5 text-[10px] font-semibold leading-none text-on-tertiary-container">
+                                <span className="hidden rounded-md3-xs bg-tertiary-container px-1 py-0.5 text-[10px] font-semibold leading-none text-on-tertiary-container sm:inline-block">
                                     {t("page.storyMaker.betaBadge")}
                                 </span>
                             </button>
@@ -562,10 +686,10 @@ export function StoryStudioPlayer({
                             <StudioLink
                                 href={backToDraftsHref}
                                 title={t("page.storyMaker.title")}
-                                className="focus-ring flex shrink-0 items-center gap-1.5 rounded-md3-sm px-1.5 py-1"
+                                className="focus-ring flex shrink-0 items-center gap-1.5 rounded-md3-sm px-1 py-1 sm:px-1.5"
                             >
                                 <span
-                                    className="block h-5 w-[3.25rem] bg-primary"
+                                    className="block h-4 w-11 bg-primary sm:h-5 sm:w-[3.25rem]"
                                     style={{
                                         maskImage: `url(${brandLogoUrl})`,
                                         maskSize: "contain",
@@ -577,13 +701,13 @@ export function StoryStudioPlayer({
                                         WebkitMaskRepeat: "no-repeat",
                                     }}
                                 />
-                                <span className="rounded-md3-xs bg-tertiary-container px-1 py-0.5 text-[10px] font-semibold leading-none text-on-tertiary-container">
+                                <span className="hidden rounded-md3-xs bg-tertiary-container px-1 py-0.5 text-[10px] font-semibold leading-none text-on-tertiary-container sm:inline-block">
                                     {t("page.storyMaker.betaBadge")}
                                 </span>
                             </StudioLink>
                         )}
-                        <span aria-hidden className="h-4 w-px shrink-0 bg-outline-variant/60" />
-                        <span className="min-w-0 truncate type-label-l text-on-surface">
+                        <span aria-hidden className="hidden h-4 w-px shrink-0 bg-outline-variant/60 sm:block" />
+                        <span className="min-w-0 truncate type-label-m text-on-surface sm:type-label-l">
                             {activeDoc.meta.title || t("page.storyMaker.untitled")}
                         </span>
                         <span className="hidden shrink-0 rounded-md3-xs bg-surface-container-high px-1.5 py-0.5 type-label-s text-on-surface-variant md:inline">
@@ -601,19 +725,26 @@ export function StoryStudioPlayer({
                         )}
                     </div>
 
+                    {/* Compact icon-only switcher below md: so mobile top bar never overflows or clips */}
+                    <SegmentedButton<PlayerLayoutMode>
+                        density={-2}
+                        iconOnly
+                        value={layoutMode}
+                        onValueChange={handleLayoutModeChange}
+                        aria-label={t("page.storyMaker.nle.layoutWorkspace")}
+                        className="w-auto shrink-0 md:hidden"
+                        options={layoutModeOptions}
+                    />
                     <SegmentedButton<PlayerLayoutMode>
                         density={-2}
                         value={layoutMode}
                         onValueChange={handleLayoutModeChange}
                         aria-label={t("page.storyMaker.nle.layoutWorkspace")}
-                        className="w-auto shrink-0"
-                        options={[
-                            { value: "workspace", label: t("page.storyMaker.nle.layoutWorkspace"), icon: mdDashboard },
-                            { value: "theater", label: t("page.storyMaker.nle.layoutTheater"), icon: mdTheaters },
-                        ]}
+                        className="hidden w-auto shrink-0 md:inline-grid"
+                        options={layoutModeOptions}
                     />
 
-                    <div className="flex flex-1 shrink-0 items-center justify-end gap-1">
+                    <div className="flex shrink-0 items-center justify-end gap-0.5 sm:flex-1 sm:gap-1">
                         {slots?.headerActions?.(slotCtx)}
                         {activeDraftId && onEditDraft ? (
                             <Button size="xs" variant="tonal" icon={mdEdit} onClick={() => onEditDraft(activeDraftId)}>
@@ -624,23 +755,41 @@ export function StoryStudioPlayer({
                                 {t("page.storyMaker.action.edit")}
                             </Button>
                         ) : null}
+                        {showCompanionPanel && (
+                            <IconButton
+                                size="xs"
+                                variant={companionPanelOpen ? "tonal" : "standard"}
+                                selected={companionPanelOpen}
+                                icon={companionPanelOpen ? mdRightPanelClose : mdRightPanelOpen}
+                                label={t(
+                                    companionPanelOpen
+                                        ? "page.storyMaker.player.hideCompanionPanel"
+                                        : "page.storyMaker.player.showCompanionPanel",
+                                )}
+                                className="hidden lg:inline-flex"
+                                onClick={toggleCompanionPanel}
+                            />
+                        )}
                         <IconButton
                             size="xs"
                             variant={voiceManifest ? "tonal" : "standard"}
                             icon={mdRecordVoiceOver}
                             label={t("page.storyMaker.voiceTrack.action")}
+                            className="hidden sm:inline-flex"
                             onClick={() => setVoiceManifestOpen(true)}
                         />
                         <IconButton
                             size="xs"
                             icon={mdTranslate}
                             label={t("page.storyMaker.i18n.loadLocalePackAction")}
+                            className="hidden sm:inline-flex"
                             onClick={() => localePackInputRef.current?.click()}
                         />
                         <IconButton
                             size="xs"
                             icon={mdUploadFile}
                             label={t("page.storyMaker.player.openScript")}
+                            className="hidden sm:inline-flex"
                             onClick={() => setImportOpen(true)}
                         />
                         <Menu
@@ -729,6 +878,20 @@ export function StoryStudioPlayer({
                                 >
                                     {t("page.storyMaker.nle.enterImmersive")}
                                 </Button>
+                            )}
+                            {activeDoc && showCompanionPanel && (
+                                <IconButton
+                                    variant={companionPanelOpen ? "tonal" : "standard"}
+                                    selected={companionPanelOpen}
+                                    icon={companionPanelOpen ? mdRightPanelClose : mdRightPanelOpen}
+                                    label={t(
+                                        companionPanelOpen
+                                            ? "page.storyMaker.player.hideCompanionPanel"
+                                            : "page.storyMaker.player.showCompanionPanel",
+                                    )}
+                                    className="hidden lg:inline-flex"
+                                    onClick={toggleCompanionPanel}
+                                />
                             )}
                             {onBackToDrafts ? (
                                 <Button variant="text" icon={mdArrowBack} onClick={onBackToDrafts} className="max-w-full px-3 sm:px-4">
@@ -870,43 +1033,106 @@ export function StoryStudioPlayer({
                 </Card>
             ) : (
                 <div
+                    data-testid="story-player-shell-body"
                     className={cn(
                         "min-w-0",
                         isImmersiveActive
-                            ? cn("flex min-h-0 flex-1 flex-col gap-1.5", hasCustomTopBar && "p-1.5 sm:p-2")
-                            : "space-y-3",
+                            ? cn(
+                                "flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden",
+                                hasCustomTopBar && "p-1.5 sm:p-2",
+                                layoutMode === "workspace"
+                                    ? "overflow-y-auto xl:overflow-hidden"
+                                    : showCompanionPanel
+                                        ? "overflow-y-auto lg:flex-row lg:gap-3 lg:overflow-hidden"
+                                        : "overflow-y-auto",
+                            )
+                            : cn(
+                                "flex flex-col gap-3",
+                                showCompanionDesktopRail && "lg:flex-row lg:items-start lg:gap-4",
+                            ),
                     )}
                 >
-                    {!hasBlockingErrors && warnings.length > 0 && (
-                        <Banner
-                            tone="warning"
-                            title={t("page.storyMaker.v2.compiler.statusWarnings", { count: warnings.length })}
-                            action={(
-                                <Button size="xs" variant="text" onClick={() => setIssuesOpen(true)}>
-                                    {t("page.storyMaker.player.viewIssues")}
-                                </Button>
+                    <div
+                        data-testid="story-player-main-column"
+                        className={cn(
+                            "min-w-0",
+                            isImmersiveActive
+                                ? layoutMode === "workspace"
+                                    ? "flex min-h-0 flex-1 flex-col gap-1.5"
+                                    : showCompanionPanel
+                                        ? "flex shrink-0 flex-col gap-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1"
+                                        : showBelowStage
+                                            ? "flex shrink-0 flex-col gap-2"
+                                            : "flex shrink-0 flex-col gap-1.5 lg:min-h-0 lg:flex-1"
+                                : "flex-1 space-y-3",
+                        )}
+                    >
+                        {!hasBlockingErrors && warnings.length > 0 && (
+                            <Banner
+                                tone="warning"
+                                title={t("page.storyMaker.v2.compiler.statusWarnings", { count: warnings.length })}
+                                action={(
+                                    <Button size="xs" variant="text" onClick={() => setIssuesOpen(true)}>
+                                        {t("page.storyMaker.player.viewIssues")}
+                                    </Button>
+                                )}
+                            >
+                                {t("page.storyMaker.v2.compiler.warningsTitle")}
+                            </Banner>
+                        )}
+
+                        <StoryPlayerView
+                            key={playerKey}
+                            doc={activeDoc}
+                            line={assetLine}
+                            assetSource={assetSource}
+                            startNodeId={sourceKind === "draft" || sourceKind === "external" ? startNodeId : null}
+                            layoutMode={layoutMode}
+                            onLayoutModeChange={handleLayoutModeChange}
+                            immersive={isImmersiveActive}
+                            hasBelowStageContent={hasVideoSiteContent}
+                            initialLocale={preferredLocale}
+                            voiceManifest={voiceManifest}
+                            onOpenVoiceManifest={() => setVoiceManifestOpen(true)}
+                            endAction={resolvedEndAction}
+                            onRegisterPreloadTrigger={handleRegisterPreloadTrigger}
+                            onPreloadStatusChange={setPreloadStatus}
+                        />
+
+                        {hasBelowStage && (
+                            <div
+                                data-testid="story-player-below-stage"
+                                className={cn("min-w-0 shrink-0", !showBelowStage && "hidden")}
+                            >
+                                {belowStageNode}
+                            </div>
+                        )}
+                    </div>
+
+                    {hasCompanionPanel && (
+                        <aside
+                            data-testid="story-player-companion-panel"
+                            aria-label={t("page.storyMaker.player.companionPanel")}
+                            className={cn(
+                                "min-w-0",
+                                !showCompanionPanel
+                                    ? "hidden"
+                                    : cn(
+                                        "flex shrink-0 flex-col",
+                                        showCompanionDesktopRail
+                                            ? cn(
+                                                "lg:w-[380px] xl:w-[420px]",
+                                                isImmersiveActive
+                                                    ? "lg:min-h-0 lg:overflow-y-auto lg:border-l lg:border-outline-variant/50 lg:pl-3"
+                                                    : "lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:border-l lg:border-outline-variant/50 lg:pl-4",
+                                            )
+                                            : "lg:hidden",
+                                    ),
                             )}
                         >
-                            {t("page.storyMaker.v2.compiler.warningsTitle")}
-                        </Banner>
+                            {companionPanelNode}
+                        </aside>
                     )}
-
-                    <StoryPlayerView
-                        key={playerKey}
-                        doc={activeDoc}
-                        line={assetLine}
-                        assetSource={assetSource}
-                        startNodeId={sourceKind === "draft" || sourceKind === "external" ? startNodeId : null}
-                        layoutMode={layoutMode}
-                        onLayoutModeChange={handleLayoutModeChange}
-                        immersive={isImmersiveActive}
-                        initialLocale={preferredLocale}
-                        voiceManifest={voiceManifest}
-                        onOpenVoiceManifest={() => setVoiceManifestOpen(true)}
-                        endAction={resolvedEndAction}
-                        onRegisterPreloadTrigger={handleRegisterPreloadTrigger}
-                        onPreloadStatusChange={setPreloadStatus}
-                    />
                 </div>
             )}
 
