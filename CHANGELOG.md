@@ -4,6 +4,19 @@ All notable changes to **MoeSekai Story Studio** (`@moesekai/story-core`, `@moes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this monorepo adheres to lockstep [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-11-24
+
+### Added
+- **Video-Site Theater Shell & Controlled Player Layout (`@moesekai/story-editor`)**:
+  - Extended `StoryStudioPlayerSlots` with `belowStage` and single-mount `companionPanel` slots (stacked inline below the stage on `< lg` viewports and docked as an independently scrollable collapsible right rail `lg:w-[380px] xl:w-[420px]` on `lg:+` Theater View, auto-hidden in Director Workspace without unmounting `<StoryPlayerView>` or resetting WebGPU).
+  - Added optional controlled `layoutMode` support (plus `initialLayoutMode` re-sync on source changes) on `StoryStudioPlayerProps`, optional companion rail controls on `PlayerTopBarSlotContext`, `hasBelowStageContent` on `StoryPlayerViewProps`, 5-locale side-panel strings (`zh-CN`, `zh-TW`, `en-US`, `ja-JP`, `ko-KR`), and pure layout/ending helpers (`resolveEffectivePlayerLayoutMode`, `resolvePlayerCompanionVisibility`, `resolvePlayerStageLayout`, `shouldPromoteReplayTransport`, `shouldShowPlayerStageAttribution`) with regression unit tests.
+
+### Fixed
+- **Mobile Player Top Bar, Theater Stage Letterboxing & Ending Replay UX (`@moesekai/story-editor`)**:
+  - Fixed mobile immersive `<header>` logo overlap and right-edge button clipping (`overflow-hidden` left cluster, compact wordmark without `< sm` BETA badge collision, `iconOnly` mode switcher below `md:`, and secondary actions folded into the `...` overflow menu on `< sm:`).
+  - Scoped `isImmersiveTheaterFill` letterboxing to `lg:+` standalone Theater View and capped video-site desktop stage height so mobile `< lg` Theater View renders a clean `aspect-video w-full` stage with zero vertical gray dead bands, and removed `max-w-full` on non-immersive `<PageContainer>` so `wide` / `max-w-7xl` constraints hold.
+  - Fixed mobile "Ending Reached" scrolling friction by rendering a compact non-scrolling Replay stage scrim + unclipped inline ending summary card below the transport bar on `< sm:`, refactoring desktop/fullscreen ending and compile-error overlays to sticky non-scrolling action footers (`z-[32]`, Quick Menu `z-[35]`, watermark suppressed at ending), and promoting the primary transport CTA to active filled `Replay` when playback finishes.
+
 ## [0.2.1] - 2026-11-24
 
 ### Fixed
